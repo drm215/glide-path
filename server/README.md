@@ -22,7 +22,12 @@ To run it against a real database, set `DATABASE_URL` and `AUTH_SECRET`, then `n
 
 ## Deploy
 
-`render.yaml` at the repo root defines the web service and a paid Postgres database. In Render, choose **New → Blueprint** and select this repository.
+The API runs on Render and the database on a free [Neon](https://neon.com) Postgres project. Render's free databases are deleted after 30 days, while Neon's free tier is permanent (0.5 GB).
+
+1. In Neon, create a project in **AWS US East** (closest to Render's Virginia region) and copy its connection string from **Connect**.
+2. In Render, choose **New → Blueprint** and select this repository. `render.yaml` defines the web service; paste the Neon string when asked for `DATABASE_URL`. `AUTH_SECRET` is generated automatically.
+
+Render redeploys on every push to `main`. The free API sleeps after 15 idle minutes and Neon after 5, so the first request after a quiet spell is slow.
 
 ## Endpoints
 

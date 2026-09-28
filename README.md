@@ -35,7 +35,7 @@ npx eas-cli@latest build -p ios --profile preview
 
 ## Sync server
 
-The `server/` folder holds the API that syncs app data and serves the public course directory; see [server/README.md](server/README.md). `render.yaml` deploys it on Render. The app doesn't use it yet.
+The `server/` folder holds the API that syncs app data and serves the public course directory; see [server/README.md](server/README.md). `render.yaml` deploys it on Render, with the database on a free Neon Postgres project. The app doesn't use it yet.
 
 ## Data and privacy
 

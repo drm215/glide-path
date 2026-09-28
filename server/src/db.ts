@@ -15,9 +15,13 @@ export const migrate = async (db: Queryable) => {
 };
 
 export const createPostgresDb = (connectionString: string): Db => {
-  // Render's external URLs require TLS; internal ones do not.
-  const needsSsl = /\.render\.com|sslmode=require/.test(connectionString);
-  const pool = new pg.Pool({ connectionString, ssl: needsSsl ? { rejectUnauthorized: false } : undefined });
+  // TLS settings come from the connection string (Neon's includes sslmode=require).
+  const pool = new pg.Pool({ connectionString, idleTimeoutMillis: 30_000 });
+  // Neon suspends idle databases and closes their connections. Without this handler the
+  // resulting error on an idle pooled client would crash the process; the pool reconnects on next use.
+  pool.on('error', (error) => {
+    console.warn('Idle database connection closed:', error.message);
+  });
   return {
     query: async (sql, params) => pool.query(sql, params as unknown[]) as never,
     transaction: async (work) => {
