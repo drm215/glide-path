@@ -45,3 +45,4 @@ Storage keys (`flight-notes-*`) and the Expo slug (`disc-golf-tracker`) keep the
 - Elevation comes from the phone's GPS altitude, which can drift by several meters. Points saved before altitude tracking have no elevation.
 - Satellite imagery needs a connection; offline map tiles are not implemented.
 - Android builds would need a Google Maps API key and `provider={PROVIDER_GOOGLE}` on the maps.
+"# glide-path" 
