@@ -1,13 +1,25 @@
 {
   "expo": {
-    "name": "disc-golf-tracker",
+    "name": "Glide Path",
     "slug": "disc-golf-tracker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Glide Path to use your location when you map a tee box or basket, or log where a throw landed."
+        }
+      ]
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.davidmagee.glidepath",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
