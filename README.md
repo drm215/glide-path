@@ -33,6 +33,10 @@ npx eas-cli@latest build -p ios --profile preview
 - **Resume**: a round in progress survives leaving the screen or closing the app.
 - **Practice**: log throws with a distance, accuracy, or putting focus.
 
+## Sync server
+
+The `server/` folder holds the API that syncs app data and serves the public course directory; see [server/README.md](server/README.md). `render.yaml` deploys it on Render. The app doesn't use it yet.
+
 ## Data and privacy
 
 All data is stored on the device with AsyncStorage; there is no account or server. Location is read only when saving a course point, logging a throw, or recentering the map. The network is used for DiscIt disc searches and map imagery.
@@ -45,4 +49,3 @@ Storage keys (`flight-notes-*`) and the Expo slug (`disc-golf-tracker`) keep the
 - Elevation comes from the phone's GPS altitude, which can drift by several meters. Points saved before altitude tracking have no elevation.
 - Satellite imagery needs a connection; offline map tiles are not implemented.
 - Android builds would need a Google Maps API key and `provider={PROVIDER_GOOGLE}` on the maps.
-"# glide-path" 

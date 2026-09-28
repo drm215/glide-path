@@ -1,0 +1,30 @@
+# Render Blueprint for the Glide Path API and database.
+# The iPhone app itself is built with EAS (see eas.json), not on Render.
+services:
+  - name: glide-path-api
+    type: web
+    runtime: node
+    # Free instances sleep after 15 minutes idle, so the first sync after a quiet spell is slow.
+    plan: free
+    region: virginia
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: glide-path-db
+          property: connectionString
+      - key: AUTH_SECRET
+        generateValue: true
+
+databases:
+  - name: glide-path-db
+    # Smallest paid plan. Render deletes free databases 30 days after creation,
+    # which would erase everyone's synced courses and rounds.
+    plan: 0.1c-256mb
+    region: virginia
+    postgresMajorVersion: "17"
