@@ -10,7 +10,12 @@ services:
     # Move to a paid plan once the website is public.
     plan: free
     region: virginia
+    # Only changes under server/ trigger a deploy; docs and tests there don't change the running API.
     rootDir: server
+    buildFilter:
+      ignoredPaths:
+        - "server/**/*.md"
+        - "server/test/**"
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
