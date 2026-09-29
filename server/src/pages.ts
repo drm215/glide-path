@@ -45,7 +45,7 @@ const page = (title: string, body: string) => `<!doctype html>
 export const renderNotFoundPage = (what: string) =>
   page('Not found', `<h1>Not found</h1><p class="meta">This ${escapeHtml(what)} doesn't exist or is no longer shared.</p>`);
 
-export const renderRoundPage = (round: { courseName: string; mode: string; shots: PageShot[]; playedBy: string; updatedAt: number; layouts: Layout[]; courseUid: string | null }) => {
+export const renderRoundPage = (round: { courseName: string; mode: string; shots: PageShot[]; playedBy: string; updatedAt: number; layouts: Layout[]; courseUid: string | null; layoutName?: string | null }) => {
   const holes = [...new Set(round.shots.map((shot) => shot.hole))].sort((a, b) => a - b).map((hole) => {
     const holeShots = round.shots.filter((shot) => shot.hole === hole);
     return { hole, score: strokes(holeShots), par: round.layouts[hole - 1]?.par };
@@ -59,7 +59,7 @@ export const renderRoundPage = (round: { courseName: string; mode: string; shots
   const played = new Date(round.updatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   return page(`${round.playedBy} at ${round.courseName}`, `
 <h1>${courseName}</h1>
-<p class="meta">${escapeHtml(round.mode === 'Practice' ? 'Practice session' : 'Round')} by ${escapeHtml(round.playedBy)} · ${escapeHtml(played)}</p>
+<p class="meta">${escapeHtml(round.mode === 'Practice' ? 'Practice session' : 'Round')} by ${escapeHtml(round.playedBy)} · ${escapeHtml(played)}${round.layoutName ? ` · ${escapeHtml(round.layoutName)} layout` : ''}</p>
 <div class="score"><span class="total">${total}</span>${toPar === null ? '' : `<span class="par ${diffClass(toPar)}">${formatToPar(toPar)}</span>`}</div>
 <table>
   <thead><tr><th>HOLE</th><th>PAR</th><th>SCORE</th><th>+/−</th></tr></thead>
@@ -71,17 +71,27 @@ export const renderRoundPage = (round: { courseName: string; mode: string; shots
 </table>`);
 };
 
+type PageLayout = { name: string; holes: number; layouts: Layout[]; par: number | null; mappedHoles: number; distanceFeet: number };
+
+const layoutTable = (layouts: Layout[]) => `<table>
+  <thead><tr><th>HOLE</th><th>PAR</th><th>MAPPED</th></tr></thead>
+  <tbody>${layouts.map((layout, index) => `<tr><td>${String(index + 1).padStart(2, '0')}</td><td>${layout.par ?? '—'}</td><td>${layout.tee && layout.basket ? 'Yes' : '—'}</td></tr>`).join('')}</tbody>
+</table>`;
+
+const layoutStats = (layout: Omit<PageLayout, 'name' | 'layouts'>) => [
+  `${layout.holes} ${layout.holes === 1 ? 'hole' : 'holes'}`,
+  layout.par === null ? null : `Par ${layout.par}`,
+  layout.mappedHoles ? `${layout.distanceFeet.toLocaleString('en-US')} ft` : null,
+].filter(Boolean).join(' · ');
+
 export const renderCoursePage = (course: {
   name: string; holes: number; layouts: Layout[]; details: Record<string, string | undefined>; mappedBy: string;
-  mappedHoles: number; par: number | null; distanceFeet: number;
+  mappedHoles: number; par: number | null; distanceFeet: number; layoutName?: string; extraLayouts?: PageLayout[];
 }) => {
   const street = course.details.street ?? course.details.address;
   const address = [street, course.details.city, course.details.state].map((part) => part?.trim()).filter(Boolean).join(', ');
-  const stats = [
-    `${course.holes} ${course.holes === 1 ? 'hole' : 'holes'}`,
-    course.par === null ? null : `Par ${course.par}`,
-    course.mappedHoles ? `${course.distanceFeet.toLocaleString('en-US')} ft` : null,
-  ].filter(Boolean).join(' · ');
+  const stats = layoutStats(course);
+  const extraLayouts = course.extraLayouts ?? [];
   const website = course.details.website?.trim();
   const websiteUrl = website && (/^https?:\/\//i.test(website) ? website : `https://${website}`);
   return page(course.name, `
@@ -91,8 +101,7 @@ ${address ? `<p><a href="https://maps.apple.com/?q=${encodeURIComponent(address)
 ${course.details.phone ? `<p><a href="tel:${escapeHtml(course.details.phone.replace(/[^\d+]/g, ''))}">${escapeHtml(course.details.phone)}</a></p>` : ''}
 ${websiteUrl ? `<p><a href="${escapeHtml(websiteUrl)}" rel="nofollow noopener">${escapeHtml(website)}</a></p>` : ''}
 ${course.details.notes?.trim() ? `<h2>Info to know</h2><div class="notes">${escapeHtml(course.details.notes.trim())}</div>` : ''}
-<table>
-  <thead><tr><th>HOLE</th><th>PAR</th><th>MAPPED</th></tr></thead>
-  <tbody>${course.layouts.map((layout, index) => `<tr><td>${String(index + 1).padStart(2, '0')}</td><td>${layout.par ?? '—'}</td><td>${layout.tee && layout.basket ? 'Yes' : '—'}</td></tr>`).join('')}</tbody>
-</table>`);
+${extraLayouts.length ? `<h2>${escapeHtml(course.layoutName || 'Main')} layout</h2>` : ''}
+${layoutTable(course.layouts)}
+${extraLayouts.map((layout) => `<h2>${escapeHtml(layout.name)} layout</h2><p class="meta">${escapeHtml(layoutStats(layout))}</p>${layoutTable(layout.layouts)}`).join('')}`);
 };

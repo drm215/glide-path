@@ -14,11 +14,19 @@ export type HoleLayout = { tee: GpsPoint | null; basket: GpsPoint | null; par?: 
 export type SessionArchive = {
   id: string; mode: 'Round' | 'Practice'; courseName: string; courseId?: string; shots: Shot[];
   updatedAt?: number; shared?: boolean; shareToken?: string | null;
+  // Which of the course's layouts was played; absent means the main layout.
+  layoutId?: string; layoutName?: string;
 };
+
+// One way to play a course (tee pads, pin positions): its own holes, tees, baskets and pars.
+export type CourseLayout = { id: string; name: string; holes: number; layouts: HoleLayout[] };
 
 // `address` is the single-line field from before street/city/state were split; it's read as the street.
 export type CourseDetails = { address?: string; street?: string; city?: string; state?: string; phone?: string; email?: string; website?: string; notes?: string };
+// `holes` and `layouts` hold the course's main layout; any others are in `extraLayouts`.
 export type Course = { id: string; name: string; holes: number; layouts?: HoleLayout[] } & CourseDetails & {
+  layoutName?: string;
+  extraLayouts?: CourseLayout[];
   updatedAt?: number;
   published?: boolean;
   // Server id, assigned on first sync; used for public course links.

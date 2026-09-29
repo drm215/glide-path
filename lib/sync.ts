@@ -1,6 +1,6 @@
 // Converts local data to and from the server's sync format (see server/README.md).
 // Pure functions only, so the same code is exercised by the server's integration tests.
-import type { AccountUser, Course, CourseDetails, Disc, DiscInfo, HoleLayout, SessionArchive, Tombstone } from './types';
+import type { AccountUser, Course, CourseDetails, CourseLayout, Disc, DiscInfo, HoleLayout, SessionArchive, Tombstone } from './types';
 
 export type SyncAccount = {
   token: string;
@@ -24,10 +24,12 @@ export type SyncData = {
 type CourseRecord = {
   clientId: string; updatedAt: number; deleted?: boolean; name: string; holes: number;
   layouts: HoleLayout[]; details: CourseDetails; published: boolean; uid?: string;
+  layoutName?: string; extraLayouts?: CourseLayout[];
 };
 type RoundRecord = {
   clientId: string; updatedAt: number; deleted?: boolean; courseClientId?: string; courseName: string;
   mode: 'Round' | 'Practice'; shots: SessionArchive['shots']; shared: boolean; shareToken?: string | null; uid?: string;
+  layoutId?: string;
 };
 type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo> };
 
@@ -41,18 +43,32 @@ const editTime = (record: { updatedAt?: number }) => record.updatedAt ?? 1;
 const clip = (value: string | undefined, max: number) => (value === undefined ? undefined : value.slice(0, max));
 
 const MAX_HOLES = 100;
+const MAX_EXTRA_LAYOUTS = 20;
+
+// Exactly `holes` entries, as the server expects.
+const holeLayouts = (holeCount: number, layouts: HoleLayout[] | undefined) => {
+  const holes = Math.min(MAX_HOLES, Math.max(1, holeCount));
+  return {
+    holes,
+    layouts: Array.from({ length: holes }, (_, index) => {
+      const layout = layouts?.[index];
+      return { tee: layout?.tee ?? null, basket: layout?.basket ?? null, ...(layout?.par === undefined ? {} : { par: layout.par }) };
+    }),
+  };
+};
 
 const courseToRecord = (course: Course): CourseRecord => {
-  const holes = Math.min(MAX_HOLES, Math.max(1, course.holes));
   return {
     clientId: course.id,
     updatedAt: editTime(course),
     name: clip(course.name.trim() || 'Untitled course', 200)!,
-    holes,
-    layouts: Array.from({ length: holes }, (_, index) => {
-      const layout = course.layouts?.[index];
-      return { tee: layout?.tee ?? null, basket: layout?.basket ?? null, ...(layout?.par === undefined ? {} : { par: layout.par }) };
-    }),
+    ...holeLayouts(course.holes, course.layouts),
+    layoutName: clip(course.layoutName, 100),
+    extraLayouts: (course.extraLayouts ?? []).slice(0, MAX_EXTRA_LAYOUTS).map((layout) => ({
+      id: clip(layout.id, 100)!,
+      name: clip(layout.name.trim() || 'Untitled layout', 100)!,
+      ...holeLayouts(layout.holes, layout.layouts),
+    })),
     details: {
       address: clip(course.address, 300),
       street: clip(course.street, 300),
@@ -86,6 +102,7 @@ const roundToRecord = (session: SessionArchive): RoundRecord => ({
   mode: session.mode,
   shots: session.shots,
   shared: Boolean(session.shared),
+  layoutId: session.layoutId,
 });
 
 // A bag saved before sync existed has no edit time, so it would never upload. Stamping it
@@ -117,6 +134,8 @@ const courseFromRecord = (record: CourseRecord, local?: Course): Course => ({
   layouts: record.layouts,
   ...record.details,
   published: record.published,
+  layoutName: record.layoutName || undefined,
+  extraLayouts: record.extraLayouts ?? [],
   uid: record.uid,
   updatedAt: record.updatedAt,
   sourceUid: local?.sourceUid,
@@ -152,6 +171,7 @@ const roundFromRecord = (record: RoundRecord): SessionArchive => ({
   shared: record.shared,
   shareToken: record.shareToken ?? null,
   updatedAt: record.updatedAt,
+  layoutId: record.layoutId ?? undefined,
 });
 
 export const mergeRounds = (current: SessionArchive[], remote: RoundRecord[]): SessionArchive[] => {

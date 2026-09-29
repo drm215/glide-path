@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS rounds (
 );
 CREATE INDEX IF NOT EXISTS rounds_owner_version ON rounds (owner_id, version);
 
+-- Added after launch; ADD COLUMN IF NOT EXISTS upgrades existing databases in place.
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS layout_name text;
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS extra_layouts jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE rounds ADD COLUMN IF NOT EXISTS layout_id text;
+
 CREATE TABLE IF NOT EXISTS bags (
   owner_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   discs jsonb NOT NULL DEFAULT '[]',

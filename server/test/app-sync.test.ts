@@ -183,6 +183,49 @@ describe('app sync against the API', () => {
     assert.equal(search.body.courses[0].name, 'Public Pines');
   });
 
+  test('course layouts and the layout a round was played on sync and drive the shared scorecard', async () => {
+    const token = await server.register('layouts@example.com', 'Layout Mapper');
+    const blueTees = {
+      id: 'layout-blue',
+      name: 'Blue tees',
+      holes: 1,
+      layouts: [{ tee: { latitude: 40.0002, longitude: -75, accuracy: 3, timestamp: 5 }, basket: { latitude: 40.001, longitude: -75, accuracy: 3, timestamp: 6 }, par: 4 }],
+    };
+    const phone = newDevice(token, {
+      ...emptyData(),
+      courses: [course('course-1', { name: 'Two Layout Park', layoutName: 'Red tees', extraLayouts: [blueTees], published: true, updatedAt: tick() })],
+      history: [session('round-blue', { courseName: 'Two Layout Park', layoutId: 'layout-blue', shared: true, updatedAt: tick() })],
+    });
+    await syncDevice(server, phone);
+
+    const tablet = newDevice(token);
+    await syncDevice(server, tablet);
+    const synced = tablet.data.courses[0];
+    assert.equal(synced.layoutName, 'Red tees');
+    assert.equal(synced.extraLayouts?.[0].name, 'Blue tees');
+    assert.equal(synced.extraLayouts?.[0].layouts[0].par, 4);
+    assert.equal(tablet.data.history[0].layoutId, 'layout-blue');
+
+    // The shared round is scored against the Blue tees par (4), not the main layout's par (3).
+    const round = await server.request('GET', `/api/public/rounds/${phone.data.history[0].shareToken}`);
+    assert.equal(round.body.round.layoutName, 'Blue tees');
+    assert.equal(round.body.round.layouts[0].par, 4);
+    const page = await server.request('GET', `/r/${phone.data.history[0].shareToken}`);
+    assert.match(page.body, /Blue tees layout/);
+    assert.match(page.body, /<span class="par under">-1<\/span>/, '3 strokes on a par 4');
+
+    const detail = await server.request('GET', `/api/public/courses/${synced.uid}`);
+    assert.equal(detail.body.course.extraLayouts[0].par, 4);
+    const search = await server.request('GET', '/api/public/courses?q=Two%20Layout');
+    assert.equal(search.body.courses[0].layoutCount, 2);
+
+    // Deleting the layout leaves the shared round without pars rather than guessing the main layout's.
+    phone.data.courses = [{ ...phone.data.courses[0], extraLayouts: [], updatedAt: tick() }];
+    await syncDevice(server, phone);
+    const orphaned = await server.request('GET', `/api/public/rounds/${phone.data.history[0].shareToken}`);
+    assert.deepEqual(orphaned.body.round.layouts, []);
+  });
+
   test('long text is clipped instead of failing the sync', async () => {
     const token = await server.register('long@example.com');
     const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { notes: 'x'.repeat(9000), name: 'y'.repeat(500), updatedAt: tick() })] });

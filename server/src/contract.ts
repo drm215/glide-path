@@ -36,11 +36,21 @@ const syncMeta = {
   deleted: z.boolean().optional(),
 };
 
+// Extra ways to play the course; the main layout is the course's own holes/layouts.
+const extraLayout = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().min(1).max(100),
+  holes: z.number().int().min(1).max(100),
+  layouts: z.array(holeLayout).max(100),
+});
+
 export const courseRecord = z.object({
   ...syncMeta,
   name: z.string().min(1).max(200),
   holes: z.number().int().min(1).max(100),
   layouts: z.array(holeLayout).max(100),
+  layoutName: z.string().max(100).optional(),
+  extraLayouts: z.array(extraLayout).max(20).default([]),
   details: courseDetails.default({}),
   published: z.boolean().default(false),
 });
@@ -57,6 +67,7 @@ export const roundRecord = z.object({
   courseClientId: z.string().max(100).optional(),
   courseName: z.string().min(1).max(200),
   mode: z.enum(['Round', 'Practice']),
+  layoutId: z.string().max(100).optional(),
   shots: z.array(shot).max(3000),
   shared: z.boolean().default(false),
 });

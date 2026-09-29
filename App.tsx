@@ -34,9 +34,15 @@ import {
   type PublicCourseSummary,
 } from './lib/api';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
-import type { Course, CourseDetails, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
+import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
+import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
 
-type SavedRound = { shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string };
+// A past round reopened as the round in progress keeps its id, so ending it again updates it.
+type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null };
+type SavedRound = {
+  shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
+  layoutId?: string; resumedFrom?: ResumedFrom | null;
+};
 type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses';
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
 
@@ -174,6 +180,19 @@ const feetBetween = (a: Pick<GpsPoint, 'latitude' | 'longitude'>, b: Pick<GpsPoi
   return (2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(h))) / 0.3048;
 };
 
+// Throw distances are measured from the previous logged lie (or the tee), so removing a throw
+// changes the distance of the one after it.
+const recomputeHoleFeet = (list: Shot[], holeNumber: number, tee: GpsPoint | null | undefined) => {
+  let previous: { latitude: number; longitude: number } | null = tee ?? null;
+  return list.map((shot) => {
+    if (shot.hole !== holeNumber || shot.latitude === undefined || shot.longitude === undefined) return shot;
+    const point = { latitude: shot.latitude, longitude: shot.longitude };
+    const feet = previous ? Math.max(1, Math.round(feetBetween(previous, point))) : 0;
+    previous = point;
+    return feet === shot.feet ? shot : { ...shot, feet };
+  });
+};
+
 const holeDistanceFeet = (layout: HoleLayout | undefined) =>
   layout?.tee && layout.basket ? Math.round(feetBetween(layout.tee, layout.basket)) : null;
 
@@ -300,6 +319,11 @@ export default function App() {
   const [publicCourse, setPublicCourse] = useState<PublicCourse | null>(null);
   const [publicCourseLoading, setPublicCourseLoading] = useState<string | null>(null);
   const syncInFlight = useRef(false);
+  const [selectedLayoutId, setSelectedLayoutId] = useState(MAIN_LAYOUT_ID);
+  const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
+  const [newLayoutName, setNewLayoutName] = useState('');
+  const [editingThrow, setEditingThrow] = useState<{ sessionId: string; index: number } | null>(null);
+  const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; lie: Lie; quality: number }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: 2 });
 
   useEffect(() => {
     Promise.all([
@@ -317,6 +341,8 @@ export default function App() {
           setShots(saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId })));
           setHole(saved.hole);
           setMode(saved.mode);
+          setSelectedLayoutId(saved.layoutId ?? MAIN_LAYOUT_ID);
+          setResumedFrom(saved.resumedFrom ?? null);
           setHistory(saved.history ?? []);
           // Rounds saved before `active` existed count as in progress if they have throws.
           setSessionActive(saved.active ?? saved.shots.length > 0);
@@ -357,9 +383,9 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    const saved: SavedRound = { shots, hole, mode, history, courseId: selectedCourseId, active: sessionActive, practiceFocus };
+    const saved: SavedRound = { shots, hole, mode, history, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(saved)).catch(() => undefined);
-  }, [history, hole, loaded, mode, practiceFocus, selectedCourseId, sessionActive, shots]);
+  }, [history, hole, loaded, mode, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -467,6 +493,13 @@ export default function App() {
     setCourses((existing) => updater(existing).map((course) => (existing.includes(course) ? course : { ...course, updatedAt: stamp })));
   };
 
+  const updateCourseLayout = (courseId: string, layoutId: string, change: (layout: CourseLayout) => CourseLayout) => {
+    updateCourses((current) => current.map((course) => (course.id === courseId ? updateLayoutIn(course, layoutId, change) : course)));
+  };
+
+  // Exactly `holes` entries, so a hole can be written by index.
+  const fullHoleLayouts = (layout: CourseLayout) => Array.from({ length: layout.holes }, (_, index) => layout.layouts[index] ?? { tee: null, basket: null });
+
   // Search DiscIt as the user types, fetching only the matching discs.
   useEffect(() => {
     const query = bagEntry.trim();
@@ -498,7 +531,10 @@ export default function App() {
 
   const pastSessions = [...history].sort((a, b) => Number(b.id) - Number(a.id));
   const viewedSession = history.find((session) => session.id === viewedSessionId);
-  const viewedCourse = courses.find((course) => course.id === viewedSession?.courseId);
+  const viewedBaseCourse = courses.find((course) => course.id === viewedSession?.courseId);
+  // The layout the round was played on; undefined if the course or that layout was deleted.
+  const viewedCourse = viewedBaseCourse && viewedSession ? withExistingLayout(viewedBaseCourse, viewedSession.layoutId) : undefined;
+  const viewedLayoutLabel = viewedBaseCourse && courseLayouts(viewedBaseCourse).length > 1 ? (viewedCourse?.layoutLabel ?? viewedSession?.layoutName ?? 'Deleted') : null;
   const viewedHoles = viewedSession
     ? [...new Set(viewedSession.shots.map((shot) => shot.hole))].sort((a, b) => a - b).map((holeNumber) => {
       const holeShots = viewedSession.shots.filter((shot) => shot.hole === holeNumber);
@@ -512,7 +548,8 @@ export default function App() {
     count: viewedHoles.filter((item) => item.par !== undefined && result.matches(countStrokes(item.shots) - item.par)).length,
   })).filter((result) => result.count > 0);
   const sessionSummary = (session: SessionArchive) => {
-    const summary = scoreSummary(session.shots, courses.find((course) => course.id === session.courseId));
+    const baseCourse = courses.find((course) => course.id === session.courseId);
+    const summary = scoreSummary(session.shots, baseCourse ? withExistingLayout(baseCourse, session.layoutId) : undefined);
     const holesText = `${summary.holesCompleted} ${summary.holesCompleted === 1 ? 'hole' : 'holes'}`;
     if (session.mode === 'Practice') return `${holesText} · ${summary.strokes} ${summary.strokes === 1 ? 'throw' : 'throws'}`;
     return `${holesText} · Score ${summary.strokes}${summary.toPar === null ? '' : ` (${formatScoreToPar(summary.toPar)})`}`;
@@ -531,7 +568,11 @@ export default function App() {
   const averageFeet = allShots.length ? Math.round(totalFeet / allShots.length) : 0;
   const recentShots = allShots.slice(-8);
   const longestRecentThrow = Math.max(1, ...recentShots.map((shot) => shot.feet));
-  const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? courses[0];
+  const selectedBaseCourse = courses.find((course) => course.id === selectedCourseId) ?? courses[0];
+  // Most screens work on the selected layout of the selected course.
+  const selectedCourse: CourseView | undefined = selectedBaseCourse ? withLayout(selectedBaseCourse, selectedLayoutId) : undefined;
+  const selectedCourseLayouts = selectedBaseCourse ? courseLayouts(selectedBaseCourse) : [];
+  const hasMultipleLayouts = selectedCourseLayouts.length > 1;
   const selectedHoleLayout = selectedCourse?.layouts?.[hole - 1];
   const roundScore = scoreSummary(shots, selectedCourse, hole);
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
@@ -619,6 +660,7 @@ export default function App() {
   const saveCoursePoint = async (target: 'tee' | 'basket') => {
     if (!selectedCourse || savingGpsTarget) return;
     const courseId = selectedCourse.id;
+    const layoutId = selectedCourse.layoutId;
     const targetHole = builderHole;
     setSavingGpsTarget(target);
     setGpsMessage('Waiting for a GPS fix…');
@@ -644,13 +686,11 @@ export default function App() {
         altitudeAccuracy: fix.coords.altitudeAccuracy,
       };
       setMapRegion(regionAtPoint(point));
-      updateCourses((current) => current.map((course) => {
-        if (course.id !== courseId) return course;
-        const layouts = Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null });
-        const layout = layouts[targetHole - 1] ?? { tee: null, basket: null };
-        layouts[targetHole - 1] = { ...layout, [target]: point };
-        return { ...course, layouts };
-      }));
+      updateCourseLayout(courseId, layoutId, (layout) => {
+        const layouts = fullHoleLayouts(layout);
+        layouts[targetHole - 1] = { ...(layouts[targetHole - 1] ?? { tee: null, basket: null }), [target]: point };
+        return { ...layout, layouts };
+      });
       const accuracyText = point.accuracy === null ? 'accuracy unavailable' : `accuracy ±${Math.round(point.accuracy)} m`;
       setGpsMessage(`${target === 'tee' ? 'Tee box' : 'Basket'} saved · ${accuracyText}${point.accuracy !== null && point.accuracy > 25 ? '. GPS is weak; wait a moment and save again for a better fix.' : '.'}`);
     } catch {
@@ -662,13 +702,11 @@ export default function App() {
 
   const setHolePar = (par: number, targetHole = builderHole) => {
     if (!selectedCourse) return;
-    const courseId = selectedCourse.id;
-    updateCourses((current) => current.map((course) => {
-      if (course.id !== courseId) return course;
-      const layouts = Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null });
+    updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => {
+      const layouts = fullHoleLayouts(layout);
       layouts[targetHole - 1] = { ...layouts[targetHole - 1], par };
-      return { ...course, layouts };
-    }));
+      return { ...layout, layouts };
+    });
   };
 
   // Captures the player's GPS position at the disc, then asks for disc, throw type and quality.
@@ -742,11 +780,53 @@ export default function App() {
 
   // Moves the current session's throws into history so a new one can begin.
   const archiveSession = () => {
-    const id = shots.length ? newSessionId() : null;
-    if (id) setHistory((current) => [...current, { id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id, shots, updatedAt: nowMs() }]);
+    const id = shots.length ? (resumedFrom?.id ?? newSessionId()) : null;
+    if (id) {
+      const record: SessionArchive = {
+        id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id,
+        layoutId: selectedCourse?.layoutId, layoutName: selectedCourse?.layoutLabel,
+        shots, updatedAt: nowMs(), shared: resumedFrom?.shared, shareToken: resumedFrom?.shareToken,
+      };
+      setHistory((current) => [...current.filter((session) => session.id !== id), record]);
+    }
     setShots([]);
     setSessionActive(false);
+    setResumedFrom(null);
     return id;
+  };
+
+  // Reopens a past round as the round in progress, at its last unfinished hole.
+  const resumeSession = (session: SessionArchive) => {
+    const course = courses.find((item) => item.id === session.courseId);
+    const start = () => {
+      archiveSession();
+      setHistory((current) => current.filter((item) => item.id !== session.id));
+      setShots(session.shots);
+      setMode(session.mode);
+      if (course) setSelectedCourseId(course.id);
+      setSelectedLayoutId(session.layoutId ?? MAIN_LAYOUT_ID);
+      const holeCount = course ? withLayout(course, session.layoutId).holes : Infinity;
+      const lastHole = Math.max(1, ...session.shots.map((shot) => shot.hole));
+      const lastHoleDone = session.shots.some((shot) => shot.hole === lastHole && shot.lie === 'Basket');
+      const nextHole = lastHoleDone && lastHole < holeCount ? lastHole + 1 : lastHole;
+      setHole(nextHole);
+      setThrowType(session.shots.some((shot) => shot.hole === nextHole) ? 'Approach' : 'Drive');
+      setThrowLie('Fairway');
+      setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken });
+      setSessionActive(true);
+      setShowingRoundSummary(false);
+      setRoundMessage(`Resumed on hole ${nextHole}.`);
+      setScreen('Round');
+    };
+    if (sessionActive && shots.length) {
+      Alert.alert(
+        `Resume this ${session.mode === 'Round' ? 'round' : 'session'}?`,
+        `Your ${mode === 'Round' ? 'round' : 'practice session'} in progress will be ended and saved to your history first.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Resume', onPress: start }],
+      );
+      return;
+    }
+    start();
   };
 
   // Ends the session; a finished round opens its summary, anything else returns home.
@@ -798,8 +878,9 @@ export default function App() {
     completeHole();
   };
 
-  const beginSession = (nextMode: 'Round' | 'Practice') => {
+  const beginSession = (nextMode: 'Round' | 'Practice', layoutId?: string) => {
     archiveSession();
+    if (layoutId) setSelectedLayoutId(layoutId);
     setMode(nextMode);
     setHole(1);
     setThrowType('Drive');
@@ -810,9 +891,9 @@ export default function App() {
   };
 
   // Starting over while a session is in progress needs confirmation; the old session goes to history.
-  const confirmNewSession = (nextMode: 'Round' | 'Practice') => {
+  const confirmNewSession = (nextMode: 'Round' | 'Practice', layoutId?: string) => {
     if (!sessionActive) {
-      beginSession(nextMode);
+      beginSession(nextMode, layoutId);
       return;
     }
     Alert.alert(
@@ -820,17 +901,123 @@ export default function App() {
       `Your ${mode === 'Round' ? 'round' : 'practice session'} in progress (${shots.length} ${shots.length === 1 ? 'throw' : 'throws'}) will be ended and saved to your session history.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Start new', style: 'destructive', onPress: () => beginSession(nextMode) },
+        { text: 'Start new', style: 'destructive', onPress: () => beginSession(nextMode, layoutId) },
       ],
     );
   };
 
   const startRound = () => {
-    if (!selectedCourse) {
+    if (!selectedBaseCourse) {
       Alert.alert('Create a course first', 'Add a course in Course Builder before starting a round.');
       return;
     }
-    confirmNewSession('Round');
+    if (!hasMultipleLayouts) {
+      confirmNewSession('Round', MAIN_LAYOUT_ID);
+      return;
+    }
+    Alert.alert('Which layout?', `Choose the layout to play at ${selectedBaseCourse.name}.`, [
+      ...selectedCourseLayouts.map((layout) => ({
+        text: `${layoutDisplayName(layout)} · ${layout.holes} ${layout.holes === 1 ? 'hole' : 'holes'}`,
+        onPress: () => confirmNewSession('Round', layout.id),
+      })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ]);
+  };
+
+  const selectLayout = (layoutId: string) => {
+    const apply = () => {
+      setSelectedLayoutId(layoutId);
+      setBuilderHole(1);
+    };
+    if (sessionActive && shots.length && selectedCourse && selectedCourse.layoutId !== layoutId) {
+      Alert.alert('Round in progress', 'Your round in progress uses the selected layout, so switching layouts switches it for that round too.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Switch layout', onPress: apply },
+      ]);
+      return;
+    }
+    apply();
+  };
+
+  const addLayout = (copySelected: boolean) => {
+    if (!selectedCourse) return;
+    const id = `layout-${newSessionId()}`;
+    const name = newLayoutName.trim() || `Layout ${selectedCourseLayouts.length + 1}`;
+    const layout: CourseLayout = copySelected
+      ? { id, name, holes: selectedCourse.holes, layouts: Array.from({ length: selectedCourse.holes }, (_, index) => ({ ...(selectedCourse.layouts?.[index] ?? { tee: null, basket: null }) })) }
+      : { id, name, holes: 1, layouts: [{ tee: null, basket: null }] };
+    const courseId = selectedCourse.id;
+    updateCourses((current) => current.map((course) => (course.id === courseId ? { ...course, extraLayouts: [...(course.extraLayouts ?? []), layout] } : course)));
+    selectLayout(id);
+    setNewLayoutName('');
+  };
+
+  const deleteLayout = (course: Course, layout: CourseLayout) => {
+    Alert.alert(
+      `Delete the ${layoutDisplayName(layout)} layout?`,
+      'Its holes, tees, baskets and pars will be removed. Past rounds played on it keep their scores but no longer show par or maps.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete layout',
+          style: 'destructive',
+          onPress: () => {
+            updateCourses((current) => current.map((item) => (item.id === course.id ? { ...item, extraLayouts: (item.extraLayouts ?? []).filter((extra) => extra.id !== layout.id) } : item)));
+            if (selectedLayoutId === layout.id) setSelectedLayoutId(MAIN_LAYOUT_ID);
+          },
+        },
+      ],
+    );
+  };
+
+  // Editing throws in past rounds.
+  const editingSession = editingThrow ? history.find((session) => session.id === editingThrow.sessionId) : undefined;
+  const editingShot = editingThrow ? editingSession?.shots[editingThrow.index] : undefined;
+  const editDiscOptions = [...new Set([...(editingShot?.disc ? [editingShot.disc] : []), ...bag])];
+
+  const openThrowEditor = (session: SessionArchive, shot: Shot) => {
+    const index = session.shots.indexOf(shot);
+    if (index < 0) return;
+    // Throws rated on the old 1-5 scale are converted to the current scale.
+    const quality = shot.quality ? Math.min(QUALITY_MAX, Math.max(1, Math.round((shot.quality / (shot.qualityMax ?? 5)) * QUALITY_MAX))) : 2;
+    setThrowDraft({ disc: shot.disc, type: shot.type, lie: shot.lie ?? 'Fairway', quality });
+    setEditingThrow({ sessionId: session.id, index });
+  };
+
+  const updateSessionShots = (sessionId: string, change: (list: Shot[]) => Shot[]) => {
+    const stamp = nowMs();
+    setHistory((current) => current.map((session) => (session.id === sessionId ? { ...session, shots: change(session.shots), updatedAt: stamp } : session)));
+  };
+
+  const saveThrowEdit = () => {
+    if (!editingThrow) return;
+    const { sessionId, index } = editingThrow;
+    updateSessionShots(sessionId, (list) => list.map((shot, position) => (position === index
+      ? { ...shot, disc: throwDraft.disc, type: throwDraft.type, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX }
+      : shot)));
+    setEditingThrow(null);
+  };
+
+  const deleteEditingThrow = () => {
+    if (!editingThrow || !editingSession || !editingShot) return;
+    if (editingSession.shots.length === 1) {
+      Alert.alert('Keep one throw', 'A round needs at least one throw.');
+      return;
+    }
+    const { sessionId, index } = editingThrow;
+    const holeNumber = editingShot.hole;
+    const tee = viewedCourse?.id === editingSession.courseId ? viewedCourse?.layouts?.[holeNumber - 1]?.tee : undefined;
+    Alert.alert('Delete this throw?', 'It will be removed from the round, and the score and the next throw’s distance updated.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete throw',
+        style: 'destructive',
+        onPress: () => {
+          updateSessionShots(sessionId, (list) => recomputeHoleFeet(list.filter((_, position) => position !== index), holeNumber, tee));
+          setEditingThrow(null);
+        },
+      },
+    ]);
   };
 
   const startPractice = () => confirmNewSession('Practice');
@@ -852,6 +1039,7 @@ export default function App() {
     if (!name) return;
     const course: Course = { id: newSessionId(), name, holes: 1, layouts: [{ tee: null, basket: null }] };
     updateCourses((current) => [...current, course]);
+    setSelectedLayoutId(MAIN_LAYOUT_ID);
     setCourseName('');
     openHoleWizard(course);
   };
@@ -983,9 +1171,14 @@ export default function App() {
       return { tee: layout?.tee ?? null, basket: layout?.basket ?? null, par: layout?.par };
     });
     const { address, street, city, state, phone, email, website, notes } = source.details;
-    const course: Course = { id: newSessionId(), name: source.name, holes: source.holes, layouts, address, street, city, state, phone, email, website, notes, sourceUid: source.uid };
+    const extraLayouts = (source.extraLayouts ?? []).map(({ id, name, holes, layouts: holeLayouts }) => ({ id, name, holes, layouts: holeLayouts }));
+    const course: Course = {
+      id: newSessionId(), name: source.name, holes: source.holes, layouts, layoutName: source.layoutName, extraLayouts,
+      address, street, city, state, phone, email, website, notes, sourceUid: source.uid,
+    };
     updateCourses((current) => [...current, course]);
     setSelectedCourseId(course.id);
+    setSelectedLayoutId(MAIN_LAYOUT_ID);
     Alert.alert('Course added', `${source.name} is now in your courses and selected for your next round.`);
   };
 
@@ -1015,7 +1208,7 @@ export default function App() {
         {layout?.basket && <Marker coordinate={layout.basket} title={`Hole ${holeNumber} basket`} pinColor="#d77d42" />}
         {throws.map((item) => <Marker key={`${item.index}-${item.coordinate.latitude}`} coordinate={item.coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} title={`Throw ${item.index + 1}`} description={formatThrowDetail(item.shot)}><View style={[styles.shotMarker, item.shot.lie === 'OB' && styles.obMarker]}><Text style={styles.shotPinText}>{item.index + 1}</Text></View></Marker>)}
       </MapView>
-      {!viewedCourse && <View pointerEvents="none" style={styles.boardCaption}><Text style={styles.boardCaptionText}>COURSE DELETED · TEE AND BASKET UNAVAILABLE</Text></View>}
+      {!viewedCourse && <View pointerEvents="none" style={styles.boardCaption}><Text style={styles.boardCaptionText}>COURSE OR LAYOUT DELETED · NO TEE OR BASKET</Text></View>}
     </View>;
   };
 
@@ -1034,9 +1227,7 @@ export default function App() {
   };
 
   const addHoleToCourse = (courseId: string) => {
-    updateCourses((current) => current.map((course) => course.id === courseId
-      ? { ...course, holes: course.holes + 1, layouts: [...Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null }), { tee: null, basket: null }] }
-      : course));
+    updateCourseLayout(courseId, selectedLayoutId, (layout) => ({ ...layout, holes: layout.holes + 1, layouts: [...fullHoleLayouts(layout), { tee: null, basket: null }] }));
   };
 
   const addWizardHole = () => {
@@ -1048,7 +1239,7 @@ export default function App() {
 
   const deleteHole = (course: Course, holeNumber: number) => {
     if (course.holes <= 1) {
-      Alert.alert('Keep one hole', 'A course needs at least one hole. Delete the course if you no longer need it.');
+      Alert.alert('Keep one hole', 'A layout needs at least one hole. Delete the layout or course if you no longer need it.');
       return;
     }
     Alert.alert(
@@ -1066,9 +1257,7 @@ export default function App() {
               if (shot.hole === holeNumber) return [];
               return [{ ...shot, hole: shot.hole > holeNumber ? shot.hole - 1 : shot.hole }];
             }));
-            updateCourses((current) => current.map((item) => item.id === course.id
-              ? { ...item, holes: item.holes - 1, layouts: item.layouts?.filter((_, index) => index !== holeNumber - 1) }
-              : item));
+            updateCourseLayout(course.id, selectedLayoutId, (layout) => ({ ...layout, holes: layout.holes - 1, layouts: fullHoleLayouts(layout).filter((_, index) => index !== holeNumber - 1) }));
             if (selectedCourseId === course.id) {
               setHole((current) => current === holeNumber ? Math.max(1, holeNumber - 1) : current > holeNumber ? current - 1 : current);
             }
@@ -1170,7 +1359,7 @@ export default function App() {
 
         <View style={styles.pageHeading}>
           <View>
-            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'} · SATELLITE MAP` : screen === 'Round' ? 'ON THE COURSE' : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
+            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Round' ? 'ON THE COURSE' : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
             <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Round' ? 'Keep the line.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
           </View>
           {screen !== 'Home' && (() => {
@@ -1184,7 +1373,7 @@ export default function App() {
             <View style={styles.menuIntro}>
               <Text style={styles.menuIntroLabel}>YOUR NEXT SESSION</Text>
               <Text style={styles.menuIntroTitle}>{selectedCourse?.name ?? 'Build your first course'}</Text>
-              <Text style={styles.menuIntroCopy}>{selectedCourse ? `${selectedCourse.holes} holes · ${shots.length} throws saved on this device` : 'Add a course, build your bag, or head to practice.'}</Text>
+              <Text style={styles.menuIntroCopy}>{selectedCourse ? `${hasMultipleLayouts ? `${selectedCourse.layoutLabel} layout · ` : ''}${selectedCourse.holes} holes · ${shots.length} throws saved on this device` : 'Add a course, build your bag, or head to practice.'}</Text>
             </View>
             {sessionActive && <Pressable onPress={() => setScreen('Round')} style={[styles.menuItem, styles.menuItemPrimary, styles.resumeItem]} accessibilityRole="button">
               <Text style={[styles.menuNumber, styles.menuNumberPrimary]}>▶</Text><View style={styles.menuItemCopy}><Text style={[styles.menuTitle, styles.menuTitlePrimary]}>Resume {mode === 'Round' ? 'round' : 'practice'}</Text><Text style={[styles.menuSubtitle, styles.menuSubtitlePrimary]}>{mode === 'Round' ? selectedCourse?.name ?? 'Round' : `${practiceFocus} practice`} · Hole {hole} · {shots.length} {shots.length === 1 ? 'throw' : 'throws'}</Text></View><Text style={[styles.menuArrow, styles.menuArrowPrimary]}>›</Text>
@@ -1222,7 +1411,33 @@ export default function App() {
               <Text style={styles.builderHint}>Add holes one at a time while you map, then tap Finish.</Text>
             </View>
             <Text style={styles.builderSectionTitle}>Your courses</Text>
-            {courses.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { setSelectedCourseId(course.id); setBuilderHole(1); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{course.holes} holes · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
+            {courses.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { if (course.id !== selectedCourseId) setSelectedLayoutId(MAIN_LAYOUT_ID); setSelectedCourseId(course.id); setBuilderHole(1); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{courseLayouts(course).length > 1 ? `${courseLayouts(course).length} layouts` : `${course.holes} holes`} · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
+            {selectedBaseCourse && selectedCourse && <View style={styles.mapEditor}>
+              <View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Layouts</Text><Text style={styles.mapProgress}>{selectedCourseLayouts.length} {selectedCourseLayouts.length === 1 ? 'LAYOUT' : 'LAYOUTS'}</Text></View>
+              <Text style={styles.mapInstruction}>Each layout has its own holes, tees, baskets and pars, such as different tee pads or pin positions. The selected layout is the one you map, edit and play.</Text>
+              {selectedCourseLayouts.map((layout) => {
+                const stats = courseStats(withLayout(selectedBaseCourse, layout.id));
+                const selected = selectedCourse.layoutId === layout.id;
+                return <View key={layout.id} style={[styles.courseItem, selected && styles.courseItemSelected]}>
+                  <Pressable onPress={() => selectLayout(layout.id)} style={styles.courseItemSelect} accessibilityRole="button" accessibilityState={{ selected }}>
+                    <View style={styles.courseItemCopy}>
+                      <Text style={styles.courseItemName}>{layoutDisplayName(layout)}</Text>
+                      <Text style={styles.courseItemMeta}>{[`${stats.holes} ${stats.holes === 1 ? 'hole' : 'holes'}`, stats.parHoles ? `Par ${stats.par}` : null, `${stats.mappedHoles} mapped`].filter(Boolean).join(' · ')}</Text>
+                    </View>
+                    <Text style={styles.courseSelectedMark}>{selected ? '✓' : '○'}</Text>
+                  </Pressable>
+                  {layout.id !== MAIN_LAYOUT_ID && <Pressable onPress={() => deleteLayout(selectedBaseCourse, layout)} style={styles.deleteButton} accessibilityRole="button" accessibilityLabel={`Delete the ${layoutDisplayName(layout)} layout`}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable>}
+                </View>;
+              })}
+              <Text style={[styles.builderLabel, styles.detailLabel]}>SELECTED LAYOUT NAME</Text>
+              <TextInput value={selectedCourseLayouts.find((layout) => layout.id === selectedCourse.layoutId)?.name ?? ''} onChangeText={(name) => updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => ({ ...layout, name }))} placeholder={selectedCourse.layoutId === MAIN_LAYOUT_ID ? 'Main' : 'Layout name'} placeholderTextColor="#92988c" style={styles.builderInput} />
+              <Text style={[styles.builderLabel, styles.detailLabel]}>NEW LAYOUT</Text>
+              <TextInput value={newLayoutName} onChangeText={setNewLayoutName} placeholder="e.g. Blue tees or Winter pins" placeholderTextColor="#92988c" style={styles.builderInput} />
+              <View style={styles.courseLinks}>
+                <Pressable onPress={() => addLayout(true)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ COPY OF {selectedCourse.layoutLabel.toUpperCase()}</Text></Pressable>
+                <Pressable onPress={() => addLayout(false)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ BLANK LAYOUT</Text></Pressable>
+              </View>
+            </View>}
             {selectedCourse && <View style={styles.mapEditor}>
               <Text style={styles.builderSectionTitle}>Course details</Text>
               <View style={styles.toggleRow}>
@@ -1235,6 +1450,7 @@ export default function App() {
                   : <Pressable onPress={() => setScreen('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
               </View>
               {account && selectedCourse.published && selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
+              {hasMultipleLayouts && <Text style={styles.courseItemMeta}>Stats for the {selectedCourse.layoutLabel} layout</Text>}
               {selectedCourseStats && <View style={styles.courseStatsGrid}>
                 <View style={styles.courseStat}><Text style={styles.statLabel}>HOLES</Text><Text style={styles.courseStatValue}>{selectedCourseStats.holes}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.mappedHoles} mapped</Text></View>
                 <View style={styles.courseStat}><Text style={styles.statLabel}>PAR</Text><Text style={styles.courseStatValue}>{selectedCourseStats.parHoles ? selectedCourseStats.par : '—'}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.parHoles === selectedCourseStats.holes ? 'All holes' : `${selectedCourseStats.parHoles} of ${selectedCourseStats.holes} holes set`}</Text></View>
@@ -1263,8 +1479,8 @@ export default function App() {
               <TextInput value={selectedCourse.notes ?? ''} onChangeText={(notes) => updateCourseDetails(selectedCourse.id, { notes })} placeholder="Parking, fees, hours, restrooms, mandos, water hazards…" placeholderTextColor="#92988c" style={[styles.builderInput, styles.notesInput]} multiline textAlignVertical="top" />
               {renderCourseLinks(selectedCourse)}
             </View>}
-            {selectedCourse && <View style={styles.mapEditor}><View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Hole layouts</Text><Text style={styles.mapProgress}>{mappedHoleCount}/{selectedCourse.holes} MAPPED</Text></View><Text style={styles.mapInstruction}>Map each hole with satellite imagery and on-site GPS capture.</Text><Pressable onPress={() => openHoleWizard(selectedCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>MAP SELECTED COURSE ↗</Text></Pressable>
-              <View style={[styles.mapEditorHeading, styles.parEditorHeading]}><Text style={styles.builderSectionTitle}>Hole pars</Text><Text style={styles.mapProgress}>PAR {selectedCourse.layouts?.reduce((sum, layout) => sum + (layout.par ?? 0), 0) ?? 0}</Text></View>
+            {selectedCourse && <View style={styles.mapEditor}><View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Map holes</Text><Text style={styles.mapProgress}>{mappedHoleCount}/{selectedCourse.holes} MAPPED</Text></View><Text style={styles.mapInstruction}>Map each hole with satellite imagery and on-site GPS capture.</Text><Pressable onPress={() => openHoleWizard(selectedCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{hasMultipleLayouts ? `MAP ${selectedCourse.layoutLabel.toUpperCase()} LAYOUT ↗` : 'MAP SELECTED COURSE ↗'}</Text></Pressable>
+              <View style={[styles.mapEditorHeading, styles.parEditorHeading]}><Text style={styles.builderSectionTitle}>Hole pars{hasMultipleLayouts ? ` · ${selectedCourse.layoutLabel}` : ''}</Text><Text style={styles.mapProgress}>PAR {selectedCourse.layouts?.reduce((sum, layout) => sum + (layout.par ?? 0), 0) ?? 0}</Text></View>
               {Array.from({ length: selectedCourse.holes }, (_, index) => {
                 const layout = selectedCourse.layouts?.[index];
                 const par = layout?.par;
@@ -1337,7 +1553,7 @@ export default function App() {
         ) : screen === 'Round' ? (
           <ScrollView ref={roundScrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.roundToolbar}>
-              <View style={styles.courseLabel}><Text style={styles.holeLabel}>{mode === 'Practice' ? `${practiceFocus.toUpperCase()} PRACTICE` : 'PLAYING AT'}</Text><Text style={styles.courseLabelName}>{selectedCourse?.name ?? 'Practice area'}</Text></View>
+              <View style={styles.courseLabel}><Text style={styles.holeLabel}>{mode === 'Practice' ? `${practiceFocus.toUpperCase()} PRACTICE` : 'PLAYING AT'}</Text><Text style={styles.courseLabelName}>{selectedCourse?.name ?? 'Practice area'}{hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''}</Text></View>
               <View style={styles.roundHoleNav}>
                 <Pressable onPress={goToPreviousHole} disabled={hole <= 1} style={[styles.roundHoleArrow, hole <= 1 && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Previous hole"><Text style={styles.holeNavArrow}>‹</Text></Pressable>
                 <View style={styles.holeSelector}><Text style={styles.holeLabel}>HOLE</Text><Text style={styles.holeNumber}>{String(hole).padStart(2, '0')}<Text style={styles.holeTotal}> / {selectedCourse?.holes ?? 18}</Text></Text></View>
@@ -1458,6 +1674,7 @@ export default function App() {
                   publicCourse.par === null ? null : `Par ${publicCourse.par}`,
                   publicCourse.mappedHoles ? `${publicCourse.distanceFeet.toLocaleString()} ft` : null,
                   `${publicCourse.mappedHoles} mapped`,
+                  publicCourse.extraLayouts?.length ? `${publicCourse.extraLayouts.length + 1} layouts` : null,
                 ].filter(Boolean).join(' · ')}</Text>
                 {courseAddressLine(publicCourse.details) ? <Text style={styles.menuIntroCopy}>{courseAddressLine(publicCourse.details)}</Text> : null}
               </View>
@@ -1486,6 +1703,7 @@ export default function App() {
                     [result.city, result.state].filter(Boolean).join(', ') || null,
                     `${result.holes} ${result.holes === 1 ? 'hole' : 'holes'}`,
                     result.par === null ? null : `Par ${result.par}`,
+                    result.layoutCount > 1 ? `${result.layoutCount} layouts` : null,
                     result.distanceMiles === null ? null : `${result.distanceMiles} mi`,
                   ].filter(Boolean).join(' · ')}</Text>
                   <Text style={styles.courseItemMeta}>Mapped by {result.mappedBy}</Text>
@@ -1514,11 +1732,13 @@ export default function App() {
                 </View>
                 <Text style={styles.menuIntroCopy}>{[
                   `${viewedHoles.length} ${viewedHoles.length === 1 ? 'hole' : 'holes'}`,
+                  viewedLayoutLabel ? `${viewedLayoutLabel} layout` : null,
                   viewedScore?.holesWithPar ? `Par ${viewedPar}` : null,
                   `${viewedSession.shots.reduce((sum, shot) => sum + shot.feet, 0).toLocaleString()} ft thrown`,
                 ].filter(Boolean).join(' · ')}</Text>
                 {viewedResults.length > 0 && <View style={styles.resultChips}>{viewedResults.map((result) => <View key={result.label} style={styles.resultChip}><Text style={styles.resultChipText}>{result.count} {result.label}{result.count === 1 || result.label.endsWith('+') || result.label.endsWith('better') ? '' : 's'}</Text></View>)}</View>}
               </View>
+              <Pressable onPress={() => resumeSession(viewedSession)} style={[styles.addHoleButton, styles.resumeButton]} accessibilityRole="button"><Text style={styles.addHoleButtonText}>RESUME {viewedSession.mode === 'Round' ? 'ROUND' : 'SESSION'} ▶</Text></Pressable>
               <View style={styles.toggleRow}>
                 <View style={styles.toggleCopy}>
                   <Text style={styles.courseItemName}>Share this {viewedSession.mode === 'Round' ? 'round' : 'session'}</Text>
@@ -1551,14 +1771,17 @@ export default function App() {
               {viewedScore && viewedScore.holesWithPar < viewedScore.holesCompleted && <Text style={styles.mapInstruction}>{viewedScore.holesWithPar ? `To par counts only the ${viewedScore.holesWithPar} holes with a par set.` : 'Set pars for this course in Course builder to see your score to par.'}</Text>}
               {viewedSession.mode === 'Practice' && <Text style={styles.mapInstruction}>Practice session</Text>}
               <Text style={[styles.sectionTitle, styles.throwByThrowTitle]}>Throw by throw</Text>
-              <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged.</Text>
+              <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it.</Text>
               {viewedHoles.map((item) => <View key={item.hole} style={styles.roundHole} onLayout={(event) => { holeSectionOffsets.current[item.hole] = event.nativeEvent.layout.y; }}>
                 <Pressable onPress={() => toggleRoundHoleMap(item.hole)} style={styles.roundHoleHeader} accessibilityRole="button" accessibilityState={{ expanded: expandedHole === item.hole }}>
                   <Text style={styles.roundHoleTitle}>Hole {String(item.hole).padStart(2, '0')} <Text style={styles.roundHoleMapToggle}>{expandedHole === item.hole ? '− MAP' : '+ MAP'}</Text></Text>
                   <Text style={styles.roundHoleMeta}>{item.par !== undefined ? `PAR ${item.par} · ` : ''}{countStrokes(item.shots)} {countStrokes(item.shots) === 1 ? 'STROKE' : 'STROKES'}{item.par !== undefined ? ` (${formatScoreToPar(countStrokes(item.shots) - item.par)})` : ''}</Text>
                 </Pressable>
                 {expandedHole === item.hole && renderRoundHoleMap(item.hole, item.shots)}
-                {item.shots.map((shot, index) => <Text key={index} style={styles.roundThrow}>{index + 1}.  {formatThrowDetail(shot)}</Text>)}
+                {item.shots.map((shot, index) => <Pressable key={index} onPress={() => openThrowEditor(viewedSession, shot)} style={styles.throwRow} accessibilityRole="button" accessibilityLabel={`Edit throw ${index + 1} on hole ${item.hole}`}>
+                  <Text style={[styles.roundThrow, styles.throwRowText]}>{index + 1}.  {formatThrowDetail(shot)}</Text>
+                  <Text style={styles.throwEditHint}>EDIT</Text>
+                </Pressable>)}
               </View>)}
               {showingRoundSummary && <Pressable onPress={() => setScreen('Home')} style={styles.finishButton}><Text style={styles.finishButtonText}>DONE</Text></Pressable>}
             </>}
@@ -1625,6 +1848,39 @@ export default function App() {
           </View>
         </Modal>
 
+        <Modal visible={editingThrow !== null} transparent animationType="slide" onRequestClose={() => setEditingThrow(null)}>
+          <View style={styles.sheetBackdrop}>
+            <View style={styles.sheet}>
+              <View style={styles.controlHeading}><Text style={styles.controlTitle}>Edit throw</Text><Text style={styles.controlStep}>{editingShot ? `HOLE ${String(editingShot.hole).padStart(2, '0')}` : ''}</Text></View>
+              {editingShot && <Text style={styles.sheetDistance}>{editingShot.feet ? `${editingShot.feet} ft` : 'Distance unavailable'}</Text>}
+              <Text style={styles.fieldLabel}>DISC</Text>
+              <View style={styles.sheetOptions}>
+                {editDiscOptions.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, disc: item }))} style={[styles.chip, styles.sheetChip, throwDraft.disc === item && styles.chipSelected]}><Text style={[styles.chipText, throwDraft.disc === item && styles.chipTextSelected]}>{item}</Text></Pressable>)}
+                {!editDiscOptions.length && <Text style={styles.chipText}>No discs in your bag</Text>}
+              </View>
+              <Text style={[styles.fieldLabel, styles.typeLabel]}>TYPE OF THROW</Text>
+              <View style={styles.typeRow}>
+                {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+              </View>
+              <Text style={[styles.fieldLabel, styles.typeLabel]}>WHERE DID IT LAND?</Text>
+              <View style={[styles.typeRow, styles.lieGrid]}>
+                {LIE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{item}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
+              </View>
+              <Text style={[styles.fieldLabel, styles.typeLabel]}>QUALITY</Text>
+              <View style={styles.typeRow}>
+                {QUALITY_OPTIONS.map((option) => <Pressable key={option.value} onPress={() => setThrowDraft((draft) => ({ ...draft, quality: option.value }))} style={[styles.typeButton, styles.qualityButton, throwDraft.quality === option.value && styles.typeButtonSelected]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></Pressable>)}
+              </View>
+              <View style={styles.editFooter}>
+                <Pressable onPress={deleteEditingThrow} style={styles.sheetFooterButton}><Text style={styles.endSessionText}>DELETE</Text></Pressable>
+                <View style={styles.editFooterActions}>
+                  <Pressable onPress={() => setEditingThrow(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
+                  <Pressable onPress={saveThrowEdit} style={[styles.sheetFooterButton, styles.saveButton]}><Text style={styles.saveButtonText}>SAVE</Text></Pressable>
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {screen === 'Round' || screen === 'Insights' ? <View style={styles.bottomBar}><Text style={styles.bottomStatus}><View style={styles.statusDot} /> SESSION SAVED LOCALLY</Text><Text style={styles.bottomCount}>{shots.length} THROWS</Text></View> : null}
       </View>
     </View>
@@ -1646,6 +1902,14 @@ const styles = StyleSheet.create({
   avatarText: { color: INK, fontSize: 10, fontWeight: '800' },
   avatarSignedIn: { backgroundColor: GREEN, borderColor: GREEN },
   avatarTextSignedIn: { color: '#fff' },
+  resumeButton: { marginTop: 0, marginBottom: 12 },
+  throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
+  throwRowText: { flex: 1 },
+  throwEditHint: { color: GREEN, fontSize: 7, fontWeight: '800', letterSpacing: 0.6, marginLeft: 8 },
+  editFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 },
+  editFooterActions: { flexDirection: 'row' },
+  saveButton: { backgroundColor: GREEN, borderColor: GREEN, marginLeft: 8 },
+  saveButtonText: { color: '#fff', fontSize: 8, fontWeight: '800' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 10, padding: 12, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e5dc' },
   toggleCopy: { flex: 1, marginRight: 12 },
   toggleAction: { alignSelf: 'flex-start', marginTop: 0, marginBottom: 16 },
