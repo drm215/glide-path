@@ -1,7 +1,7 @@
 // Runs the iPhone app's own sync code (lib/sync.ts) against the real API, as two devices on one account.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { buildSyncRequest, clearSentTombstones, countPendingChanges, mergeCourses, mergeRounds, type SyncAccount, type SyncData, type SyncResponse } from '../../lib/sync.ts';
+import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData, type SyncResponse } from '../../lib/sync.ts';
 import type { Course, SessionArchive } from '../../lib/types.ts';
 import { startTestServer } from './helpers.ts';
 
@@ -122,6 +122,27 @@ describe('app sync against the API', () => {
     assert.equal(phone.data.deletedCourses.length, 0, 'sent deletions are forgotten');
     await syncDevice(server, tablet);
     assert.deepEqual(tablet.data.courses.map((item) => item.id), ['course-1']);
+  });
+
+  test('a bag saved before sync uploads even after the account has already synced', async () => {
+    const token = await server.register('legacy-bag@example.com');
+    // The phone already synced once, with a bag that has no edit time (as loaded from storage).
+    const phone = newDevice(token, { ...emptyData(), bag: ['Buzzz', 'Aviar'] });
+    await syncDevice(server, phone);
+    assert.equal(buildSyncRequest(phone.data, phone.account).bag, undefined, 'unstamped bag is never sent');
+
+    // Relaunch: the app stamps the saved bag on load.
+    phone.data.bagUpdatedAt = initialBagUpdatedAt(undefined, phone.data.bag.length, tick());
+    await syncDevice(server, phone);
+
+    const tablet = newDevice(token);
+    tablet.data.bagUpdatedAt = initialBagUpdatedAt(undefined, 0, tick());
+    assert.equal(tablet.data.bagUpdatedAt, 0, 'an empty bag is not stamped');
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.bag, ['Buzzz', 'Aviar']);
+
+    // Once stamped, the stored time is kept on later launches.
+    assert.equal(initialBagUpdatedAt(phone.data.bagUpdatedAt, 2, tick()), phone.data.bagUpdatedAt);
   });
 
   test('the newer edit wins when both devices change the same course offline', async () => {

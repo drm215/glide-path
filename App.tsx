@@ -33,7 +33,7 @@ import {
   type PublicCourse,
   type PublicCourseSummary,
 } from './lib/api';
-import { buildSyncRequest, clearSentTombstones, countPendingChanges, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
+import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
 import type { Course, CourseDetails, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
 
 type SavedRound = { shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string };
@@ -346,11 +346,10 @@ export default function App() {
         }
         if (bagDetailsValue) setBagDetails(JSON.parse(bagDetailsValue) as Record<Disc, DiscInfo>);
         if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
-        if (syncMetaValue) {
-          const meta = JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] };
-          setBagUpdatedAt(meta.bagUpdatedAt ?? 0);
-          setDeletedCourses(meta.deletedCourses ?? []);
-        }
+        const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] } : {};
+        setDeletedCourses(meta.deletedCourses ?? []);
+        const savedBagCount = bagValue ? (JSON.parse(bagValue) as Disc[]).filter((item) => !LEGACY_DEFAULT_DISCS.includes(item)).length : 0;
+        setBagUpdatedAt(initialBagUpdatedAt(meta.bagUpdatedAt, savedBagCount, nowMs()));
       })
       .catch(() => undefined)
       .finally(() => setLoaded(true));

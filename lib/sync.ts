@@ -88,6 +88,11 @@ const roundToRecord = (session: SessionArchive): RoundRecord => ({
   shared: Boolean(session.shared),
 });
 
+// A bag saved before sync existed has no edit time, so it would never upload. Stamping it
+// when the app loads makes the next sync send it. An empty bag stays at 0 so a fresh
+// device can't overwrite the synced bag.
+export const initialBagUpdatedAt = (stored: number | undefined, bagCount: number, now: number) => stored || (bagCount ? now : 0);
+
 // Everything edited since the last successful sync, plus every pending deletion.
 export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cursor' | 'pushedThrough'>): SyncRequest => ({
   cursor: account.cursor,
