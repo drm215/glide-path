@@ -774,11 +774,28 @@ export default function App() {
   };
 
   const finishHole = () => {
-    if (mode === 'Round' && hole >= (selectedCourse?.holes ?? 18)) {
-      promptLastHoleComplete();
+    const completeHole = () => {
+      if (mode === 'Round' && hole >= (selectedCourse?.holes ?? 18)) {
+        promptLastHoleComplete();
+        return;
+      }
+      startNextHole();
+    };
+    // In a round, a hole normally ends with a throw in the basket; check before moving on without one.
+    if (mode === 'Round' && !activeShots.some((shot) => shot.lie === 'Basket')) {
+      Alert.alert(
+        `Finish hole ${hole}?`,
+        activeShots.length
+          ? `None of the ${activeShots.length} ${activeShots.length === 1 ? 'throw' : 'throws'} on this hole was logged in the basket. Your score for the hole will be ${holeStrokes}.`
+          : 'No throws have been logged on this hole.',
+        [
+          { text: 'Keep playing', style: 'cancel' },
+          { text: 'Finish hole', onPress: completeHole },
+        ],
+      );
       return;
     }
-    startNextHole();
+    completeHole();
   };
 
   const beginSession = (nextMode: 'Round' | 'Practice') => {
