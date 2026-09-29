@@ -1,32 +1,9 @@
 import type { AddressInfo } from 'node:net';
-import { PGlite } from '@electric-sql/pglite';
+import { createPgliteDb } from '../dev/pglite-db.ts';
 import { createApp } from '../src/app.ts';
-import { migrate, type Db, type Queryable } from '../src/db.ts';
-
-// Real Postgres running in-process, so tests need no database server.
-const createTestDb = async (): Promise<Db> => {
-  const pglite = new PGlite();
-  const toQueryable = (target: Pick<PGlite, 'query' | 'exec'>): Queryable => ({
-    query: async (sql, params) => {
-      // Multi-statement SQL (the schema) has to go through exec.
-      if (params === undefined) {
-        const results = await target.exec(sql);
-        return { rows: (results.at(-1)?.rows ?? []) as never[] };
-      }
-      return (await target.query(sql, params)) as never;
-    },
-  });
-  const db: Db = {
-    ...toQueryable(pglite),
-    transaction: (work) => pglite.transaction((tx) => work(toQueryable(tx))),
-    close: () => pglite.close(),
-  };
-  await migrate(db);
-  return db;
-};
 
 export const startTestServer = async () => {
-  const db = await createTestDb();
+  const db = await createPgliteDb();
   const app = createApp({ db, authSecret: 'test-secret-with-enough-length-for-hs256', rateLimitAuth: false });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -42,7 +19,8 @@ export const startTestServer = async () => {
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
     const text = await response.text();
-    return { status: response.status, body: text ? JSON.parse(text) : null };
+    const isJson = response.headers.get('content-type')?.includes('application/json');
+    return { status: response.status, body: text && isJson ? JSON.parse(text) : text || null };
   };
 
   const register = async (email: string, displayName = 'Tester') => {

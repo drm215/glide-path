@@ -32,20 +32,33 @@ npx eas-cli@latest build -p ios --profile preview
 - **Round history**: review past rounds with a scorecard, results breakdown, and a per-hole satellite map of where each throw was logged.
 - **Resume**: a round in progress survives leaving the screen or closing the app.
 - **Practice**: log throws with a distance, accuracy, or putting focus.
+- **Account and sync** (optional): sign in from the avatar in the top corner to back up courses, finished rounds, and the bag, and sync them across devices. Sync runs on launch, when the app returns to the foreground, and a few seconds after edits; the app works fully offline.
+- **Publish and share**: publish a course to the public directory from Course builder, or share a finished round's scorecard by link from its round detail.
+- **Find courses**: search published courses by name, city, or state, or find courses near you, and add them to your courses.
 
 ## Sync server
 
-The `server/` folder holds the API that syncs app data and serves the public course directory; see [server/README.md](server/README.md). `render.yaml` deploys it on Render, with the database on a free Neon Postgres project. The app doesn't use it yet.
+The `server/` folder holds the API that syncs app data, serves the public course directory, and renders share-link pages; see [server/README.md](server/README.md). It runs at https://glide-path.onrender.com with its database on a free Neon Postgres project.
+
+The app's sync logic lives in [lib/sync.ts](lib/sync.ts) and is tested against the real API by `server/test/app-sync.test.ts`.
+
+To test the app against a server on your PC instead:
+
+```powershell
+cd server; npm run dev:local        # prints the address to use
+$env:EXPO_PUBLIC_API_URL="http://<your-PC-address>:3000"; npx expo start
+```
 
 ## Data and privacy
 
-All data is stored on the device with AsyncStorage; there is no account or server. Location is read only when saving a course point, logging a throw, or recentering the map. The network is used for DiscIt disc searches and map imagery.
+All data is stored on the device with AsyncStorage and works without an account. When signed in, courses, finished rounds, and the bag are also synced to the Glide Path server; the round in progress syncs once it's finished. The sign-in token is kept in the iOS Keychain. Published courses and shared rounds are public; everything else is private to the account. Location is read only when saving a course point, logging a throw, recentering the map, or finding nearby courses. The network is also used for DiscIt disc searches and map imagery.
 
 Storage keys (`flight-notes-*`) and the Expo slug (`disc-golf-tracker`) keep their original names so data saved before the rename keeps loading; Expo Go separates saved data by slug.
 
 ## Known limits
 
-- No export, import, or sync; deleting the app deletes its data. Data entered in Expo Go does not carry over to an installed build.
+- Without an account, deleting the app deletes its data. Signing in on the installed build is the way to move data from Expo Go to it.
+- Sync resolves conflicts per course or round: the most recent edit wins as a whole, so simultaneous edits to different holes of the same course on two devices keep only one device's version.
 - Elevation comes from the phone's GPS altitude, which can drift by several meters. Points saved before altitude tracking have no elevation.
 - Satellite imagery needs a connection; offline map tiles are not implemented.
 - Android builds would need a Google Maps API key and `provider={PROVIDER_GOOGLE}` on the maps.

@@ -12,7 +12,8 @@
         {
           "locationWhenInUsePermission": "Allow Glide Path to use your location when you map a tee box or basket, or log where a throw landed."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "ios": {
       "supportsTablet": true,

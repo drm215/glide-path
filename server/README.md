@@ -11,6 +11,8 @@ npm test          # runs the API against an in-process Postgres (PGlite); no dat
 npm run typecheck
 ```
 
+To try the app against a server on this PC, run `npm run dev:local`. It uses an embedded Postgres stored in `server/.local-data` and prints the `EXPO_PUBLIC_API_URL` to start Expo with; the phone must be on the same Wi-Fi.
+
 To run it against a real database, set `DATABASE_URL` and `AUTH_SECRET`, then `npm run dev`. The schema is created or updated automatically on startup.
 
 | Variable | Purpose |
@@ -44,6 +46,8 @@ Authenticated endpoints take `Authorization: Bearer <token>`.
 | GET | `/api/public/courses?q=&near=lat,lng&limit=` | | Search published courses by name/city/state, or sort by distance |
 | GET | `/api/public/courses/:uid` | | A published course with hole layouts and details |
 | GET | `/api/public/rounds/:shareToken` | | A shared round with its hole layouts |
+| GET | `/c/:uid` | | Share-link page (HTML) for a published course |
+| GET | `/r/:shareToken` | | Share-link page (HTML) with a shared round's scorecard |
 
 Sign-in attempts are limited to 20 per 15 minutes per IP address.
 

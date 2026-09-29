@@ -1,35 +1,43 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   Linking,
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
+import {
+  API_URL,
+  ApiError,
+  courseShareUrl,
+  deleteAccount as deleteAccountRequest,
+  getPublicCourse,
+  register as registerRequest,
+  roundShareUrl,
+  searchCourses,
+  signIn as signInRequest,
+  syncWithServer,
+  type PublicCourse,
+  type PublicCourseSummary,
+} from './lib/api';
+import { buildSyncRequest, clearSentTombstones, countPendingChanges, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
+import type { Course, CourseDetails, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
 
-type ThrowType = 'Drive' | 'Approach' | 'Putt';
-type Lie = 'Fairway' | 'Woods' | 'Hazard' | 'OB' | 'Basket' | 'Other';
-type Disc = string;
-type DiscInfo = { id: string; name: string; brand: string; category: string; speed: string; glide: string; turn: string; fade: string; stability: string; color?: string; background_color?: string };
-type Shot = { x: number; y: number; feet: number; disc: Disc; type: ThrowType; hole: number; courseId?: string; latitude?: number; longitude?: number; lie?: Lie; quality?: number; qualityMax?: number };
-// altitude is in meters; points saved before elevation tracking don't have it.
-type GpsPoint = { latitude: number; longitude: number; accuracy: number | null; timestamp: number; altitude?: number | null; altitudeAccuracy?: number | null };
-type HoleLayout = { tee: GpsPoint | null; basket: GpsPoint | null; par?: number };
-type SessionArchive = { id: string; mode: 'Round' | 'Practice'; courseName: string; courseId?: string; shots: Shot[] };
 type SavedRound = { shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string };
-type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail';
-// `address` is the single-line field from before street/city/state were split; it's read as the street.
-type CourseDetails = { address?: string; street?: string; city?: string; state?: string; phone?: string; email?: string; website?: string; notes?: string };
-type Course = { id: string; name: string; holes: number; layouts?: HoleLayout[] } & CourseDetails;
+type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses';
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
 
 // Keys keep the app's original name (Flight Notes) so existing on-device data still loads.
@@ -37,6 +45,13 @@ const STORAGE_KEY = 'flight-notes-round-v1';
 const COURSES_KEY = 'flight-notes-courses-v1';
 const BAG_KEY = 'flight-notes-bag-v1';
 const BAG_DETAILS_KEY = 'flight-notes-bag-details-v1';
+// Sync account (without its token) and pending sync bookkeeping.
+const SYNC_KEY = 'flight-notes-sync-v1';
+const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
+// The sign-in token lives in the iOS Keychain rather than plain app storage.
+const TOKEN_KEY = 'glide-path-token';
+// Wait this long after the last edit before syncing, so a burst of edits uploads once.
+const SYNC_DEBOUNCE_MS = 4_000;
 const DISCIT_API_URL = 'https://discit-api.fly.dev/disc';
 const DISC_SEARCH_MIN_CHARS = 2;
 const DISC_SEARCH_MAX_RESULTS = 12;
@@ -87,6 +102,15 @@ const formatSessionDate = (session: SessionArchive) => {
 
 // Session ids are the timestamp of when the session ended (see formatSessionDate).
 const newSessionId = () => String(Date.now());
+
+// Edit times for sync. Kept outside the component so render stays pure.
+const nowMs = () => Date.now();
+
+const formatSyncTime = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+const initialsFor = (name: string) => name.trim().split(/\s+/).map((word) => word[0] ?? '').join('').slice(0, 2).toUpperCase() || '?';
+
+const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
 const RESULT_TYPES = [
   { label: 'Eagle or better', matches: (diff: number) => diff <= -2 },
@@ -257,6 +281,25 @@ export default function App() {
   const [logStep, setLogStep] = useState<1 | 2 | 3 | 4>(1);
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
   const [loaded, setLoaded] = useState(false);
+  const [account, setAccount] = useState<SyncAccount | null>(null);
+  const [bagUpdatedAt, setBagUpdatedAt] = useState(0);
+  const [deletedCourses, setDeletedCourses] = useState<Tombstone[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [authMode, setAuthMode] = useState<'signIn' | 'register'>('signIn');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [findQuery, setFindQuery] = useState('');
+  const [findResults, setFindResults] = useState<PublicCourseSummary[] | null>(null);
+  const [findBusy, setFindBusy] = useState(false);
+  const [findError, setFindError] = useState('');
+  const [findNearby, setFindNearby] = useState(false);
+  const [publicCourse, setPublicCourse] = useState<PublicCourse | null>(null);
+  const [publicCourseLoading, setPublicCourseLoading] = useState<string | null>(null);
+  const syncInFlight = useRef(false);
 
   useEffect(() => {
     Promise.all([
@@ -264,8 +307,11 @@ export default function App() {
       AsyncStorage.getItem(COURSES_KEY),
       AsyncStorage.getItem(BAG_KEY),
       AsyncStorage.getItem(BAG_DETAILS_KEY),
+      AsyncStorage.getItem(SYNC_KEY),
+      AsyncStorage.getItem(SYNC_META_KEY),
+      SecureStore.getItemAsync(TOKEN_KEY).catch(() => null),
     ])
-      .then(([roundValue, coursesValue, bagValue, bagDetailsValue]) => {
+      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, syncValue, syncMetaValue, token]) => {
         if (roundValue) {
           const saved = JSON.parse(roundValue) as SavedRound;
           setShots(saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId })));
@@ -299,6 +345,12 @@ export default function App() {
           if (savedBag.length) setDisc(savedBag[0]);
         }
         if (bagDetailsValue) setBagDetails(JSON.parse(bagDetailsValue) as Record<Disc, DiscInfo>);
+        if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
+        if (syncMetaValue) {
+          const meta = JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] };
+          setBagUpdatedAt(meta.bagUpdatedAt ?? 0);
+          setDeletedCourses(meta.deletedCourses ?? []);
+        }
       })
       .catch(() => undefined)
       .finally(() => setLoaded(true));
@@ -324,6 +376,97 @@ export default function App() {
     if (!loaded) return;
     AsyncStorage.setItem(BAG_DETAILS_KEY, JSON.stringify(bagDetails)).catch(() => undefined);
   }, [bagDetails, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (!account) {
+      AsyncStorage.removeItem(SYNC_KEY).catch(() => undefined);
+      return;
+    }
+    const { token: _token, ...stored } = account;
+    AsyncStorage.setItem(SYNC_KEY, JSON.stringify(stored)).catch(() => undefined);
+  }, [account, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify({ bagUpdatedAt, deletedCourses })).catch(() => undefined);
+  }, [bagUpdatedAt, deletedCourses, loaded]);
+
+  // Sync runs from timers and app-state events, so it reads the latest values from here.
+  const syncData: SyncData = { courses, history, bag, bagDetails, bagUpdatedAt, deletedCourses };
+  const latestSync = useRef({ data: syncData, account });
+  useEffect(() => {
+    latestSync.current = { data: syncData, account };
+  });
+  const pendingChanges = account ? countPendingChanges(syncData, account.pushedThrough) : 0;
+
+  const signOutLocally = () => {
+    SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => undefined);
+    setAccount(null);
+  };
+
+  const runSync = async () => {
+    const { data, account: current } = latestSync.current;
+    if (!current || syncInFlight.current) return;
+    syncInFlight.current = true;
+    setSyncing(true);
+    const startedAt = nowMs();
+    const body = buildSyncRequest(data, current);
+    try {
+      const result = await syncWithServer(current.token, body);
+      setCourses((local) => mergeCourses(local, result.courses));
+      setHistory((local) => mergeRounds(local, result.rounds));
+      setDeletedCourses((local) => clearSentTombstones(local, body.courses));
+      if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
+        setBag(result.bag.discs);
+        setBagDetails(result.bag.details);
+        setBagUpdatedAt(result.bag.updatedAt);
+      }
+      setAccount((acct) => (acct?.token === current.token ? { ...acct, cursor: result.cursor, pushedThrough: startedAt, lastSyncedAt: nowMs() } : acct));
+      setSyncError('');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        signOutLocally();
+        setSyncError('Your session expired. Sign in again to keep syncing.');
+      } else {
+        setSyncError(errorMessage(error, 'Sync failed.'));
+      }
+    } finally {
+      syncInFlight.current = false;
+      setSyncing(false);
+    }
+  };
+
+  const runSyncRef = useRef(runSync);
+  useEffect(() => {
+    runSyncRef.current = runSync;
+  });
+
+  // Sync on launch and right after signing in.
+  useEffect(() => {
+    if (loaded && account?.token) runSyncRef.current();
+  }, [loaded, account?.token]);
+
+  // Sync whenever the app comes back to the foreground.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') runSyncRef.current();
+    });
+    return () => subscription.remove();
+  }, []);
+
+  // Sync shortly after local edits.
+  useEffect(() => {
+    if (!loaded || !account || !pendingChanges) return;
+    const timer = setTimeout(() => runSyncRef.current(), SYNC_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, deletedCourses]);
+
+  // User edits to courses go through here so each changed course gets a fresh edit time for sync.
+  const updateCourses = (updater: (current: Course[]) => Course[]) => {
+    const stamp = nowMs();
+    setCourses((existing) => updater(existing).map((course) => (existing.includes(course) ? course : { ...course, updatedAt: stamp })));
+  };
 
   // Search DiscIt as the user types, fetching only the matching discs.
   useEffect(() => {
@@ -502,7 +645,7 @@ export default function App() {
         altitudeAccuracy: fix.coords.altitudeAccuracy,
       };
       setMapRegion(regionAtPoint(point));
-      setCourses((current) => current.map((course) => {
+      updateCourses((current) => current.map((course) => {
         if (course.id !== courseId) return course;
         const layouts = Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null });
         const layout = layouts[targetHole - 1] ?? { tee: null, basket: null };
@@ -521,7 +664,7 @@ export default function App() {
   const setHolePar = (par: number, targetHole = builderHole) => {
     if (!selectedCourse) return;
     const courseId = selectedCourse.id;
-    setCourses((current) => current.map((course) => {
+    updateCourses((current) => current.map((course) => {
       if (course.id !== courseId) return course;
       const layouts = Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null });
       layouts[targetHole - 1] = { ...layouts[targetHole - 1], par };
@@ -601,7 +744,7 @@ export default function App() {
   // Moves the current session's throws into history so a new one can begin.
   const archiveSession = () => {
     const id = shots.length ? newSessionId() : null;
-    if (id) setHistory((current) => [...current, { id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id, shots }]);
+    if (id) setHistory((current) => [...current, { id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id, shots, updatedAt: nowMs() }]);
     setShots([]);
     setSessionActive(false);
     return id;
@@ -691,14 +834,143 @@ export default function App() {
   const addCourse = () => {
     const name = courseName.trim();
     if (!name) return;
-    const course: Course = { id: String(Date.now()), name, holes: 1, layouts: [{ tee: null, basket: null }] };
-    setCourses((current) => [...current, course]);
+    const course: Course = { id: newSessionId(), name, holes: 1, layouts: [{ tee: null, basket: null }] };
+    updateCourses((current) => [...current, course]);
     setCourseName('');
     openHoleWizard(course);
   };
 
   const updateCourseDetails = (courseId: string, details: CourseDetails) => {
-    setCourses((current) => current.map((course) => (course.id === courseId ? { ...course, ...details } : course)));
+    updateCourses((current) => current.map((course) => (course.id === courseId ? { ...course, ...details } : course)));
+  };
+
+  const setCoursePublished = (courseId: string, published: boolean) => {
+    updateCourses((current) => current.map((course) => (course.id === courseId ? { ...course, published } : course)));
+  };
+
+  const setRoundShared = (sessionId: string, shared: boolean) => {
+    const stamp = nowMs();
+    setHistory((current) => current.map((session) => (session.id === sessionId ? { ...session, shared, shareToken: shared ? session.shareToken : null, updatedAt: stamp } : session)));
+  };
+
+  const shareLink = (message: string, url: string) => {
+    // The link goes in the message only; passing it as `url` too makes iOS share it twice.
+    Share.share({ message: `${message} ${url}` }).catch(() => undefined);
+  };
+
+  const submitAuth = async () => {
+    const email = authEmail.trim();
+    const name = authName.trim();
+    if (!email || !authPassword || (authMode === 'register' && !name)) {
+      setAuthError('Fill in every field.');
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      setAuthError('Enter a valid email address.');
+      return;
+    }
+    if (authMode === 'register' && authPassword.length < 8) {
+      setAuthError('Use a password of at least 8 characters.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      const result = authMode === 'register' ? await registerRequest(email, authPassword, name) : await signInRequest(email, authPassword);
+      await SecureStore.setItemAsync(TOKEN_KEY, result.token);
+      setAccount({ token: result.token, user: result.user, cursor: 0, pushedThrough: 0 });
+      setAuthPassword('');
+      setSyncError('');
+    } catch (error) {
+      setAuthError(errorMessage(error, 'Could not sign in.'));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const confirmSignOut = () => {
+    Alert.alert(
+      'Sign out?',
+      `Your courses, rounds and bag stay on this phone.${pendingChanges ? ` ${pendingChanges} unsynced ${pendingChanges === 1 ? 'change' : 'changes'} will upload when you sign in again.` : ''}`,
+      [{ text: 'Cancel', style: 'cancel' }, { text: 'Sign out', onPress: signOutLocally }],
+    );
+  };
+
+  const confirmDeleteAccount = () => {
+    if (!account) return;
+    const token = account.token;
+    Alert.alert(
+      'Delete your account?',
+      'This permanently deletes your Glide Path account and everything synced to it, including published courses and shared round links. Data on this phone is kept.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteAccountRequest(token);
+              setCourses((current) => current.map((course) => ({ ...course, uid: undefined, published: false })));
+              setHistory((current) => current.map((session) => ({ ...session, shared: false, shareToken: null })));
+              signOutLocally();
+            } catch (error) {
+              Alert.alert('Could not delete account', errorMessage(error, 'Try again when you have a connection.'));
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const runCourseSearch = async (nearMe: boolean) => {
+    setFindBusy(true);
+    setFindError('');
+    setPublicCourse(null);
+    try {
+      let near: { latitude: number; longitude: number } | undefined;
+      if (nearMe) {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== 'granted') {
+          setFindError('Location access is needed to find courses near you.');
+          return;
+        }
+        setLocationAllowed(true);
+        const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        near = { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
+      }
+      const result = await searchCourses(nearMe ? '' : findQuery, near);
+      setFindResults(result.courses);
+      setFindNearby(nearMe);
+    } catch (error) {
+      setFindError(errorMessage(error, 'Search failed.'));
+    } finally {
+      setFindBusy(false);
+    }
+  };
+
+  const openPublicCourse = async (uid: string) => {
+    setPublicCourseLoading(uid);
+    setFindError('');
+    try {
+      setPublicCourse((await getPublicCourse(uid)).course);
+    } catch (error) {
+      setFindError(errorMessage(error, 'Could not load that course.'));
+    } finally {
+      setPublicCourseLoading(null);
+    }
+  };
+
+  // Copies a published course into this phone's courses as a new, private course.
+  const addPublicCourse = (source: PublicCourse) => {
+    const layouts: HoleLayout[] = Array.from({ length: source.holes }, (_, index) => {
+      const layout = source.layouts[index];
+      return { tee: layout?.tee ?? null, basket: layout?.basket ?? null, par: layout?.par };
+    });
+    const { address, street, city, state, phone, email, website, notes } = source.details;
+    const course: Course = { id: newSessionId(), name: source.name, holes: source.holes, layouts, address, street, city, state, phone, email, website, notes, sourceUid: source.uid };
+    updateCourses((current) => [...current, course]);
+    setSelectedCourseId(course.id);
+    Alert.alert('Course added', `${source.name} is now in your courses and selected for your next round.`);
   };
 
   const openCourseLink = (url: string) => {
@@ -746,7 +1018,7 @@ export default function App() {
   };
 
   const addHoleToCourse = (courseId: string) => {
-    setCourses((current) => current.map((course) => course.id === courseId
+    updateCourses((current) => current.map((course) => course.id === courseId
       ? { ...course, holes: course.holes + 1, layouts: [...Array.from({ length: course.holes }, (_, index) => course.layouts?.[index] ?? { tee: null, basket: null }), { tee: null, basket: null }] }
       : course));
   };
@@ -778,7 +1050,7 @@ export default function App() {
               if (shot.hole === holeNumber) return [];
               return [{ ...shot, hole: shot.hole > holeNumber ? shot.hole - 1 : shot.hole }];
             }));
-            setCourses((current) => current.map((item) => item.id === course.id
+            updateCourses((current) => current.map((item) => item.id === course.id
               ? { ...item, holes: item.holes - 1, layouts: item.layouts?.filter((_, index) => index !== holeNumber - 1) }
               : item));
             if (selectedCourseId === course.id) {
@@ -804,11 +1076,12 @@ export default function App() {
             const belongsToCourse = (shot: Shot) => shot.courseId === course.id || (!shot.courseId && selectedCourseId === course.id);
             const courseShots = shots.filter(belongsToCourse);
             if (courseShots.length) {
-              setHistory((current) => [...current, { id: String(Date.now()), mode, courseName: course.name, courseId: course.id, shots: courseShots }]);
+              setHistory((current) => [...current, { id: newSessionId(), mode, courseName: course.name, courseId: course.id, shots: courseShots, updatedAt: nowMs() }]);
               setShots((current) => current.filter((shot) => !belongsToCourse(shot)));
             }
             const remainingCourses = courses.filter((item) => item.id !== course.id);
             setCourses(remainingCourses);
+            setDeletedCourses((current) => [...current, { clientId: course.id, updatedAt: nowMs() }]);
             if (selectedCourseId === course.id) {
               setSelectedCourseId(remainingCourses[0]?.id ?? '');
               setHole(1);
@@ -824,6 +1097,7 @@ export default function App() {
     const name = bagEntry.trim();
     if (!name || bag.includes(name)) return;
     setBag((current) => [...current, name]);
+    setBagUpdatedAt(nowMs());
     setDisc(name);
     setBagEntry('');
   };
@@ -840,6 +1114,7 @@ export default function App() {
           onPress: () => {
             const remaining = bag.filter((item) => item !== name);
             setBag(remaining);
+            setBagUpdatedAt(nowMs());
             setBagDetails((current) => {
               const { [name]: _removed, ...rest } = current;
               return rest;
@@ -855,6 +1130,7 @@ export default function App() {
     const name = bag.includes(info.name) && bagDetails[info.name]?.brand !== info.brand ? `${info.name} (${info.brand})` : info.name;
     if (!bag.includes(name)) setBag((current) => [...current, name]);
     setBagDetails((current) => ({ ...current, [name]: info }));
+    setBagUpdatedAt(nowMs());
     setDisc(name);
     setBagEntry('');
   };
@@ -871,15 +1147,15 @@ export default function App() {
               <Text style={styles.brandSub}>FIELD LOG · EST. 2025</Text>
             </View>
           </Pressable>
-          <Pressable style={styles.avatar} accessibilityLabel="Player profile">
-            <Text style={styles.avatarText}>JD</Text>
+          <Pressable onPress={() => setScreen('Account')} style={[styles.avatar, account && styles.avatarSignedIn]} accessibilityRole="button" accessibilityLabel={account ? `Account: ${account.user.displayName}` : 'Sign in'}>
+            <Text style={[styles.avatarText, account && styles.avatarTextSignedIn]}>{account ? initialsFor(account.user.displayName) : '?'}</Text>
           </Pressable>
         </View>
 
         <View style={styles.pageHeading}>
           <View>
-            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'} · SATELLITE MAP` : screen === 'Round' ? 'ON THE COURSE' : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
-            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Round' ? 'Keep the line.' : screen === 'Rounds' ? 'Rounds.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
+            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'} · SATELLITE MAP` : screen === 'Round' ? 'ON THE COURSE' : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
+            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Round' ? 'Keep the line.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
           </View>
           {screen !== 'Home' && (() => {
             const backToRounds = screen === 'RoundDetail' && !showingRoundSummary;
@@ -901,20 +1177,23 @@ export default function App() {
               <Pressable onPress={() => setScreen('CourseBuilder')} style={styles.menuItem}>
                 <Text style={styles.menuNumber}>01</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Course builder</Text><Text style={styles.menuSubtitle}>Create and choose your courses</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
+              <Pressable onPress={() => setScreen('FindCourses')} style={styles.menuItem}>
+                <Text style={styles.menuNumber}>02</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Find courses</Text><Text style={styles.menuSubtitle}>Search courses other players have mapped</Text></View><Text style={styles.menuArrow}>›</Text>
+              </Pressable>
               <Pressable onPress={() => setScreen('BagBuilder')} style={styles.menuItem}>
-                <Text style={styles.menuNumber}>02</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Bag builder</Text><Text style={styles.menuSubtitle}>Add and select your discs</Text></View><Text style={styles.menuArrow}>›</Text>
+                <Text style={styles.menuNumber}>03</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Bag builder</Text><Text style={styles.menuSubtitle}>Add and select your discs</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={() => setScreen('Practice')} style={styles.menuItem}>
-                <Text style={styles.menuNumber}>03</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Practice</Text><Text style={styles.menuSubtitle}>{"Choose a focus for today's session"}</Text></View><Text style={styles.menuArrow}>›</Text>
+                <Text style={styles.menuNumber}>04</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Practice</Text><Text style={styles.menuSubtitle}>{"Choose a focus for today's session"}</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={() => setScreen('Rounds')} style={styles.menuItem}>
-                <Text style={styles.menuNumber}>04</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Rounds</Text><Text style={styles.menuSubtitle}>{history.length ? `${history.length} previous ${history.length === 1 ? 'session' : 'sessions'}` : 'Review your previous rounds'}</Text></View><Text style={styles.menuArrow}>›</Text>
+                <Text style={styles.menuNumber}>05</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Rounds</Text><Text style={styles.menuSubtitle}>{history.length ? `${history.length} previous ${history.length === 1 ? 'session' : 'sessions'}` : 'Review your previous rounds'}</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={() => setScreen('Insights')} style={styles.menuItem}>
-                <Text style={styles.menuNumber}>05</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Session insights</Text><Text style={styles.menuSubtitle}>Distances and disc averages</Text></View><Text style={styles.menuArrow}>›</Text>
+                <Text style={styles.menuNumber}>06</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Session insights</Text><Text style={styles.menuSubtitle}>Distances and disc averages</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={startRound} style={[styles.menuItem, !sessionActive && styles.menuItemPrimary]}>
-                <Text style={[styles.menuNumber, !sessionActive && styles.menuNumberPrimary]}>06</Text><View style={styles.menuItemCopy}><Text style={[styles.menuTitle, !sessionActive && styles.menuTitlePrimary]}>{sessionActive ? 'Start a new round' : 'Start a round'}</Text><Text style={[styles.menuSubtitle, !sessionActive && styles.menuSubtitlePrimary]}>Track throws hole by hole</Text></View><Text style={[styles.menuArrow, !sessionActive && styles.menuArrowPrimary]}>↗</Text>
+                <Text style={[styles.menuNumber, !sessionActive && styles.menuNumberPrimary]}>07</Text><View style={styles.menuItemCopy}><Text style={[styles.menuTitle, !sessionActive && styles.menuTitlePrimary]}>{sessionActive ? 'Start a new round' : 'Start a round'}</Text><Text style={[styles.menuSubtitle, !sessionActive && styles.menuSubtitlePrimary]}>Track throws hole by hole</Text></View><Text style={[styles.menuArrow, !sessionActive && styles.menuArrowPrimary]}>↗</Text>
               </Pressable>
             </View>
           </ScrollView>
@@ -930,6 +1209,16 @@ export default function App() {
             {courses.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { setSelectedCourseId(course.id); setBuilderHole(1); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{course.holes} holes · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
             {selectedCourse && <View style={styles.mapEditor}>
               <Text style={styles.builderSectionTitle}>Course details</Text>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleCopy}>
+                  <Text style={styles.courseItemName}>Publish to course directory</Text>
+                  <Text style={styles.courseItemMeta}>{!account ? 'Sign in to publish this course.' : selectedCourse.published ? (selectedCourse.uid && !pendingChanges ? 'Anyone can find this course, its details, and its tee and basket positions.' : 'Publishing on next sync…') : 'Only you can see this course.'}</Text>
+                </View>
+                {account
+                  ? <Switch value={Boolean(selectedCourse.published)} onValueChange={(published) => setCoursePublished(selectedCourse.id, published)} trackColor={{ true: GREEN }} accessibilityLabel="Publish to course directory" />
+                  : <Pressable onPress={() => setScreen('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
+              </View>
+              {account && selectedCourse.published && selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
               {selectedCourseStats && <View style={styles.courseStatsGrid}>
                 <View style={styles.courseStat}><Text style={styles.statLabel}>HOLES</Text><Text style={styles.courseStatValue}>{selectedCourseStats.holes}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.mappedHoles} mapped</Text></View>
                 <View style={styles.courseStat}><Text style={styles.statLabel}>PAR</Text><Text style={styles.courseStatValue}>{selectedCourseStats.parHoles ? selectedCourseStats.par : '—'}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.parHoles === selectedCourseStats.holes ? 'All holes' : `${selectedCourseStats.parHoles} of ${selectedCourseStats.holes} holes set`}</Text></View>
@@ -1097,6 +1386,98 @@ export default function App() {
             </View> : null}
             <Text style={styles.footnote}>{selectedHoleLayout?.tee ? 'Distances are measured by GPS from the tee or your previous lie.' : 'Map this hole’s tee in Course builder to measure your first throw. Later throws are measured from your previous lie.'}</Text>
           </ScrollView>
+        ) : screen === 'Account' ? (
+          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            {account ? <>
+              <View style={styles.menuIntro}>
+                <Text style={styles.menuIntroLabel}>SIGNED IN AS</Text>
+                <Text style={styles.menuIntroTitle}>{account.user.displayName}</Text>
+                <Text style={styles.menuIntroCopy}>{account.user.email}</Text>
+              </View>
+              <View style={styles.builderPanel}>
+                <Text style={styles.builderLabel}>SYNC</Text>
+                <Text style={styles.accountStatus}>{syncing ? 'Syncing…' : account.lastSyncedAt ? `Last synced ${formatSyncTime(account.lastSyncedAt)}` : 'Not synced yet'}</Text>
+                <Text style={styles.courseItemMeta}>{pendingChanges ? `${pendingChanges} ${pendingChanges === 1 ? 'change' : 'changes'} waiting to upload` : 'Everything on this phone is backed up.'}</Text>
+                {syncError ? <Text style={styles.authError}>{syncError}</Text> : null}
+                <Pressable onPress={runSync} disabled={syncing} style={[styles.primaryButton, syncing && styles.disabledButton]}><Text style={styles.primaryButtonText}>{syncing ? 'SYNCING…' : 'SYNC NOW'}</Text></Pressable>
+              </View>
+              <Text style={styles.mapInstruction}>Your courses, rounds and bag sync automatically when the app opens and shortly after changes. Published courses and shared rounds are public; everything else is private to your account.</Text>
+              <Pressable onPress={confirmSignOut} style={styles.endSessionButton}><Text style={styles.undoText}>SIGN OUT</Text></Pressable>
+              <Pressable onPress={confirmDeleteAccount} style={styles.endSessionButton}><Text style={styles.endSessionText}>DELETE ACCOUNT</Text></Pressable>
+            </> : <>
+              <View style={styles.menuIntro}>
+                <Text style={styles.menuIntroLabel}>BACK UP AND SHARE</Text>
+                <Text style={styles.menuIntroCopy}>Sign in to back up your courses, rounds and bag, keep them in sync across devices, publish courses to the directory, and share rounds. Glide Path keeps working offline and syncs when you’re back online.</Text>
+              </View>
+              {syncError ? <Text style={styles.authError}>{syncError}</Text> : null}
+              <View style={[styles.typeRow, styles.authTabs]}>
+                {(['signIn', 'register'] as const).map((item) => <Pressable key={item} onPress={() => { setAuthMode(item); setAuthError(''); }} style={[styles.typeButton, styles.sheetTypeButton, authMode === item && styles.typeButtonSelected]}><Text style={[styles.typeText, authMode === item && styles.typeTextSelected]}>{item === 'signIn' ? 'Sign in' : 'Create account'}</Text></Pressable>)}
+              </View>
+              <View style={styles.builderPanel}>
+                {authMode === 'register' && <>
+                  <Text style={styles.builderLabel}>NAME</Text>
+                  <TextInput value={authName} onChangeText={setAuthName} placeholder="Shown on courses you publish" placeholderTextColor="#92988c" style={styles.builderInput} textContentType="name" autoComplete="name" />
+                </>}
+                <Text style={[styles.builderLabel, authMode === 'register' && styles.detailLabel]}>EMAIL</Text>
+                <TextInput value={authEmail} onChangeText={setAuthEmail} placeholder="you@example.com" placeholderTextColor="#92988c" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" autoComplete="email" />
+                <Text style={[styles.builderLabel, styles.detailLabel]}>PASSWORD</Text>
+                <TextInput value={authPassword} onChangeText={setAuthPassword} onSubmitEditing={submitAuth} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Password'} placeholderTextColor="#92988c" style={styles.builderInput} secureTextEntry textContentType={authMode === 'register' ? 'newPassword' : 'password'} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} returnKeyType="go" />
+                {authError ? <Text style={styles.authError}>{authError}</Text> : null}
+                <Pressable onPress={submitAuth} disabled={authBusy} style={[styles.primaryButton, authBusy && styles.disabledButton]}><Text style={styles.primaryButtonText}>{authBusy ? 'PLEASE WAIT…' : authMode === 'register' ? 'CREATE ACCOUNT' : 'SIGN IN'}</Text></Pressable>
+                {authBusy && <Text style={styles.builderHint}>The server can take up to a minute to wake if it hasn’t been used recently.</Text>}
+              </View>
+              <Text style={styles.builderFootnote}>Your existing courses, rounds and bag upload the first time you sign in.</Text>
+            </>}
+            <Text style={styles.serverNote}>SERVER · {API_URL.replace(/^https?:\/\//, '')}</Text>
+          </ScrollView>
+        ) : screen === 'FindCourses' ? (
+          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            {publicCourse ? <>
+              <Pressable onPress={() => setPublicCourse(null)} style={styles.backLink}><Text style={styles.homeButtonText}>‹ RESULTS</Text></Pressable>
+              <View style={styles.finalScore}>
+                <Text style={styles.menuIntroLabel}>MAPPED BY {publicCourse.mappedBy.toUpperCase()}</Text>
+                <Text style={styles.menuIntroTitle}>{publicCourse.name}</Text>
+                <Text style={styles.menuIntroCopy}>{[
+                  `${publicCourse.holes} ${publicCourse.holes === 1 ? 'hole' : 'holes'}`,
+                  publicCourse.par === null ? null : `Par ${publicCourse.par}`,
+                  publicCourse.mappedHoles ? `${publicCourse.distanceFeet.toLocaleString()} ft` : null,
+                  `${publicCourse.mappedHoles} mapped`,
+                ].filter(Boolean).join(' · ')}</Text>
+                {courseAddressLine(publicCourse.details) ? <Text style={styles.menuIntroCopy}>{courseAddressLine(publicCourse.details)}</Text> : null}
+              </View>
+              {publicCourse.details.notes?.trim() ? <><Text style={styles.fieldLabel}>INFO TO KNOW</Text><Text style={styles.roundCourseNotes}>{publicCourse.details.notes.trim()}</Text></> : null}
+              {courses.some((course) => course.sourceUid === publicCourse.uid || course.uid === publicCourse.uid)
+                ? <View style={[styles.primaryButton, styles.disabledButton]}><Text style={styles.primaryButtonText}>IN YOUR COURSES ✓</Text></View>
+                : <Pressable onPress={() => addPublicCourse(publicCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>ADD TO MY COURSES</Text></Pressable>}
+              <Pressable onPress={() => shareLink(`${publicCourse.name} on Glide Path:`, courseShareUrl(publicCourse.uid))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable>
+            </> : <>
+              <View style={styles.builderPanel}>
+                <Text style={styles.builderLabel}>COURSE, CITY OR STATE</Text>
+                <View style={styles.addDiscRow}>
+                  <TextInput value={findQuery} onChangeText={setFindQuery} onSubmitEditing={() => runCourseSearch(false)} placeholder="e.g. Cedar Grove or PA" placeholderTextColor="#92988c" style={[styles.builderInput, styles.discInput]} returnKeyType="search" />
+                  <Pressable onPress={() => runCourseSearch(false)} disabled={findBusy} style={[styles.addDiscButton, findBusy && styles.disabledButton]}><Text style={styles.addDiscButtonText}>SEARCH</Text></Pressable>
+                </View>
+                <Pressable onPress={() => runCourseSearch(true)} disabled={findBusy} style={[styles.courseLink, styles.toggleAction, findBusy && styles.disabledButton]}><Text style={styles.courseLinkText}>◎ COURSES NEAR ME</Text></Pressable>
+              </View>
+              {findBusy ? <Text style={styles.mapInstruction}>Searching… The server can take up to a minute to wake if it hasn’t been used recently.</Text> : null}
+              {findError ? <Text style={styles.authError}>{findError}</Text> : null}
+              {!findBusy && findResults === null && !findError ? <Text style={styles.mapInstruction}>Find courses other Glide Path players have mapped and published, then add them to your courses to play.</Text> : null}
+              {!findBusy && findResults?.length === 0 ? <Text style={styles.mapInstruction}>No published courses found{findNearby ? ' near you' : ''} yet.</Text> : null}
+              {findResults?.map((result) => <Pressable key={result.uid} onPress={() => openPublicCourse(result.uid)} disabled={publicCourseLoading !== null} style={styles.courseItem} accessibilityRole="button">
+                <View style={styles.courseItemCopy}>
+                  <Text style={styles.courseItemName}>{result.name}</Text>
+                  <Text style={styles.courseItemMeta}>{[
+                    [result.city, result.state].filter(Boolean).join(', ') || null,
+                    `${result.holes} ${result.holes === 1 ? 'hole' : 'holes'}`,
+                    result.par === null ? null : `Par ${result.par}`,
+                    result.distanceMiles === null ? null : `${result.distanceMiles} mi`,
+                  ].filter(Boolean).join(' · ')}</Text>
+                  <Text style={styles.courseItemMeta}>Mapped by {result.mappedBy}</Text>
+                </View>
+                <Text style={styles.menuArrow}>{publicCourseLoading === result.uid ? '…' : '›'}</Text>
+              </Pressable>)}
+            </>}
+          </ScrollView>
         ) : screen === 'Rounds' ? (
           <ScrollView contentContainerStyle={styles.content}>
             {!pastSessions.length && <View style={styles.menuIntro}><Text style={styles.menuIntroLabel}>NO ROUNDS YET</Text><Text style={styles.menuIntroCopy}>Finished rounds and practice sessions appear here. Use End round when you finish playing.</Text></View>}
@@ -1122,6 +1503,16 @@ export default function App() {
                 ].filter(Boolean).join(' · ')}</Text>
                 {viewedResults.length > 0 && <View style={styles.resultChips}>{viewedResults.map((result) => <View key={result.label} style={styles.resultChip}><Text style={styles.resultChipText}>{result.count} {result.label}{result.count === 1 || result.label.endsWith('+') || result.label.endsWith('better') ? '' : 's'}</Text></View>)}</View>}
               </View>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleCopy}>
+                  <Text style={styles.courseItemName}>Share this {viewedSession.mode === 'Round' ? 'round' : 'session'}</Text>
+                  <Text style={styles.courseItemMeta}>{!account ? 'Sign in to share a link to this scorecard.' : viewedSession.shared ? (viewedSession.shareToken ? 'Anyone with the link can see this scorecard and the course it was played on.' : 'Creating link on next sync…') : 'Only you can see this round.'}</Text>
+                </View>
+                {account
+                  ? <Switch value={Boolean(viewedSession.shared)} onValueChange={(shared) => setRoundShared(viewedSession.id, shared)} trackColor={{ true: GREEN }} accessibilityLabel="Share this round" />
+                  : <Pressable onPress={() => setScreen('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
+              </View>
+              {account && viewedSession.shared && viewedSession.shareToken ? <Pressable onPress={() => shareLink(`My round at ${viewedSession.courseName}:`, roundShareUrl(viewedSession.shareToken!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SEND LINK</Text></Pressable> : null}
               <Text style={styles.sectionTitle}>Scorecard</Text>
               <View style={styles.scorecard}>
                 <View style={[styles.scorecardRow, styles.scorecardHeader]}><Text style={[styles.scorecardCell, styles.scorecardHoleCell, styles.scorecardHeaderText]}>HOLE</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>PAR</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>SCORE</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>+/−</Text></View>
@@ -1237,6 +1628,16 @@ const styles = StyleSheet.create({
   brandSub: { color: MUTED, fontSize: 8, fontWeight: '700', marginTop: 3 },
   avatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#d5d7cd', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: INK, fontSize: 10, fontWeight: '800' },
+  avatarSignedIn: { backgroundColor: GREEN, borderColor: GREEN },
+  avatarTextSignedIn: { color: '#fff' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 10, padding: 12, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e5dc' },
+  toggleCopy: { flex: 1, marginRight: 12 },
+  toggleAction: { alignSelf: 'flex-start', marginTop: 0, marginBottom: 16 },
+  authTabs: { marginTop: 0, marginBottom: 12 },
+  authError: { color: '#a55343', fontSize: 10, lineHeight: 15, marginTop: 10 },
+  accountStatus: { color: INK, fontFamily: 'Georgia', fontSize: 17, marginTop: 6, marginBottom: 4 },
+  serverNote: { color: '#a5aa9c', fontSize: 7, fontWeight: '700', letterSpacing: 0.6, marginTop: 24, textAlign: 'center' },
+  backLink: { alignSelf: 'flex-start', paddingVertical: 6, marginBottom: 8 },
   pageHeading: { marginHorizontal: 23, marginTop: 28, marginBottom: 19, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   eyebrow: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 },
   title: { color: INK, fontFamily: 'Georgia', fontSize: 30, marginTop: 5 },

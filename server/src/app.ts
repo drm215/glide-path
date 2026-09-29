@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { checkPassword, createAuth, hashPassword, type AuthedRequest } from './auth.ts';
 import { loginRequest, registerRequest, syncRequest } from './contract.ts';
 import type { Db } from './db.ts';
+import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.ts';
 import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
 import { runSync } from './sync.ts';
 
@@ -111,6 +112,19 @@ export const createApp = ({ db, authSecret, corsOrigin = '*', rateLimitAuth = tr
       return;
     }
     res.json({ round });
+  });
+
+  // Share-link pages opened from the app.
+  app.get('/r/:token', async (req, res) => {
+    const token = z.string().regex(/^[\w-]{10,40}$/).safeParse(req.params.token);
+    const round = token.success ? await getSharedRound(db, token.data) : null;
+    res.status(round ? 200 : 404).type('html').send(round ? renderRoundPage(round as Parameters<typeof renderRoundPage>[0]) : renderNotFoundPage('round'));
+  });
+
+  app.get('/c/:uid', async (req, res) => {
+    const uid = z.uuid().safeParse(req.params.uid);
+    const course = uid.success ? await getPublishedCourse(db, uid.data) : null;
+    res.status(course ? 200 : 404).type('html').send(course ? renderCoursePage(course) : renderNotFoundPage('course'));
   });
 
   app.use((_req: Request, res: Response) => {
