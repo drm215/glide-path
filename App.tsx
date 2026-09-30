@@ -76,6 +76,16 @@ const LEGACY_DEFAULT_DISCS: Disc[] = ['Distance', 'Fairway', 'Midrange', 'Putter
 const TYPE_OPTIONS: ThrowType[] = ['Drive', 'Approach', 'Putt'];
 const PAR_OPTIONS = [2, 3, 4, 5, 6];
 const LIE_OPTIONS: Lie[] = ['Fairway', 'Woods', 'Hazard', 'OB', 'Basket', 'Other'];
+// Putts ask for a result instead of a landing spot.
+const PUTT_RESULT_OPTIONS: Lie[] = ['Basket', 'Hit basket', 'Missed', 'OB'];
+const lieOptionsFor = (type: ThrowType) => (type === 'Putt' ? PUTT_RESULT_OPTIONS : LIE_OPTIONS);
+const lieLabel = (lie: Lie, type: ThrowType) => (lie === 'Basket' && type === 'Putt' ? 'Made' : lie);
+
+// The next throw on a hole: a drive to start, a putt after a putt, otherwise an approach.
+const nextThrowType = (holeShots: Shot[]): ThrowType => {
+  const last = holeShots.at(-1);
+  return !last ? 'Drive' : last.type === 'Putt' ? 'Putt' : 'Approach';
+};
 const OB_PENALTY_STROKES = 1;
 
 // Score for a list of throws: every throw counts, plus a penalty stroke for each one out of bounds.
@@ -757,9 +767,19 @@ export default function App() {
 
   const saveThrow = (quality: number, lie: Lie = throwLie) => {
     if (!pendingLie) return;
-    const { latitude, longitude, feet } = pendingLie;
+    let { latitude, longitude, feet } = pendingLie;
+    // A throw that went in is recorded at the basket, measured from the previous lie (or the tee),
+    // rather than wherever the player was standing when they logged it.
+    const basket = selectedHoleLayout?.basket;
+    if (lie === 'Basket' && basket) {
+      const previousShot = activeShots.findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
+      const previous = previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee;
+      latitude = basket.latitude;
+      longitude = basket.longitude;
+      feet = previous ? Math.max(1, Math.round(feetBetween(previous, basket))) : 0;
+    }
     setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, lie, quality, qualityMax: QUALITY_MAX }]);
-    setThrowType('Approach');
+    setThrowType(throwType === 'Putt' ? 'Putt' : 'Approach');
     setPendingLie(null);
     if (lie !== 'Basket') return;
     // A made basket finishes the hole.
@@ -786,7 +806,7 @@ export default function App() {
     if (hole <= 1) return;
     const previousHole = hole - 1;
     setHole(previousHole);
-    setThrowType(shots.some((shot) => shot.hole === previousHole) ? 'Approach' : 'Drive');
+    setThrowType(nextThrowType(shots.filter((shot) => shot.hole === previousHole)));
   };
 
   // Moves the current session's throws into history so a new one can begin.
@@ -821,7 +841,7 @@ export default function App() {
       const lastHoleDone = session.shots.some((shot) => shot.hole === lastHole && shot.lie === 'Basket');
       const nextHole = lastHoleDone && lastHole < holeCount ? lastHole + 1 : lastHole;
       setHole(nextHole);
-      setThrowType(session.shots.some((shot) => shot.hole === nextHole) ? 'Approach' : 'Drive');
+      setThrowType(nextThrowType(session.shots.filter((shot) => shot.hole === nextHole)));
       setThrowLie('Fairway');
       setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken });
       setSessionActive(true);
@@ -1003,9 +1023,19 @@ export default function App() {
   const saveThrowEdit = () => {
     if (!editingThrow) return;
     const { sessionId, index } = editingThrow;
-    updateSessionShots(sessionId, (list) => list.map((shot, position) => (position === index
-      ? { ...shot, disc: throwDraft.disc, type: throwDraft.type, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX }
-      : shot)));
+    // A throw changed to "in the basket" moves to the basket, as when it's logged that way;
+    // distances on the hole are then remeasured from each previous lie.
+    const layout = editingShot && viewedCourse?.id === editingSession?.courseId ? viewedCourse?.layouts?.[editingShot.hole - 1] : undefined;
+    const moveToBasket = throwDraft.lie === 'Basket' && editingShot?.lie !== 'Basket' && layout?.basket;
+    updateSessionShots(sessionId, (list) => {
+      const edited = list.map((shot, position) => (position === index
+        ? {
+          ...shot, disc: throwDraft.disc, type: throwDraft.type, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX,
+          ...(moveToBasket ? { latitude: layout.basket!.latitude, longitude: layout.basket!.longitude } : {}),
+        }
+        : shot));
+      return moveToBasket && editingShot ? recomputeHoleFeet(edited, editingShot.hole, layout?.tee) : edited;
+    });
     setEditingThrow(null);
   };
 
@@ -1855,9 +1885,9 @@ export default function App() {
                   {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => { setThrowType(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
                 </View>
               </> : logStep === 3 ? <>
-                <Text style={styles.fieldLabel}>WHERE DID IT LAND?</Text>
+                <Text style={styles.fieldLabel}>{throwType === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
                 <View style={[styles.typeRow, styles.lieGrid]}>
-                  {LIE_OPTIONS.map((item) => <Pressable key={item} onPress={() => { if (item === 'Basket') { saveThrow(QUALITY_MAX, 'Basket'); return; } setThrowLie(item); setLogStep(4); }} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwLie === item && styles.typeButtonSelected]} accessibilityLabel={item === 'OB' ? 'Out of bounds, one penalty stroke' : item}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwLie === item && styles.typeTextSelected]}>{item}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
+                  {lieOptionsFor(throwType).map((item) => <Pressable key={item} onPress={() => { if (item === 'Basket') { saveThrow(QUALITY_MAX, 'Basket'); return; } setThrowLie(item); setLogStep(4); }} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwLie === item && styles.typeButtonSelected]} accessibilityLabel={item === 'OB' ? 'Out of bounds, one penalty stroke' : lieLabel(item, throwType)}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwLie === item && styles.typeTextSelected]}>{lieLabel(item, throwType)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
                 </View>
               </> : <>
                 <Text style={styles.fieldLabel}>HOW WAS THE THROW?</Text>
@@ -1887,9 +1917,9 @@ export default function App() {
               <View style={styles.typeRow}>
                 {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
               </View>
-              <Text style={[styles.fieldLabel, styles.typeLabel]}>WHERE DID IT LAND?</Text>
+              <Text style={[styles.fieldLabel, styles.typeLabel]}>{throwDraft.type === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
               <View style={[styles.typeRow, styles.lieGrid]}>
-                {LIE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{item}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
+                {lieOptionsFor(throwDraft.type).map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{lieLabel(item, throwDraft.type)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>QUALITY</Text>
               <View style={styles.typeRow}>

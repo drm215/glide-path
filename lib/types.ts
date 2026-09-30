@@ -1,7 +1,8 @@
 // Data types shared by the app screens and the sync code.
 
 export type ThrowType = 'Drive' | 'Approach' | 'Putt';
-export type Lie = 'Fairway' | 'Woods' | 'Hazard' | 'OB' | 'Basket' | 'Other';
+// 'Hit basket' and 'Missed' are putt results; 'Basket' means the throw went in.
+export type Lie = 'Fairway' | 'Woods' | 'Hazard' | 'OB' | 'Basket' | 'Other' | 'Hit basket' | 'Missed';
 export type Disc = string;
 export type DiscInfo = { id: string; name: string; brand: string; category: string; speed: string; glide: string; turn: string; fade: string; stability: string; color?: string; background_color?: string };
 export type Shot = { x: number; y: number; feet: number; disc: Disc; type: ThrowType; hole: number; courseId?: string; latitude?: number; longitude?: number; lie?: Lie; quality?: number; qualityMax?: number };
