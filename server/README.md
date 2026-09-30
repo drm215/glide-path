@@ -1,6 +1,22 @@
-# Glide Path API
+# Glide Path API and website
 
-Express + Postgres API that syncs app data and serves the public course directory and shared rounds.
+Express + Postgres server that syncs app data, serves the public course directory and shared rounds, and hosts the website.
+
+## Website
+
+Plain HTML, CSS and JavaScript modules with no build step, in `public/`. The only library is [Leaflet](https://leafletjs.com) for maps, served from `node_modules`. The site's own code is about 8 KB gzipped.
+
+| Path | Page |
+|---|---|
+| `/` | Course search by name, city or state, or near the visitor, with a map of results |
+| `/c/:uid` | Published course: details, layouts, hole table, satellite map of tees and baskets |
+| `/r/:shareToken` | Shared round: score, scorecard, throw list, per-hole map of throws |
+| `/account` | Sign in to see your synced rounds and courses (reads them through `/api/sync`) |
+| `/privacy` | Privacy policy |
+
+Course and round pages are rendered on the server, so link previews and no-JS readers get the full content; the browser scripts add the maps from data embedded in the page. Pages send a Content-Security-Policy that only allows the site's own scripts.
+
+Satellite imagery defaults to Esri World Imagery, which Esri permits for non-commercial use with attribution and otherwise expects an ArcGIS account or API key. Set `TILE_URL` (a `{z}/{x}/{y}`-style template, API key included if needed) and `TILE_ATTRIBUTION` to change provider.
 
 ## Develop
 
@@ -20,6 +36,8 @@ To run it against a real database, set `DATABASE_URL` and `AUTH_SECRET`, then `n
 | `DATABASE_URL` | Postgres connection string |
 | `AUTH_SECRET` | Secret for signing sign-in tokens (long random string) |
 | `CORS_ORIGIN` | Allowed browser origin; defaults to `*` |
+| `TILE_URL` | Optional satellite tile URL template for the website's maps |
+| `TILE_ATTRIBUTION` | Optional attribution text for those tiles |
 | `PORT` | Set by Render |
 
 ## Deploy
@@ -46,8 +64,6 @@ Authenticated endpoints take `Authorization: Bearer <token>`.
 | GET | `/api/public/courses?q=&near=lat,lng&limit=` | | Search published courses by name/city/state, or sort by distance |
 | GET | `/api/public/courses/:uid` | | A published course with hole layouts and details |
 | GET | `/api/public/rounds/:shareToken` | | A shared round with its hole layouts |
-| GET | `/c/:uid` | | Share-link page (HTML) for a published course |
-| GET | `/r/:shareToken` | | Share-link page (HTML) with a shared round's scorecard |
 
 Sign-in attempts are limited to 20 per 15 minutes per IP address.
 

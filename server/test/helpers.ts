@@ -33,5 +33,5 @@ export const startTestServer = async () => {
     await db.close();
   };
 
-  return { request, register, stop };
+  return { baseUrl, request, register, stop };
 };

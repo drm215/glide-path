@@ -38,7 +38,7 @@ npx eas-cli@latest build -p ios --profile preview
 
 ## Sync server
 
-The `server/` folder holds the API that syncs app data, serves the public course directory, and renders share-link pages; see [server/README.md](server/README.md). It runs at https://glide-path.onrender.com with its database on a free Neon Postgres project.
+The `server/` folder holds the API that syncs app data and the website: a public course directory with satellite maps, shared round pages, a signed-in view of your rounds and courses, and the privacy policy. See [server/README.md](server/README.md). It runs at https://glide-path.onrender.com with its database on a free Neon Postgres project.
 
 The app's sync logic lives in [lib/sync.ts](lib/sync.ts) and is tested against the real API by `server/test/app-sync.test.ts`.
 

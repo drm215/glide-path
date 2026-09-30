@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glide Path · Disc golf courses, mapped on the ground</title>
+<meta name="description" content="Find disc golf courses mapped tee by tee and basket by basket with GPS, and see shared rounds from Glide Path players.">
+<meta property="og:site_name" content="Glide Path">
+<meta property="og:title" content="Glide Path">
+<meta property="og:description" content="Disc golf courses mapped tee by tee and basket by basket with GPS.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header"><div class="wrap">
+  <a class="brand" href="/"><span class="brand-mark">G</span><span class="brand-name">GLIDE PATH</span></a>
+  <nav class="site-nav"><a href="/" aria-current="page">Courses</a><a href="/account">My rounds</a></nav>
+</div></header>
+<main class="wrap">
+  <div class="eyebrow">Disc golf course directory</div>
+  <h1>Courses mapped on the ground.</h1>
+  <p class="lede">Every tee and basket here was saved by a player standing on it with GPS. Find a course, see each hole on satellite imagery, then play it in the Glide Path app.</p>
+
+  <form class="search" id="search" role="search">
+    <input id="query" name="q" type="search" placeholder="Course, city or state" aria-label="Course, city or state" autocomplete="off" enterkeyhint="search">
+    <button class="button" type="submit">Search</button>
+    <button class="button secondary" type="button" id="near-me">◎ Near me</button>
+  </form>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <div id="map" class="map" hidden role="img" aria-label="Map of the courses found"></div>
+  <ul class="results" id="results"></ul>
+</main>
+<footer class="site-footer"><div class="wrap"><span>Glide Path · disc golf course mapping and round logging</span><a href="/privacy">Privacy</a></div></footer>
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script type="module" src="/js/home.js"></script>
+</body>
+</html>

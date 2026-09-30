@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My rounds · Glide Path</title>
+<meta name="description" content="Sign in to see the rounds and courses you've synced from the Glide Path app.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="site-header"><div class="wrap">
+  <a class="brand" href="/"><span class="brand-mark">G</span><span class="brand-name">GLIDE PATH</span></a>
+  <nav class="site-nav"><a href="/">Courses</a><a href="/account" aria-current="page">My rounds</a></nav>
+</div></header>
+<main class="wrap" id="app">
+  <section id="signed-out" hidden>
+    <div class="eyebrow">Your account</div>
+    <h1>Sign in.</h1>
+    <p class="lede">See the rounds and courses you've synced from the Glide Path app. Use the same email and password as in the app.</p>
+    <form class="auth" id="auth-form">
+      <div class="tabs" role="group" aria-label="Sign in or create an account">
+        <button type="button" data-mode="signIn" aria-pressed="true">Sign in</button>
+        <button type="button" data-mode="register" aria-pressed="false">Create account</button>
+      </div>
+      <div id="name-field" hidden>
+        <label for="name">NAME</label>
+        <input id="name" name="displayName" autocomplete="name" placeholder="Shown on courses you publish">
+      </div>
+      <label for="email">EMAIL</label>
+      <input id="email" name="email" type="email" autocomplete="email" required>
+      <label for="password">PASSWORD</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required minlength="1">
+      <button class="button" type="submit" id="auth-submit">Sign in</button>
+      <p class="status" id="auth-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <section id="signed-in" hidden></section>
+</main>
+<footer class="site-footer"><div class="wrap"><span>Glide Path · disc golf course mapping and round logging</span><a href="/privacy">Privacy</a></div></footer>
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script type="module" src="/js/account.js"></script>
+</body>
+</html>

@@ -10,7 +10,13 @@ const requireEnv = (name: string) => {
 const db = createPostgresDb(requireEnv('DATABASE_URL'));
 await migrate(db);
 
-const app = createApp({ db, authSecret: requireEnv('AUTH_SECRET'), corsOrigin: process.env.CORS_ORIGIN || '*' });
+const app = createApp({
+  db,
+  authSecret: requireEnv('AUTH_SECRET'),
+  corsOrigin: process.env.CORS_ORIGIN || '*',
+  tileUrl: process.env.TILE_URL || undefined,
+  tileAttribution: process.env.TILE_ATTRIBUTION || undefined,
+});
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => {
   console.log(`Glide Path API listening on port ${port}`);

@@ -1,3 +1,7 @@
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import compression from 'compression';
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -9,7 +13,18 @@ import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.t
 import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
 import { runSync } from './sync.ts';
 
-type AppOptions = { db: Db; authSecret: string; corsOrigin?: string; rateLimitAuth?: boolean };
+type AppOptions = {
+  db: Db; authSecret: string; corsOrigin?: string; rateLimitAuth?: boolean;
+  // Satellite imagery for the website's maps; set TILE_URL to use a keyed or different provider.
+  tileUrl?: string; tileAttribution?: string;
+};
+
+const DEFAULT_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const DEFAULT_TILE_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
+// The website's files live in server/public, one level up from both src/ and dist/.
+const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
+const LEAFLET_DIR = dirname(createRequire(import.meta.url).resolve('leaflet/dist/leaflet.js'));
 
 type UserRow = { id: string; email: string; password_hash: string; display_name: string };
 
@@ -26,11 +41,33 @@ const courseSearchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
-export const createApp = ({ db, authSecret, corsOrigin = '*', rateLimitAuth = true }: AppOptions) => {
+export const createApp = ({
+  db, authSecret, corsOrigin = '*', rateLimitAuth = true, tileUrl = DEFAULT_TILE_URL, tileAttribution = DEFAULT_TILE_ATTRIBUTION,
+}: AppOptions) => {
   const app = express();
   const { issueToken, requireUser } = createAuth(authSecret);
+  const tileOrigin = new URL(tileUrl.replace(/[{}]/g, '')).origin;
 
   app.set('trust proxy', 1);
+  app.use(compression());
+  // Website pages only load their own scripts; user text is never trusted as markup.
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (!req.path.startsWith('/api/')) {
+      res.setHeader('Content-Security-Policy', [
+        "default-src 'self'",
+        `img-src 'self' data: ${tileOrigin}`,
+        "style-src 'self' 'unsafe-inline'",
+        "script-src 'self'",
+        "connect-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '));
+    }
+    next();
+  });
   // Auth uses bearer tokens rather than cookies, so allowing other origins is safe.
   app.use(cors({ origin: corsOrigin }));
   app.use(express.json({ limit: '5mb' }));
@@ -114,7 +151,16 @@ export const createApp = ({ db, authSecret, corsOrigin = '*', rateLimitAuth = tr
     res.json({ round });
   });
 
-  // Share-link pages opened from the app.
+  // Map settings for the website's scripts.
+  app.get('/js/config.js', (_req, res) => {
+    res.type('application/javascript').set('Cache-Control', 'public, max-age=3600')
+      .send(`export const TILE_URL = ${JSON.stringify(tileUrl)};\nexport const TILE_ATTRIBUTION = ${JSON.stringify(tileAttribution)};\n`);
+  });
+
+  app.use('/vendor/leaflet', express.static(LEAFLET_DIR, { maxAge: '7d' }));
+  app.use(express.static(PUBLIC_DIR, { extensions: ['html'], maxAge: '1h' }));
+
+  // Course and shared-round pages (also the links the app shares).
   app.get('/r/:token', async (req, res) => {
     const token = z.string().regex(/^[\w-]{10,40}$/).safeParse(req.params.token);
     const round = token.success ? await getSharedRound(db, token.data) : null;
@@ -127,8 +173,9 @@ export const createApp = ({ db, authSecret, corsOrigin = '*', rateLimitAuth = tr
     res.status(course ? 200 : 404).type('html').send(course ? renderCoursePage(course) : renderNotFoundPage('course'));
   });
 
-  app.use((_req: Request, res: Response) => {
-    res.status(404).json({ error: 'Not found.' });
+  app.use((req: Request, res: Response) => {
+    if (req.path.startsWith('/api/')) res.status(404).json({ error: 'Not found.' });
+    else res.status(404).type('html').send(renderNotFoundPage('page'));
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
