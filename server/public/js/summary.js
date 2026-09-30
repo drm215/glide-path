@@ -1,7 +1,7 @@
 // Round summary for the website's round pages: totals, and breakdowns by throw type, disc,
 // landing spot and quality. Built from the same throw data the maps use.
 import { el } from './lib.js';
-import { summarizeRound } from './round-stats.js';
+import { QUALITY_LABELS, quality, summarizeRound } from './round-stats.js';
 
 const feet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
 const qualityText = (value) => (value === null ? '—' : `${value.toFixed(1)} / 3`);
@@ -15,6 +15,46 @@ const percent = (count, total) => `${Math.round((count / total) * 100)}%`;
 
 const statTile = (label, value, note) => el('div', { class: 'stat' },
   el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
+
+const THROW_TYPES = ['Drive', 'Approach', 'Putt'];
+
+// A row of toggle buttons; exactly one is pressed. `onSelect` gets the chosen value.
+const filterGroup = (label, options, onSelect) => {
+  const buttons = options.map(([value, text]) => el('button', {
+    type: 'button',
+    'aria-pressed': String(value === null),
+    onclick: () => {
+      buttons.forEach((button) => button.setAttribute('aria-pressed', String(button === buttonFor(value))));
+      onSelect(value);
+    },
+  }, text));
+  const buttonFor = (value) => buttons[options.findIndex(([option]) => option === value)];
+  return el('div', { class: 'tabs', role: 'group', 'aria-label': label }, buttons);
+};
+
+// The By disc table with throw-type and quality filters that combine.
+const discBreakdown = (shots, layouts) => {
+  const filters = { type: null, quality: null };
+  const types = THROW_TYPES.filter((type) => shots.some((shot) => shot.type === type));
+  const ratings = [3, 2, 1].filter((value) => shots.some((shot) => quality(shot) === value));
+  let table = null;
+  const container = el('div', { class: 'disc-breakdown' });
+
+  const render = () => {
+    const matching = shots.filter((shot) => (filters.type === null || shot.type === filters.type) && (filters.quality === null || quality(shot) === filters.quality));
+    const next = matching.length
+      ? breakdownTable('DISC', summarizeRound(matching, layouts).byDisc)
+      : el('p', { class: 'meta' }, 'No throws match these filters.');
+    if (table) table.replaceWith(next);
+    else container.append(next);
+    table = next;
+  };
+
+  if (types.length > 1) container.append(filterGroup('Filter by throw type', [[null, 'All throws'], ...types.map((type) => [type, type])], (value) => { filters.type = value; render(); }));
+  if (ratings.length > 1) container.append(filterGroup('Filter by throw quality', [[null, 'Any quality'], ...ratings.map((value) => [value, QUALITY_LABELS[value]])], (value) => { filters.quality = value; render(); }));
+  render();
+  return container;
+};
 
 export const renderRoundSummary = (shots, layouts = []) => {
   if (!shots.length) return null;
@@ -51,7 +91,7 @@ export const renderRoundSummary = (shots, layouts = []) => {
       ] : el('p', { class: 'meta' }, 'Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in this round has both.'),
     ] : null,
     el('h3', {}, 'By disc'),
-    breakdownTable('DISC', summary.byDisc),
+    discBreakdown(shots, layouts),
     summary.landings.length ? [el('h3', {}, 'Where throws landed'), el('div', { class: 'chips' }, summary.landings.map((item) => el('span', { class: 'chip' }, `${item.lie === 'Basket' ? 'In the basket' : item.lie} · ${item.count}`)))] : null,
     summary.qualities.length ? [el('h3', {}, 'Throw quality'), el('div', { class: 'chips' }, summary.qualities.map((item) => el('span', { class: 'chip' }, `${item.label} · ${item.count}`)))] : null,
   );

@@ -60,7 +60,7 @@ const syncedData = {
       { hole: 1, feet: 300, disc: 'Destroyer', type: 'Drive', lie: 'Fairway', quality: 3, qualityMax: 3 },
       { hole: 1, feet: 60, disc: 'Aviar', type: 'Putt', lie: 'Basket', quality: 3, qualityMax: 3 },
       { hole: 2, feet: 280, disc: 'Destroyer', type: 'Drive', lie: 'OB', quality: 1, qualityMax: 3 },
-      { hole: 2, feet: 30, disc: 'Aviar', type: 'Putt', lie: 'Missed', quality: 1, qualityMax: 3 },
+      { hole: 2, feet: 30, disc: 'Aviar', type: 'Putt', lie: 'Missed', quality: 2, qualityMax: 3 },
     ],
   }],
   bag: { updatedAt: 1, discs: ['Destroyer', 'Aviar'], details: {}, weights: {} },
@@ -103,6 +103,37 @@ describe('website pages in a browser', () => {
     assert.match(text, /ALL PUTTS50%1 of 2 made/);
     // Score: hole 1 = 2 strokes (par 3), hole 2 = 2 throws + 1 OB penalty (par 4).
     assert.match(view.querySelector('.score')!.textContent ?? '', /5-2/);
+  });
+
+  test('My rounds: the By disc table filters by throw type and quality', async () => {
+    const { document } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi, hash: '#round/1790804819013' });
+    const breakdown = document.querySelector('.disc-breakdown')!;
+    const discRows = () => [...breakdown.querySelectorAll('tbody tr')].map((row) => [...row.querySelectorAll('td')].slice(0, 2).map((cell) => cell.textContent).join(':'));
+    const press = (group: string, label: string) => {
+      const button = [...breakdown.querySelectorAll(`[aria-label="${group}"] button`)].find((item) => item.textContent === label)!;
+      button.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
+      return button;
+    };
+    assert.deepEqual(discRows(), ['Destroyer:2', 'Aviar:2']);
+
+    const putt = press('Filter by throw type', 'Putt');
+    assert.equal(putt.getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(discRows(), ['Aviar:2']);
+
+    press('Filter by throw quality', 'Good');
+    assert.deepEqual(discRows(), ['Aviar:1'], 'filters combine');
+
+    press('Filter by throw type', 'Drive');
+    assert.deepEqual(discRows(), ['Destroyer:1']);
+
+    press('Filter by throw quality', 'Fair');
+    assert.equal(breakdown.querySelector('table'), null);
+    assert.match(breakdown.textContent ?? '', /No throws match these filters/);
+
+    press('Filter by throw type', 'All throws');
+    press('Filter by throw quality', 'Any quality');
+    assert.deepEqual(discRows(), ['Destroyer:2', 'Aviar:2']);
+    assertNoRenderingLeaks(breakdown.textContent ?? '');
   });
 
   test('My rounds: a course shows each layout without leaking text', async () => {
