@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { get } from 'node:http';
 import { after, before, describe, test } from 'node:test';
 import { startTestServer } from './helpers.ts';
 
@@ -37,6 +38,19 @@ describe('website', () => {
     for (const path of ['/js/lib.js', '/js/home.js', '/js/course.js', '/js/round.js', '/js/account.js', '/js/summary.js', '/js/round-stats.js', '/styles.css', '/vendor/leaflet/leaflet.css']) {
       assert.equal((await fetch(`${base}${path}`)).status, 200, path);
     }
+    for (const path of ['/js/account.js', '/styles.css', '/js/config.js']) {
+      assert.equal((await fetch(`${base}${path}`)).headers.get('cache-control'), 'no-cache', `${path} is revalidated on each load`);
+    }
+    // fetch() adds "Cache-Control: no-cache" to conditional requests, which forces a full response,
+    // so the browser's revalidation is checked with the plain HTTP client.
+    const cached = await fetch(`${base}/js/lib.js`);
+    const revalidatedStatus = await new Promise<number | undefined>((resolve, reject) => {
+      get(`${base}/js/lib.js`, { headers: { 'If-None-Match': cached.headers.get('etag')! } }, (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      }).on('error', reject);
+    });
+    assert.equal(revalidatedStatus, 304, 'unchanged files cost only a 304');
     const config = await (await fetch(`${base}/js/config.js`)).text();
     assert.match(config, /window\.GLIDE_PATH_TILES = \{"url":"https:\/\/server\.arcgisonline\.com/);
     const leaflet = await fetch(`${base}/vendor/leaflet/leaflet.js`, { headers: { 'Accept-Encoding': 'gzip' } });

@@ -153,12 +153,14 @@ export const createApp = ({
 
   // Map settings, loaded as a classic script before the page's modules (see lib.js satelliteMap).
   app.get('/js/config.js', (_req, res) => {
-    res.type('application/javascript').set('Cache-Control', 'public, max-age=3600')
+    res.type('application/javascript').set('Cache-Control', 'no-cache')
       .send(`window.GLIDE_PATH_TILES = ${JSON.stringify({ url: tileUrl, attribution: tileAttribution })};\n`);
   });
 
   app.use('/vendor/leaflet', express.static(LEAFLET_DIR, { maxAge: '7d' }));
-  app.use(express.static(PUBLIC_DIR, { extensions: ['html'], maxAge: '1h' }));
+  // The site's own files change with each deploy, so browsers revalidate them on every load
+  // (a cheap 304 when unchanged) instead of keeping a stale copy.
+  app.use(express.static(PUBLIC_DIR, { extensions: ['html'], setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
   // Course and shared-round pages (also the links the app shares).
   app.get('/r/:token', async (req, res) => {
