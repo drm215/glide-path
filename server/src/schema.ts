@@ -63,4 +63,5 @@ CREATE TABLE IF NOT EXISTS bags (
   updated_at bigint NOT NULL,
   version bigint NOT NULL DEFAULT nextval('sync_version')
 );
+ALTER TABLE bags ADD COLUMN IF NOT EXISTS weights jsonb NOT NULL DEFAULT '{}';
 `;

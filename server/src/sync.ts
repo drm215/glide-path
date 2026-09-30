@@ -14,7 +14,7 @@ type RoundRow = {
   shots: RoundRecord['shots']; shared: boolean; share_token: string | null; updated_at: string; deleted: boolean; version: string;
   layout_id: string | null;
 };
-type BagRow = { discs: string[]; details: BagRecord['details']; updated_at: string; version: string };
+type BagRow = { discs: string[]; details: BagRecord['details']; weights: BagRecord['weights']; updated_at: string; version: string };
 
 // Used to place a course on the map and sort by distance: its first tee, or failing that its first basket.
 const coursePosition = (course: CourseRecord) => {
@@ -60,10 +60,11 @@ const upsertRound = (tx: Queryable, ownerId: string, round: RoundRecord) =>
 
 const upsertBag = (tx: Queryable, ownerId: string, bag: BagRecord) =>
   tx.query(
-    `INSERT INTO bags (owner_id, discs, details, updated_at) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (owner_id) DO UPDATE SET discs = EXCLUDED.discs, details = EXCLUDED.details, updated_at = EXCLUDED.updated_at, version = nextval('sync_version')
+    `INSERT INTO bags (owner_id, discs, details, weights, updated_at) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (owner_id) DO UPDATE SET discs = EXCLUDED.discs, details = EXCLUDED.details, weights = EXCLUDED.weights,
+       updated_at = EXCLUDED.updated_at, version = nextval('sync_version')
      WHERE bags.updated_at < EXCLUDED.updated_at`,
-    [ownerId, JSON.stringify(bag.discs), JSON.stringify(bag.details), bag.updatedAt],
+    [ownerId, JSON.stringify(bag.discs), JSON.stringify(bag.details), JSON.stringify(bag.weights), bag.updatedAt],
   );
 
 export type SyncInput = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag?: BagRecord };
@@ -108,6 +109,6 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
       shareToken: row.share_token,
       layoutId: row.layout_id ?? undefined,
     })),
-    bag: bags.rows[0] ? { updatedAt: Number(bags.rows[0].updated_at), discs: bags.rows[0].discs, details: bags.rows[0].details } : null,
+    bag: bags.rows[0] ? { updatedAt: Number(bags.rows[0].updated_at), discs: bags.rows[0].discs, details: bags.rows[0].details, weights: bags.rows[0].weights } : null,
   };
 };

@@ -8,7 +8,7 @@ import { startTestServer } from './helpers.ts';
 type Server = Awaited<ReturnType<typeof startTestServer>>;
 type Device = { data: SyncData; account: SyncAccount };
 
-const emptyData = (): SyncData => ({ courses: [], history: [], bag: [], bagDetails: {}, bagUpdatedAt: 0, deletedCourses: [] });
+const emptyData = (): SyncData => ({ courses: [], history: [], bag: [], bagDetails: {}, bagWeights: {}, bagUpdatedAt: 0, deletedCourses: [] });
 
 // A logical clock keeps edit times strictly increasing without depending on real time.
 let clock = 1_000;
@@ -26,7 +26,7 @@ const syncDevice = async (server: Server, device: Device) => {
     courses: mergeCourses(device.data.courses, result.courses),
     history: mergeRounds(device.data.history, result.rounds),
     deletedCourses: clearSentTombstones(device.data.deletedCourses, body.courses),
-    ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagUpdatedAt: result.bag.updatedAt } : {}),
+    ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagWeights: result.bag.weights ?? {}, bagUpdatedAt: result.bag.updatedAt } : {}),
   };
   device.account = { ...device.account, cursor: result.cursor, pushedThrough: startedAt };
   return body;
@@ -93,8 +93,10 @@ describe('app sync against the API', () => {
     const phone = newDevice(token, {
       ...emptyData(),
       courses: [course('course-1', { updatedAt: tick() }), course('course-2', { name: 'Second Park', updatedAt: tick() })],
-      bag: ['Buzzz'],
+      bag: ['Buzzz', 'Old Putter'],
       bagDetails: { Buzzz: { id: 'x', name: 'Buzzz', brand: 'Discraft', category: 'Midrange', speed: '5', glide: '4', turn: '-1', fade: '1', stability: 'Stable' } },
+      // Weights only for discs in the bag are sent; the stale one is dropped.
+      bagWeights: { Buzzz: 177.4, 'Old Putter': 173, 'Lost Disc': 170 },
       bagUpdatedAt: tick(),
     });
     await syncDevice(server, phone);
@@ -103,8 +105,9 @@ describe('app sync against the API', () => {
     const tablet = newDevice(token);
     await syncDevice(server, tablet);
     assert.deepEqual(tablet.data.courses.map((item) => item.name).sort(), ['Cedar Grove', 'Second Park']);
-    assert.deepEqual(tablet.data.bag, ['Buzzz']);
+    assert.deepEqual(tablet.data.bag, ['Buzzz', 'Old Putter']);
     assert.equal(tablet.data.bagDetails.Buzzz.brand, 'Discraft');
+    assert.deepEqual(tablet.data.bagWeights, { Buzzz: 177, 'Old Putter': 173 });
     assert.equal(tablet.data.courses.find((item) => item.id === 'course-1')!.layouts![0].tee!.altitude, 90);
 
     // The tablet changes a par; the phone picks it up.

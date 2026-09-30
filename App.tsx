@@ -51,6 +51,7 @@ const STORAGE_KEY = 'flight-notes-round-v1';
 const COURSES_KEY = 'flight-notes-courses-v1';
 const BAG_KEY = 'flight-notes-bag-v1';
 const BAG_DETAILS_KEY = 'flight-notes-bag-details-v1';
+const BAG_WEIGHTS_KEY = 'flight-notes-bag-weights-v1';
 // Sync account (without its token) and pending sync bookkeeping.
 const SYNC_KEY = 'flight-notes-sync-v1';
 const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
@@ -268,6 +269,8 @@ export default function App() {
   const [bag, setBag] = useState<Disc[]>([]);
   const [bagEntry, setBagEntry] = useState('');
   const [bagDetails, setBagDetails] = useState<Record<Disc, DiscInfo>>({});
+  // Disc weights in grams, keyed by disc name.
+  const [bagWeights, setBagWeights] = useState<Record<Disc, number>>({});
   const [discSearch, setDiscSearch] = useState<{ query: string; results: DiscInfo[]; failed: boolean }>({ query: '', results: [], failed: false });
   const [courses, setCourses] = useState<Course[]>([{ id: 'pine-ridge', name: 'Pine Ridge (Sample)', holes: 18, layouts: Array.from({ length: 18 }, () => ({ tee: null, basket: null })) }]);
   const [selectedCourseId, setSelectedCourseId] = useState('pine-ridge');
@@ -331,11 +334,12 @@ export default function App() {
       AsyncStorage.getItem(COURSES_KEY),
       AsyncStorage.getItem(BAG_KEY),
       AsyncStorage.getItem(BAG_DETAILS_KEY),
+      AsyncStorage.getItem(BAG_WEIGHTS_KEY),
       AsyncStorage.getItem(SYNC_KEY),
       AsyncStorage.getItem(SYNC_META_KEY),
       SecureStore.getItemAsync(TOKEN_KEY).catch(() => null),
     ])
-      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, syncValue, syncMetaValue, token]) => {
+      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, bagWeightsValue, syncValue, syncMetaValue, token]) => {
         if (roundValue) {
           const saved = JSON.parse(roundValue) as SavedRound;
           setShots(saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId })));
@@ -371,6 +375,7 @@ export default function App() {
           if (savedBag.length) setDisc(savedBag[0]);
         }
         if (bagDetailsValue) setBagDetails(JSON.parse(bagDetailsValue) as Record<Disc, DiscInfo>);
+        if (bagWeightsValue) setBagWeights(JSON.parse(bagWeightsValue) as Record<Disc, number>);
         if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
         const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] } : {};
         setDeletedCourses(meta.deletedCourses ?? []);
@@ -404,6 +409,11 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
+    AsyncStorage.setItem(BAG_WEIGHTS_KEY, JSON.stringify(bagWeights)).catch(() => undefined);
+  }, [bagWeights, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
     if (!account) {
       AsyncStorage.removeItem(SYNC_KEY).catch(() => undefined);
       return;
@@ -418,7 +428,7 @@ export default function App() {
   }, [bagUpdatedAt, deletedCourses, loaded]);
 
   // Sync runs from timers and app-state events, so it reads the latest values from here.
-  const syncData: SyncData = { courses, history, bag, bagDetails, bagUpdatedAt, deletedCourses };
+  const syncData: SyncData = { courses, history, bag, bagDetails, bagWeights, bagUpdatedAt, deletedCourses };
   const latestSync = useRef({ data: syncData, account });
   useEffect(() => {
     latestSync.current = { data: syncData, account };
@@ -445,6 +455,7 @@ export default function App() {
       if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
         setBag(result.bag.discs);
         setBagDetails(result.bag.details);
+        setBagWeights(result.bag.weights ?? {});
         setBagUpdatedAt(result.bag.updatedAt);
       }
       setAccount((acct) => (acct?.token === current.token ? { ...acct, cursor: result.cursor, pushedThrough: startedAt, lastSyncedAt: nowMs() } : acct));
@@ -485,7 +496,7 @@ export default function App() {
     if (!loaded || !account || !pendingChanges) return;
     const timer = setTimeout(() => runSyncRef.current(), SYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, deletedCourses]);
+  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, bagWeights, deletedCourses]);
 
   // User edits to courses go through here so each changed course gets a fresh edit time for sync.
   const updateCourses = (updater: (current: Course[]) => Course[]) => {
@@ -1324,11 +1335,25 @@ export default function App() {
               const { [name]: _removed, ...rest } = current;
               return rest;
             });
+            setBagWeights((current) => {
+              const { [name]: _removed, ...rest } = current;
+              return rest;
+            });
             if (disc === name) setDisc(remaining[0] ?? '');
           },
         },
       ],
     );
+  };
+
+  // Whole grams; clearing the field removes the weight.
+  const setDiscWeight = (name: Disc, text: string) => {
+    const grams = Number(text.replace(/[^0-9]/g, '').slice(0, 3));
+    setBagWeights((current) => {
+      const { [name]: _previous, ...rest } = current;
+      return grams > 0 ? { ...rest, [name]: grams } : rest;
+    });
+    setBagUpdatedAt(nowMs());
   };
 
   const addCatalogDisc = (info: DiscInfo) => {
@@ -1542,7 +1567,7 @@ export default function App() {
             </View>
             <Text style={styles.builderSectionTitle}>Your bag · {bag.length} discs</Text>
             {!bag.length && <Text style={styles.mapInstruction}>Your bag is empty. Search for a disc above to add it.</Text>}
-            {bag.map((item, index) => <View key={`${item}-${index}`} style={styles.bagItem}><View style={styles.bagItemSelect}><View style={[styles.discSwatch, { backgroundColor: bagDetails[item]?.background_color ?? ['#e08b48', '#619276', '#8ba4a0', '#d4d1c3'][index % 4] }]}><Text style={[styles.discSwatchText, bagDetails[item]?.color ? { color: bagDetails[item].color } : null]}>{item.charAt(0).toUpperCase()}</Text></View><View style={styles.bagItemCopy}><Text style={styles.bagItemName}>{item}</Text>{bagDetails[item] && <Text style={styles.bagItemMeta}>{formatDiscMeta(bagDetails[item])}</Text>}{shots.some((shot) => shot.disc === item) && <Text style={styles.bagItemMeta}>{shots.filter((shot) => shot.disc === item).length} throws logged</Text>}</View></View><Pressable onPress={() => deleteDisc(item)} accessibilityRole="button" accessibilityLabel={`Remove ${item} from bag`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
+            {bag.map((item, index) => <View key={`${item}-${index}`} style={styles.bagItem}><View style={styles.bagItemSelect}><View style={[styles.discSwatch, { backgroundColor: bagDetails[item]?.background_color ?? ['#e08b48', '#619276', '#8ba4a0', '#d4d1c3'][index % 4] }]}><Text style={[styles.discSwatchText, bagDetails[item]?.color ? { color: bagDetails[item].color } : null]}>{item.charAt(0).toUpperCase()}</Text></View><View style={styles.bagItemCopy}><Text style={styles.bagItemName}>{item}</Text>{bagDetails[item] && <Text style={styles.bagItemMeta}>{formatDiscMeta(bagDetails[item])}</Text>}{shots.some((shot) => shot.disc === item) && <Text style={styles.bagItemMeta}>{shots.filter((shot) => shot.disc === item).length} throws logged</Text>}</View></View><View style={styles.weightField}><TextInput value={bagWeights[item] ? String(bagWeights[item]) : ''} onChangeText={(text) => setDiscWeight(item, text)} placeholder="—" placeholderTextColor="#a5aa9c" keyboardType="number-pad" maxLength={3} style={styles.weightInput} accessibilityLabel={`Weight of ${item} in grams`} /><Text style={styles.weightUnit}>g</Text></View><Pressable onPress={() => deleteDisc(item)} accessibilityRole="button" accessibilityLabel={`Remove ${item} from bag`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
           </ScrollView>
         ) : screen === 'Practice' ? (
           <ScrollView contentContainerStyle={styles.content}>
@@ -1902,6 +1927,9 @@ const styles = StyleSheet.create({
   avatarText: { color: INK, fontSize: 10, fontWeight: '800' },
   avatarSignedIn: { backgroundColor: GREEN, borderColor: GREEN },
   avatarTextSignedIn: { color: '#fff' },
+  weightField: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
+  weightInput: { width: 48, height: 34, borderWidth: 1, borderColor: '#dedfd5', borderRadius: 6, textAlign: 'center', color: INK, fontSize: 13, fontVariant: ['tabular-nums'], backgroundColor: '#fff' },
+  weightUnit: { color: MUTED, fontSize: 10, fontWeight: '700', marginLeft: 4 },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },

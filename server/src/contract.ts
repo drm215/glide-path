@@ -76,6 +76,8 @@ export const bagRecord = z.object({
   updatedAt: z.number().int().nonnegative(),
   discs: z.array(z.string().max(200)).max(200),
   details: z.record(z.string(), z.looseObject({})).default({}),
+  // Grams, keyed by disc name.
+  weights: z.record(z.string(), z.number().int().min(1).max(999)).default({}),
 });
 
 export const syncRequest = z.object({

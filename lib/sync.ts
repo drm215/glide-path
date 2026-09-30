@@ -17,6 +17,8 @@ export type SyncData = {
   history: SessionArchive[];
   bag: Disc[];
   bagDetails: Record<Disc, DiscInfo>;
+  // Disc weights in grams, keyed by disc name.
+  bagWeights: Record<Disc, number>;
   bagUpdatedAt: number;
   deletedCourses: Tombstone[];
 };
@@ -31,7 +33,7 @@ type RoundRecord = {
   mode: 'Round' | 'Practice'; shots: SessionArchive['shots']; shared: boolean; shareToken?: string | null; uid?: string;
   layoutId?: string;
 };
-type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo> };
+type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo>; weights?: Record<Disc, number> };
 
 export type SyncRequest = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag?: BagRecord };
 export type SyncResponse = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag: BagRecord | null };
@@ -110,6 +112,13 @@ const roundToRecord = (session: SessionArchive): RoundRecord => ({
 // device can't overwrite the synced bag.
 export const initialBagUpdatedAt = (stored: number | undefined, bagCount: number, now: number) => stored || (bagCount ? now : 0);
 
+// Only weights for discs still in the bag, as whole grams the server accepts.
+const bagWeightsToSend = (bag: Disc[], weights: Record<Disc, number>) =>
+  Object.fromEntries(bag.flatMap((name) => {
+    const grams = Math.round(weights[name] ?? 0);
+    return grams >= 1 && grams <= 999 ? [[name, grams]] : [];
+  }));
+
 // Everything edited since the last successful sync, plus every pending deletion.
 export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cursor' | 'pushedThrough'>): SyncRequest => ({
   cursor: account.cursor,
@@ -118,7 +127,9 @@ export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cur
     ...data.deletedCourses.map(tombstoneToRecord),
   ],
   rounds: data.history.filter((session) => editTime(session) > account.pushedThrough).map(roundToRecord),
-  bag: data.bagUpdatedAt > account.pushedThrough ? { updatedAt: data.bagUpdatedAt, discs: data.bag, details: data.bagDetails } : undefined,
+  bag: data.bagUpdatedAt > account.pushedThrough
+    ? { updatedAt: data.bagUpdatedAt, discs: data.bag, details: data.bagDetails, weights: bagWeightsToSend(data.bag, data.bagWeights) }
+    : undefined,
 });
 
 export const countPendingChanges = (data: SyncData, pushedThrough: number) =>
