@@ -64,7 +64,7 @@ ${maps ? '<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">\n' : ''}<li
 </div></header>
 <main class="wrap">${body}</main>
 <footer class="site-footer"><div class="wrap"><span>Glide Path · disc golf course mapping and round logging</span><a href="/privacy">Privacy</a></div></footer>
-${data === undefined ? '' : `<script type="application/json" id="page-data">${embedJson(data)}</script>\n`}${maps ? '<script src="/vendor/leaflet/leaflet.js"></script>\n' : ''}${script ? `<script type="module" src="${script}"></script>\n` : ''}</body>
+${data === undefined ? '' : `<script type="application/json" id="page-data">${embedJson(data)}</script>\n`}${maps ? '<script src="/js/config.js"></script>\n<script src="/vendor/leaflet/leaflet.js"></script>\n' : ''}${script ? `<script type="module" src="${script}"></script>\n` : ''}</body>
 </html>`;
 
 export const renderNotFoundPage = (what: string) => renderShell({

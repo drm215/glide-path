@@ -38,7 +38,7 @@ describe('website', () => {
       assert.equal((await fetch(`${base}${path}`)).status, 200, path);
     }
     const config = await (await fetch(`${base}/js/config.js`)).text();
-    assert.match(config, /export const TILE_URL = "https:\/\/server\.arcgisonline\.com/);
+    assert.match(config, /window\.GLIDE_PATH_TILES = \{"url":"https:\/\/server\.arcgisonline\.com/);
     const leaflet = await fetch(`${base}/vendor/leaflet/leaflet.js`, { headers: { 'Accept-Encoding': 'gzip' } });
     assert.equal(leaflet.status, 200);
     assert.equal(leaflet.headers.get('content-encoding'), 'gzip');

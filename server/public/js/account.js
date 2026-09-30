@@ -1,5 +1,5 @@
 import { renderRoundSummary } from './summary.js';
-import { $, TOKEN_KEY, api, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
+import { $, TOKEN_KEY, api, setChildren, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
 const signedInEl = $('#signed-in');
@@ -50,7 +50,7 @@ const back = () => el('p', {}, el('a', { href: '#' }, '‹ All rounds and course
 const renderOverview = () => {
   const rounds = [...data.rounds].sort((a, b) => roundDate(b) - roundDate(a));
   const courses = [...data.courses].sort((a, b) => a.name.localeCompare(b.name));
-  signedInEl.replaceChildren(
+  setChildren(signedInEl,
     el('div', { class: 'eyebrow' }, 'Signed in as'),
     el('h1', {}, user.displayName),
     el('p', { class: 'meta' }, user.email),
@@ -103,7 +103,7 @@ const renderRound = (round) => {
     el('tfoot', {}, el('tr', {}, el('td', {}, 'TOTAL'), el('td', {}, score.toPar === null ? '—' : score.par), el('td', {}, score.total),
       el('td', { class: score.toPar === null ? '' : toParClass(score.toPar) }, score.toPar === null ? '—' : formatToPar(score.toPar)))));
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': 'Satellite map of the selected hole and its throws' });
-  signedInEl.replaceChildren(
+  setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null].filter(Boolean).join(' · ')),
     el('h1', {}, round.courseName),
@@ -134,7 +134,7 @@ const renderCourse = (course) => {
     ? el('div', { class: 'tabs', role: 'group', 'aria-label': 'Layouts' }, layouts.map((layout, index) => el('button', { type: 'button', 'aria-pressed': String(index === 0), onclick: () => show(index) }, layout.name)))
     : null;
   const place = [course.details?.city, course.details?.state].filter(Boolean).join(', ');
-  signedInEl.replaceChildren(
+  setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, ['Your course', place].filter(Boolean).join(' · ')),
     el('h1', {}, course.name),
@@ -181,7 +181,7 @@ const showSignedOut = (message = '') => {
 const load = async () => {
   signedOutEl.hidden = true;
   signedInEl.hidden = false;
-  signedInEl.replaceChildren(el('p', { class: 'status' }, 'Loading your rounds… The server can take up to a minute to wake if it hasn’t been used recently.'));
+  setChildren(signedInEl, el('p', { class: 'status' }, 'Loading your rounds… The server can take up to a minute to wake if it hasn’t been used recently.'));
   try {
     const [me, synced] = await Promise.all([api('/api/me', { token }), api('/api/sync', { method: 'POST', token, body: { cursor: 0 } })]);
     user = me.user;
@@ -193,7 +193,7 @@ const load = async () => {
       saveToken(null);
       showSignedOut('Your session expired. Sign in again.');
     } else {
-      signedInEl.replaceChildren(el('p', { class: 'status error' }, error.message), el('button', { class: 'button', type: 'button', onclick: load }, 'Try again'));
+      setChildren(signedInEl, el('p', { class: 'status error' }, error.message), el('button', { class: 'button', type: 'button', onclick: load }, 'Try again'));
     }
   }
 };

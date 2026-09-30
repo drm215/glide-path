@@ -1,5 +1,5 @@
-// Shared helpers for the Glide Path website. Leaflet is loaded as the global `L` by pages with maps.
-import { TILE_ATTRIBUTION, TILE_URL } from './config.js';
+// Shared helpers for the Glide Path website. Pages with maps load Leaflet as the global `L`,
+// and /js/config.js sets window.GLIDE_PATH_TILES from the server's settings.
 
 export const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -12,11 +12,17 @@ export const el = (tag, attrs = {}, ...children) => {
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? '' : value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === undefined || child === null || child === false) continue;
     node.append(child instanceof Node ? child : String(child));
   }
   return node;
+};
+
+// Replaces an element's contents. Unlike replaceChildren, nested arrays are flattened and
+// null/false entries (optional sections) are skipped instead of shown as text.
+export const setChildren = (parent, ...children) => {
+  parent.replaceChildren(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
 };
 
 export const TOKEN_KEY = 'glide-path-token';
@@ -80,7 +86,8 @@ const latLng = (point) => [point.latitude, point.longitude];
 export const satelliteMap = (container) => {
   if (!window.L || !container) return null;
   const map = L.map(container, { scrollWheelZoom: false, tap: true });
-  L.tileLayer(TILE_URL, { maxZoom: 21, maxNativeZoom: 19, attribution: TILE_ATTRIBUTION }).addTo(map);
+  const tiles = window.GLIDE_PATH_TILES;
+  if (tiles) L.tileLayer(tiles.url, { maxZoom: 21, maxNativeZoom: 19, attribution: tiles.attribution }).addTo(map);
   return map;
 };
 

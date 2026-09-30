@@ -151,10 +151,10 @@ export const createApp = ({
     res.json({ round });
   });
 
-  // Map settings for the website's scripts.
+  // Map settings, loaded as a classic script before the page's modules (see lib.js satelliteMap).
   app.get('/js/config.js', (_req, res) => {
     res.type('application/javascript').set('Cache-Control', 'public, max-age=3600')
-      .send(`export const TILE_URL = ${JSON.stringify(tileUrl)};\nexport const TILE_ATTRIBUTION = ${JSON.stringify(tileAttribution)};\n`);
+      .send(`window.GLIDE_PATH_TILES = ${JSON.stringify({ url: tileUrl, attribution: tileAttribution })};\n`);
   });
 
   app.use('/vendor/leaflet', express.static(LEAFLET_DIR, { maxAge: '7d' }));
