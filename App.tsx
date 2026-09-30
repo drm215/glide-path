@@ -299,7 +299,7 @@ export default function App() {
   const [throwType, setThrowType] = useState<ThrowType>('Drive');
   const [loggingThrow, setLoggingThrow] = useState(false);
   const [roundMessage, setRoundMessage] = useState('');
-  const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; feet: number } | null>(null);
+  const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; feet: number } | null>(null);
   const [logStep, setLogStep] = useState<1 | 2 | 3 | 4>(1);
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
   const [loaded, setLoaded] = useState(false);
@@ -617,6 +617,13 @@ export default function App() {
     : 52;
   const editorHoleDistance = holeDistanceFeet(editorHoleLayout);
   const selectedHoleDistance = holeDistanceFeet(selectedHoleLayout);
+  // From the last logged lie on this hole to the basket, once the hole is under way and not finished.
+  const lastLie = shots.filter((shot) => shot.hole === hole).findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
+  const holeBasket = selectedHoleLayout?.basket;
+  const lieToBasket = lastLie && holeBasket && lastLie.lie !== 'Basket' ? {
+    feet: Math.round(feetBetween({ latitude: lastLie.latitude!, longitude: lastLie.longitude! }, holeBasket)),
+    elevation: typeof lastLie.altitude === 'number' && typeof holeBasket.altitude === 'number' ? Math.round((holeBasket.altitude - lastLie.altitude) / 0.3048) : null,
+  } : null;
   const mappedShots = activeShots.flatMap((shot, index) =>
     shot.latitude !== undefined && shot.longitude !== undefined ? [{ index, coordinate: { latitude: shot.latitude, longitude: shot.longitude } }] : []);
   const lastMappedShot = mappedShots.at(-1);
@@ -758,10 +765,11 @@ export default function App() {
       }
       const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: true });
       const lie = { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
+      const altitude = fix.coords.altitude;
       const previousShot = activeShots.findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
       const previous = previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee;
       const feet = previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0;
-      setPendingLie({ ...lie, feet });
+      setPendingLie({ ...lie, altitude, feet });
       if (!disc && bag.length) setDisc(bag[0]);
       setLogStep(1);
       setRoundMessage('');
@@ -776,7 +784,7 @@ export default function App() {
 
   const saveThrow = (quality: number, lie: Lie = throwLie) => {
     if (!pendingLie) return;
-    let { latitude, longitude, feet } = pendingLie;
+    let { latitude, longitude, altitude, feet } = pendingLie;
     // A throw that went in is recorded at the basket, measured from the previous lie (or the tee),
     // rather than wherever the player was standing when they logged it.
     const basket = selectedHoleLayout?.basket;
@@ -785,9 +793,10 @@ export default function App() {
       const previous = previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee;
       latitude = basket.latitude;
       longitude = basket.longitude;
+      altitude = basket.altitude ?? null;
       feet = previous ? Math.max(1, Math.round(feetBetween(previous, basket))) : 0;
     }
-    setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, lie, quality, qualityMax: QUALITY_MAX }]);
+    setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, altitude, lie, quality, qualityMax: QUALITY_MAX }]);
     setThrowType(throwType === 'Putt' ? 'Putt' : 'Approach');
     setPendingLie(null);
     if (lie !== 'Basket') return;
@@ -1460,11 +1469,11 @@ export default function App() {
           </Pressable>
         </View>
 
-        <View style={styles.pageHeading}>
-          <View>
-            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Round' ? 'ON THE COURSE' : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
-            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Round' ? 'Keep the line.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
-          </View>
+        <View style={[styles.pageHeading, screen === 'Round' && styles.pageHeadingCompact]}>
+          {screen !== 'Round' && <View>
+            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
+            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
+          </View>}
           {screen !== 'Home' && (() => {
             const backToRounds = screen === 'RoundDetail' && !showingRoundSummary;
             return <Pressable onPress={() => setScreen(screen === 'HoleWizard' ? 'CourseBuilder' : backToRounds ? 'Rounds' : 'Home')} style={styles.homeButton} accessibilityLabel={screen === 'HoleWizard' ? 'Return to course builder' : backToRounds ? 'Return to rounds' : 'Return to main menu'}><Text style={styles.homeButtonText}>{screen === 'HoleWizard' ? '‹ COURSES' : backToRounds ? '‹ ROUNDS' : '⌂ MENU'}</Text></Pressable>;
@@ -1691,7 +1700,10 @@ export default function App() {
               </MapView>
               <View pointerEvents="none" style={styles.boardCaption}><Text style={styles.boardCaptionText}>{(selectedCourse?.name ?? 'PRACTICE AREA').toUpperCase()}</Text><Text style={styles.boardScale}>SATELLITE</Text></View>
             </View> : <View style={[styles.roundMapFrame, styles.mapUnavailable]}><Text style={styles.mapUnavailableTitle}>Hole not mapped yet</Text><Text style={styles.mapUnavailableText}>Map this hole in Course builder to see it on the satellite map. You can still log throws.</Text></View>}
-            {selectedHoleDistance !== null && <View style={[styles.holeDistance, styles.roundHoleDistance]}><Text style={styles.holeDistanceLabel}>TEE TO BASKET</Text><Text style={styles.holeDistanceValue}>{selectedHoleDistance} ft</Text></View>}
+            {(selectedHoleDistance !== null || lieToBasket) && <View style={[styles.holeDistance, styles.roundHoleDistance, styles.basketDistances]}>
+              {selectedHoleDistance !== null && <View style={styles.basketDistanceRow}><Text style={styles.holeDistanceLabel}>TEE TO BASKET</Text><Text style={styles.holeDistanceValue}>{selectedHoleDistance} ft{holeElevationFeet(selectedHoleLayout) === null ? '' : `  ${formatElevation(holeElevationFeet(selectedHoleLayout)!)}`}</Text></View>}
+              {lieToBasket && <View style={styles.basketDistanceRow}><Text style={styles.holeDistanceLabel}>YOUR LIE TO BASKET</Text><Text style={styles.holeDistanceValue}>{lieToBasket.feet} ft{lieToBasket.elevation === null ? '' : `  ${formatElevation(lieToBasket.elevation)}`}</Text></View>}
+            </View>}
 
             <Pressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then tap</Text></Pressable>
             {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
@@ -2028,6 +2040,7 @@ const styles = StyleSheet.create({
   accountStatus: { color: INK, fontFamily: 'Georgia', fontSize: 17, marginTop: 6, marginBottom: 4 },
   serverNote: { color: '#a5aa9c', fontSize: 7, fontWeight: '700', letterSpacing: 0.6, marginTop: 24, textAlign: 'center' },
   backLink: { alignSelf: 'flex-start', paddingVertical: 6, marginBottom: 8 },
+  pageHeadingCompact: { marginTop: 4, marginBottom: 0, justifyContent: 'flex-end' },
   pageHeading: { marginHorizontal: 23, marginTop: 28, marginBottom: 19, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   eyebrow: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 },
   title: { color: INK, fontFamily: 'Georgia', fontSize: 30, marginTop: 5 },
@@ -2216,6 +2229,8 @@ const styles = StyleSheet.create({
   boardCaption: { position: 'absolute', bottom: 11, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between' },
   boardCaptionText: { color: '#667b60', fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
   boardScale: { color: '#7c8e75', fontSize: 7, fontWeight: '700' },
+  basketDistances: { flexDirection: 'column', alignItems: 'stretch' },
+  basketDistanceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingVertical: 2 },
   roundHoleDistance: { marginTop: -5, marginBottom: 15 },
   logThrowButton: { minHeight: 64, backgroundColor: '#df8547', borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
   logThrowButtonText: { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
