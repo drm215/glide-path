@@ -21,6 +21,7 @@ export type SyncData = {
   bagWeights: Record<Disc, number>;
   bagUpdatedAt: number;
   deletedCourses: Tombstone[];
+  deletedRounds: Tombstone[];
 };
 
 type CourseRecord = {
@@ -96,6 +97,16 @@ const tombstoneToRecord = (tombstone: Tombstone): CourseRecord => ({
   published: false,
 });
 
+const roundTombstoneToRecord = (tombstone: Tombstone): RoundRecord => ({
+  clientId: tombstone.clientId,
+  updatedAt: tombstone.updatedAt,
+  deleted: true,
+  courseName: 'Deleted round',
+  mode: 'Round',
+  shots: [],
+  shared: false,
+});
+
 const roundToRecord = (session: SessionArchive): RoundRecord => ({
   clientId: session.id,
   updatedAt: editTime(session),
@@ -126,7 +137,10 @@ export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cur
     ...data.courses.filter((course) => editTime(course) > account.pushedThrough).map(courseToRecord),
     ...data.deletedCourses.map(tombstoneToRecord),
   ],
-  rounds: data.history.filter((session) => editTime(session) > account.pushedThrough).map(roundToRecord),
+  rounds: [
+    ...data.history.filter((session) => editTime(session) > account.pushedThrough).map(roundToRecord),
+    ...data.deletedRounds.map(roundTombstoneToRecord),
+  ],
   bag: data.bagUpdatedAt > account.pushedThrough
     ? { updatedAt: data.bagUpdatedAt, discs: data.bag, details: data.bagDetails, weights: bagWeightsToSend(data.bag, data.bagWeights) }
     : undefined,
@@ -135,6 +149,7 @@ export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cur
 export const countPendingChanges = (data: SyncData, pushedThrough: number) =>
   data.courses.filter((course) => editTime(course) > pushedThrough).length
   + data.deletedCourses.length
+  + data.deletedRounds.length
   + data.history.filter((session) => editTime(session) > pushedThrough).length
   + (data.bagUpdatedAt > pushedThrough ? 1 : 0);
 
@@ -205,5 +220,5 @@ export const mergeRounds = (current: SessionArchive[], remote: RoundRecord[]): S
 };
 
 // Deletions that were part of this upload no longer need remembering; later ones stay pending.
-export const clearSentTombstones = (current: Tombstone[], sent: CourseRecord[]) =>
+export const clearSentTombstones = (current: Tombstone[], sent: { clientId: string; updatedAt: number; deleted?: boolean }[]) =>
   current.filter((tombstone) => !sent.some((record) => record.deleted && record.clientId === tombstone.clientId && record.updatedAt === tombstone.updatedAt));

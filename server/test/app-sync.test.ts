@@ -8,7 +8,7 @@ import { startTestServer } from './helpers.ts';
 type Server = Awaited<ReturnType<typeof startTestServer>>;
 type Device = { data: SyncData; account: SyncAccount };
 
-const emptyData = (): SyncData => ({ courses: [], history: [], bag: [], bagDetails: {}, bagWeights: {}, bagUpdatedAt: 0, deletedCourses: [] });
+const emptyData = (): SyncData => ({ courses: [], history: [], bag: [], bagDetails: {}, bagWeights: {}, bagUpdatedAt: 0, deletedCourses: [], deletedRounds: [] });
 
 // A logical clock keeps edit times strictly increasing without depending on real time.
 let clock = 1_000;
@@ -26,6 +26,7 @@ const syncDevice = async (server: Server, device: Device) => {
     courses: mergeCourses(device.data.courses, result.courses),
     history: mergeRounds(device.data.history, result.rounds),
     deletedCourses: clearSentTombstones(device.data.deletedCourses, body.courses),
+    deletedRounds: clearSentTombstones(device.data.deletedRounds, body.rounds),
     ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagWeights: result.bag.weights ?? {}, bagUpdatedAt: result.bag.updatedAt } : {}),
   };
   device.account = { ...device.account, cursor: result.cursor, pushedThrough: startedAt };
@@ -146,6 +147,29 @@ describe('app sync against the API', () => {
 
     // Once stamped, the stored time is kept on later launches.
     assert.equal(initialBagUpdatedAt(phone.data.bagUpdatedAt, 2, tick()), phone.data.bagUpdatedAt);
+  });
+
+  test('a deleted round disappears from other devices and its share link stops working', async () => {
+    const token = await server.register('delete-round@example.com');
+    const phone = newDevice(token, { ...emptyData(), history: [session('round-1', { shared: true, updatedAt: tick() }), session('round-2', { updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const shareToken = phone.data.history.find((item) => item.id === 'round-1')!.shareToken;
+    assert.equal((await server.request('GET', `/r/${shareToken}`)).status, 200);
+
+    const tablet = newDevice(token);
+    await syncDevice(server, tablet);
+    assert.equal(tablet.data.history.length, 2);
+
+    // The phone deletes round-1 the way the app does: drop it and remember the deletion.
+    phone.data.history = phone.data.history.filter((item) => item.id !== 'round-1');
+    phone.data.deletedRounds = [{ clientId: 'round-1', updatedAt: tick() }];
+    assert.equal(countPendingChanges(phone.data, phone.account.pushedThrough), 1);
+    await syncDevice(server, phone);
+    assert.equal(phone.data.deletedRounds.length, 0, 'sent deletions are forgotten');
+
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.history.map((item) => item.id), ['round-2']);
+    assert.equal((await server.request('GET', `/r/${shareToken}`)).status, 404);
   });
 
   test('the newer edit wins when both devices change the same course offline', async () => {

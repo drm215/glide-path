@@ -306,6 +306,7 @@ export default function App() {
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const [bagUpdatedAt, setBagUpdatedAt] = useState(0);
   const [deletedCourses, setDeletedCourses] = useState<Tombstone[]>([]);
+  const [deletedRounds, setDeletedRounds] = useState<Tombstone[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
   const [authMode, setAuthMode] = useState<'signIn' | 'register'>('signIn');
@@ -393,8 +394,9 @@ export default function App() {
         if (bagWeightsValue) setBagWeights(JSON.parse(bagWeightsValue) as Record<Disc, number>);
         if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
         if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
-        const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] } : {};
+        const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } : {};
         setDeletedCourses(meta.deletedCourses ?? []);
+        setDeletedRounds(meta.deletedRounds ?? []);
         const savedBagCount = bagValue ? (JSON.parse(bagValue) as Disc[]).filter((item) => !LEGACY_DEFAULT_DISCS.includes(item)).length : 0;
         setBagUpdatedAt(initialBagUpdatedAt(meta.bagUpdatedAt, savedBagCount, nowMs()));
       })
@@ -440,11 +442,11 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify({ bagUpdatedAt, deletedCourses })).catch(() => undefined);
-  }, [bagUpdatedAt, deletedCourses, loaded]);
+    AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify({ bagUpdatedAt, deletedCourses, deletedRounds })).catch(() => undefined);
+  }, [bagUpdatedAt, deletedCourses, deletedRounds, loaded]);
 
   // Sync runs from timers and app-state events, so it reads the latest values from here.
-  const syncData: SyncData = { courses, history, bag, bagDetails, bagWeights, bagUpdatedAt, deletedCourses };
+  const syncData: SyncData = { courses, history, bag, bagDetails, bagWeights, bagUpdatedAt, deletedCourses, deletedRounds };
   const latestSync = useRef({ data: syncData, account });
   useEffect(() => {
     latestSync.current = { data: syncData, account };
@@ -468,6 +470,7 @@ export default function App() {
       setCourses((local) => mergeCourses(local, result.courses));
       setHistory((local) => mergeRounds(local, result.rounds));
       setDeletedCourses((local) => clearSentTombstones(local, body.courses));
+      setDeletedRounds((local) => clearSentTombstones(local, body.rounds));
       if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
         setBag(result.bag.discs);
         setBagDetails(result.bag.details);
@@ -512,7 +515,7 @@ export default function App() {
     if (!loaded || !account || !pendingChanges) return;
     const timer = setTimeout(() => runSyncRef.current(), SYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, bagWeights, deletedCourses]);
+  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, bagWeights, deletedCourses, deletedRounds]);
 
   // User edits to courses go through here so each changed course gets a fresh edit time for sync.
   const updateCourses = (updater: (current: Course[]) => Course[]) => {
@@ -830,6 +833,45 @@ export default function App() {
     setSessionActive(false);
     setResumedFrom(null);
     return id;
+  };
+
+  const deleteRound = (session: SessionArchive) => {
+    const kind = session.mode === 'Round' ? 'round' : 'practice session';
+    Alert.alert(
+      `Delete this ${kind}?`,
+      `${session.courseName}, ${formatSessionDate(session)}. Its score and every throw will be permanently deleted${account ? ' from this phone, your other devices and the website' : ''}.${session.shared ? ' Its share link will stop working.' : ''}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: `Delete ${kind}`,
+          style: 'destructive',
+          onPress: () => {
+            setHistory((current) => current.filter((item) => item.id !== session.id));
+            setDeletedRounds((current) => [...current, { clientId: session.id, updatedAt: nowMs() }]);
+            if (viewedSessionId === session.id) {
+              setViewedSessionId(null);
+              setScreen('Rounds');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const undoLastThrow = () => {
+    const last = activeShots.at(-1);
+    if (!last) return;
+    Alert.alert('Undo the last throw?', `Throw ${activeShots.length} on hole ${hole} (${formatThrowDetail(last)}) will be removed.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Undo throw',
+        style: 'destructive',
+        onPress: () => setShots((current) => {
+          const lastActiveIndex = current.findLastIndex((shot) => shot.hole === hole);
+          return current.filter((_, index) => index !== lastActiveIndex);
+        }),
+      },
+    ]);
   };
 
   // Reopens a past round as the round in progress, at its last unfinished hole.
@@ -1656,7 +1698,7 @@ export default function App() {
 
             <View style={styles.latestRow}>
               <View><Text style={styles.latestEyebrow}>LATEST THROW</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', `${latestShot.disc || 'No disc'} ${latestShot.type.toLowerCase()}`, formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></View>
-              {activeShots.length > 0 && <Pressable accessibilityLabel="Undo last throw" onPress={() => setShots((current) => { const lastActiveIndex = current.findLastIndex((shot) => shot.hole === hole); return current.filter((_, index) => index !== lastActiveIndex); })} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></Pressable>}
+              {activeShots.length > 0 && <Pressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></Pressable>}
             </View>
             <Pressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></Pressable>
             <Pressable onPress={endSession} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></Pressable>
@@ -1776,11 +1818,14 @@ export default function App() {
         ) : screen === 'Rounds' ? (
           <ScrollView contentContainerStyle={styles.content}>
             {!pastSessions.length && <View style={styles.menuIntro}><Text style={styles.menuIntroLabel}>NO ROUNDS YET</Text><Text style={styles.menuIntroCopy}>Finished rounds and practice sessions appear here. Use End round when you finish playing.</Text></View>}
-            {pastSessions.map((session) => <Pressable key={session.id} onPress={() => { setViewedSessionId(session.id); setExpandedHole(null); setShowingRoundSummary(false); setScreen('RoundDetail'); }} style={styles.courseItem} accessibilityRole="button">
-              <View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{session.courseName}</Text><Text style={styles.courseItemMeta}>{formatSessionDate(session)} · {sessionSummary(session)}</Text></View>
-              {session.mode === 'Practice' && <Text style={styles.sessionModeTag}>PRACTICE</Text>}
-              <Text style={styles.menuArrow}>›</Text>
-            </Pressable>)}
+            {pastSessions.map((session) => <View key={session.id} style={styles.courseItem}>
+              <Pressable onPress={() => { setViewedSessionId(session.id); setExpandedHole(null); setShowingRoundSummary(false); setScreen('RoundDetail'); }} style={styles.courseItemSelect} accessibilityRole="button">
+                <View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{session.courseName}</Text><Text style={styles.courseItemMeta}>{formatSessionDate(session)} · {sessionSummary(session)}</Text></View>
+                {session.mode === 'Practice' && <Text style={styles.sessionModeTag}>PRACTICE</Text>}
+                <Text style={styles.menuArrow}>›</Text>
+              </Pressable>
+              <Pressable onPress={() => deleteRound(session)} style={styles.deleteButton} accessibilityRole="button" accessibilityLabel={`Delete ${session.courseName} ${session.mode === 'Round' ? 'round' : 'practice session'} from ${formatSessionDate(session)}`}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable>
+            </View>)}
           </ScrollView>
         ) : screen === 'RoundDetail' ? (
           <ScrollView ref={roundDetailScrollRef} contentContainerStyle={styles.content}>
@@ -1845,6 +1890,7 @@ export default function App() {
                 </Pressable>)}
               </View>)}
               {showingRoundSummary && <Pressable onPress={() => setScreen('Home')} style={styles.finishButton}><Text style={styles.finishButtonText}>DONE</Text></Pressable>}
+              <Pressable onPress={() => deleteRound(viewedSession)} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>DELETE {viewedSession.mode === 'Round' ? 'ROUND' : 'SESSION'}</Text></Pressable>
             </>}
           </ScrollView>
         ) : screen === 'Insights' ? (
