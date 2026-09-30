@@ -164,6 +164,7 @@ export const renderRoundPage = (round: {
   }).join('')}</tbody>
   <tfoot><tr><td>TOTAL</td><td>${withPar.length ? parTotal : '—'}</td><td>${total}</td><td class="${toPar === null ? '' : diffClass(toPar)}">${toPar === null ? '—' : formatToPar(toPar)}</td></tr></tfoot>
 </table>
+<div id="round-summary"></div>
 <h2>Throw by throw</h2>
 ${holes.map((item) => `<h3>Hole ${String(item.hole).padStart(2, '0')}</h3><ol class="throws">${item.shots.map((shot) => `<li>${escapeHtml(throwDetail(shot))}</li>`).join('')}</ol>`).join('')}`;
   return renderShell({

@@ -34,7 +34,7 @@ describe('website', () => {
 
   test('serves the scripts, map settings, and Leaflet, compressed', async () => {
     const base = server.baseUrl;
-    for (const path of ['/js/lib.js', '/js/home.js', '/js/course.js', '/js/round.js', '/js/account.js', '/styles.css', '/vendor/leaflet/leaflet.css']) {
+    for (const path of ['/js/lib.js', '/js/home.js', '/js/course.js', '/js/round.js', '/js/account.js', '/js/summary.js', '/js/round-stats.js', '/styles.css', '/vendor/leaflet/leaflet.css']) {
       assert.equal((await fetch(`${base}${path}`)).status, 200, path);
     }
     const config = await (await fetch(`${base}/js/config.js`)).text();
@@ -95,5 +95,6 @@ describe('website', () => {
     assert.doesNotMatch(page.body, /<\/script><script>alert/);
     assert.equal(pageData(page.body).shots[0].disc, hostile, 'embedded data round-trips exactly');
     assert.match(page.body, /property="og:description" content="Scored 1 on/);
+    assert.match(page.body, /<div id="round-summary"><\/div>/, 'slot for the round summary');
   });
 });

@@ -1,3 +1,4 @@
+import { renderRoundSummary } from './summary.js';
 import { $, TOKEN_KEY, api, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -112,6 +113,7 @@ const renderRound = (round) => {
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard to see where each throw landed.'),
     table,
+    renderRoundSummary(round.shots),
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`), el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot))))]),
   );
