@@ -14,9 +14,9 @@ const breakdownTable = (heading, rows) => el('table', { class: 'summary-table' }
 const statTile = (label, value, note) => el('div', { class: 'stat' },
   el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
 
-export const renderRoundSummary = (shots) => {
+export const renderRoundSummary = (shots, layouts = []) => {
   if (!shots.length) return null;
-  const summary = summarizeRound(shots);
+  const summary = summarizeRound(shots, layouts);
   const { putting } = summary;
   return el('section', { class: 'round-summary', 'aria-labelledby': 'summary-heading' },
     el('h2', { id: 'summary-heading' }, 'Round summary'),
@@ -27,9 +27,15 @@ export const renderRoundSummary = (shots) => {
       statTile('AVG QUALITY', qualityText(summary.averageQuality), summary.qualities.length ? null : 'Not rated')),
     el('h3', {}, 'By throw type'),
     breakdownTable('TYPE', summary.byType),
-    putting ? el('p', { class: 'meta' },
-      el('strong', {}, `Putting: ${putting.made} of ${putting.attempts} made (${Math.round((putting.made / putting.attempts) * 100)}%)`),
-      [putting.hit ? ` · ${putting.hit} hit the basket` : '', putting.missed ? ` · ${putting.missed} missed` : ''].join('')) : null,
+    putting ? [
+      el('h3', {}, 'Putting'),
+      el('div', { class: 'stats' },
+        statTile('FIRST-PUTT MAKES', `${Math.round((putting.firstPutts.made / putting.firstPutts.attempts) * 100)}%`, `${putting.firstPutts.made} of ${putting.firstPutts.attempts} holes`),
+        statTile('AVG FIRST PUTT', feet(putting.firstPutts.averageFeet),
+          putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'),
+        statTile('ALL PUTTS', `${Math.round((putting.made / putting.attempts) * 100)}%`, `${putting.made} of ${putting.attempts} made`)),
+      putting.hit || putting.missed ? el('p', { class: 'meta' }, [putting.hit ? `${putting.hit} hit the basket` : '', putting.missed ? `${putting.missed} missed` : ''].filter(Boolean).join(' · ')) : null,
+    ] : null,
     el('h3', {}, 'By disc'),
     breakdownTable('DISC', summary.byDisc),
     summary.landings.length ? [el('h3', {}, 'Where throws landed'), el('div', { class: 'chips' }, summary.landings.map((item) => el('span', { class: 'chip' }, `${item.lie === 'Basket' ? 'In the basket' : item.lie} · ${item.count}`)))] : null,

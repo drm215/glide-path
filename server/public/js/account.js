@@ -113,7 +113,7 @@ const renderRound = (round) => {
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard to see where each throw landed.'),
     table,
-    renderRoundSummary(round.shots),
+    renderRoundSummary(round.shots, layout?.layouts ?? []),
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`), el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot))))]),
   );

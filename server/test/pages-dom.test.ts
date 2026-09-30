@@ -99,7 +99,8 @@ describe('website pages in a browser', () => {
     assert.match(text, /300 ft · Destroyer drive · fairway · 3\/3/);
     assert.equal(view.querySelectorAll('ol.throws li').length, 4);
     assert.match(text, /Round summary/);
-    assert.match(text, /Putting: 1 of 2 made \(50%\)/);
+    assert.match(text, /FIRST-PUTT MAKES50%1 of 2 holes/);
+    assert.match(text, /ALL PUTTS50%1 of 2 made/);
     // Score: hole 1 = 2 strokes (par 3), hole 2 = 2 throws + 1 OB penalty (par 4).
     assert.match(view.querySelector('.score')!.textContent ?? '', /5-2/);
   });

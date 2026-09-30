@@ -32,10 +32,38 @@ const groupBy = (shots, key) => {
 // Drive, Approach, Putt first, in playing order; anything else after.
 const typeRank = (type) => (TYPE_ORDER.includes(type) ? TYPE_ORDER.indexOf(type) : TYPE_ORDER.length);
 
-export const summarizeRound = (shots) => {
+const EARTH_RADIUS_FEET = 20_902_231;
+const feetBetween = (a, b) => {
+  const rad = (degrees) => (degrees * Math.PI) / 180;
+  const h = Math.sin(rad(b.latitude - a.latitude) / 2) ** 2
+    + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(rad(b.longitude - a.longitude) / 2) ** 2;
+  return 2 * EARTH_RADIUS_FEET * Math.asin(Math.sqrt(h));
+};
+
+const hasPosition = (shot) => shot.latitude !== undefined && shot.longitude !== undefined;
+
+// The first putt on each hole, and how far it was from the basket: measured from where it was
+// thrown (the last positioned throw before it, or the tee) to the mapped basket. A throw's own
+// distance is how far the disc travelled, which only equals the putt's length when it went in.
+const firstPutts = (shots, layouts) => [...new Set(shots.map((shot) => shot.hole))].flatMap((hole) => {
+  const holeShots = shots.filter((shot) => shot.hole === hole);
+  const index = holeShots.findIndex((shot) => shot.type === 'Putt');
+  if (index < 0) return [];
+  const putt = holeShots[index];
+  const layout = layouts[hole - 1];
+  const from = holeShots.slice(0, index).reverse().find(hasPosition) ?? layout?.tee;
+  const made = putt.lie === 'Basket';
+  const feet = from && layout?.basket ? Math.round(feetBetween(from, layout.basket)) : made && putt.feet > 0 ? putt.feet : null;
+  return [{ made, feet }];
+});
+
+// `layouts` are the hole layouts the round was played on, for first-putt distances; optional.
+export const summarizeRound = (shots, layouts = []) => {
   const distances = measured(shots);
   const longest = distances.reduce((best, shot) => (!best || shot.feet > best.feet ? shot : best), null);
   const putts = shots.filter((shot) => shot.type === 'Putt');
+  const firsts = firstPutts(shots, layouts);
+  const firstDistances = firsts.map((item) => item.feet).filter((feet) => feet !== null);
   return {
     count: shots.length,
     penalties: shots.filter((shot) => shot.lie === 'OB').length,
@@ -50,6 +78,12 @@ export const summarizeRound = (shots) => {
       made: putts.filter((shot) => shot.lie === 'Basket').length,
       hit: putts.filter((shot) => shot.lie === 'Hit basket').length,
       missed: putts.filter((shot) => shot.lie === 'Missed').length,
+      firstPutts: {
+        attempts: firsts.length,
+        made: firsts.filter((item) => item.made).length,
+        averageFeet: average(firstDistances),
+        measured: firstDistances.length,
+      },
     } : null,
     landings: LANDING_ORDER.map((lie) => ({ lie, count: shots.filter((shot) => shot.lie === lie).length })).filter((item) => item.count),
     qualities: [3, 2, 1].map((value) => ({ label: QUALITY_LABELS[value], count: shots.filter((shot) => quality(shot) === value).length })).filter((item) => item.count),
