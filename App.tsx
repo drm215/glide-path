@@ -33,6 +33,7 @@ import {
   type PublicCourse,
   type PublicCourseSummary,
 } from './lib/api';
+import { placeMadeThrowsAtBasket, remeasureHole } from './lib/rounds';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
 import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
@@ -52,6 +53,8 @@ const COURSES_KEY = 'flight-notes-courses-v1';
 const BAG_KEY = 'flight-notes-bag-v1';
 const BAG_DETAILS_KEY = 'flight-notes-bag-details-v1';
 const BAG_WEIGHTS_KEY = 'flight-notes-bag-weights-v1';
+// One-time data fixes that have already run on this device.
+const MIGRATIONS_KEY = 'flight-notes-migrations-v1';
 // Sync account (without its token) and pending sync bookkeeping.
 const SYNC_KEY = 'flight-notes-sync-v1';
 const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
@@ -189,19 +192,6 @@ const feetBetween = (a: Pick<GpsPoint, 'latitude' | 'longitude'>, b: Pick<GpsPoi
   const dLon = toRadians(b.longitude - a.longitude);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(a.latitude)) * Math.cos(toRadians(b.latitude)) * Math.sin(dLon / 2) ** 2;
   return (2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(h))) / 0.3048;
-};
-
-// Throw distances are measured from the previous logged lie (or the tee), so removing a throw
-// changes the distance of the one after it.
-const recomputeHoleFeet = (list: Shot[], holeNumber: number, tee: GpsPoint | null | undefined) => {
-  let previous: { latitude: number; longitude: number } | null = tee ?? null;
-  return list.map((shot) => {
-    if (shot.hole !== holeNumber || shot.latitude === undefined || shot.longitude === undefined) return shot;
-    const point = { latitude: shot.latitude, longitude: shot.longitude };
-    const feet = previous ? Math.max(1, Math.round(feetBetween(previous, point))) : 0;
-    previous = point;
-    return feet === shot.feet ? shot : { ...shot, feet };
-  });
 };
 
 const holeDistanceFeet = (layout: HoleLayout | undefined) =>
@@ -348,16 +338,31 @@ export default function App() {
       AsyncStorage.getItem(SYNC_KEY),
       AsyncStorage.getItem(SYNC_META_KEY),
       SecureStore.getItemAsync(TOKEN_KEY).catch(() => null),
+      AsyncStorage.getItem(MIGRATIONS_KEY),
     ])
-      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, bagWeightsValue, syncValue, syncMetaValue, token]) => {
+      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, bagWeightsValue, syncValue, syncMetaValue, token, migrationsValue]) => {
+        // One-time fix: throws that went in were once recorded where the player stood; move them
+        // to the basket. Fixed past rounds get a fresh edit time so the fix syncs everywhere.
+        const migrations = migrationsValue ? JSON.parse(migrationsValue) as Record<string, boolean> : {};
+        const fixMadeThrows = !migrations.madeThrowsAtBasket;
+        const storedCourses = coursesValue ? JSON.parse(coursesValue) as Course[] : [];
+        const layoutsFor = (courseId: string | undefined, layoutId: string | undefined) => {
+          const course = storedCourses.find((item) => item.id === courseId);
+          return course ? withExistingLayout(course, layoutId)?.layouts : undefined;
+        };
+        const fixSession = (session: SessionArchive): SessionArchive => {
+          const fixed = placeMadeThrowsAtBasket(session.shots, layoutsFor(session.courseId, session.layoutId));
+          return fixed === session.shots ? session : { ...session, shots: fixed, updatedAt: nowMs() };
+        };
         if (roundValue) {
           const saved = JSON.parse(roundValue) as SavedRound;
-          setShots(saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId })));
+          const activeShots = saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId }));
+          setShots(fixMadeThrows ? placeMadeThrowsAtBasket(activeShots, layoutsFor(saved.courseId, saved.layoutId)) : activeShots);
           setHole(saved.hole);
           setMode(saved.mode);
           setSelectedLayoutId(saved.layoutId ?? MAIN_LAYOUT_ID);
           setResumedFrom(saved.resumedFrom ?? null);
-          setHistory(saved.history ?? []);
+          setHistory(fixMadeThrows ? (saved.history ?? []).map(fixSession) : saved.history ?? []);
           // Rounds saved before `active` existed count as in progress if they have throws.
           setSessionActive(saved.active ?? saved.shots.length > 0);
           if (saved.practiceFocus) setPracticeFocus(saved.practiceFocus);
@@ -386,6 +391,7 @@ export default function App() {
         }
         if (bagDetailsValue) setBagDetails(JSON.parse(bagDetailsValue) as Record<Disc, DiscInfo>);
         if (bagWeightsValue) setBagWeights(JSON.parse(bagWeightsValue) as Record<Disc, number>);
+        if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
         if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
         const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[] } : {};
         setDeletedCourses(meta.deletedCourses ?? []);
@@ -1034,7 +1040,7 @@ export default function App() {
           ...(moveToBasket ? { latitude: layout.basket!.latitude, longitude: layout.basket!.longitude } : {}),
         }
         : shot));
-      return moveToBasket && editingShot ? recomputeHoleFeet(edited, editingShot.hole, layout?.tee) : edited;
+      return moveToBasket && editingShot ? remeasureHole(edited, editingShot.hole, layout?.tee) : edited;
     });
     setEditingThrow(null);
   };
@@ -1054,7 +1060,7 @@ export default function App() {
         text: 'Delete throw',
         style: 'destructive',
         onPress: () => {
-          updateSessionShots(sessionId, (list) => recomputeHoleFeet(list.filter((_, position) => position !== index), holeNumber, tee));
+          updateSessionShots(sessionId, (list) => remeasureHole(list.filter((_, position) => position !== index), holeNumber, tee));
           setEditingThrow(null);
         },
       },
