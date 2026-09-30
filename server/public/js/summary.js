@@ -11,6 +11,8 @@ const breakdownTable = (heading, rows) => el('table', { class: 'summary-table' }
   el('tbody', {}, rows.map((row) => el('tr', {},
     el('td', {}, row.label), el('td', {}, row.count), el('td', {}, feet(row.averageFeet)), el('td', {}, feet(row.longestFeet)), el('td', {}, qualityText(row.averageQuality))))));
 
+const percent = (count, total) => `${Math.round((count / total) * 100)}%`;
+
 const statTile = (label, value, note) => el('div', { class: 'stat' },
   el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
 
@@ -35,6 +37,18 @@ export const renderRoundSummary = (shots, layouts = []) => {
           putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'),
         statTile('ALL PUTTS', `${Math.round((putting.made / putting.attempts) * 100)}%`, `${putting.made} of ${putting.attempts} made`)),
       putting.hit || putting.missed ? el('p', { class: 'meta' }, [putting.hit ? `${putting.hit} hit the basket` : '', putting.missed ? `${putting.missed} missed` : ''].filter(Boolean).join(' · ')) : null,
+    ] : null,
+    summary.driveCircles.drives ? [
+      el('h3', {}, 'Drives in the circles'),
+      summary.driveCircles.measured ? [
+        el('div', { class: 'stats' },
+          statTile('IN C1', percent(summary.driveCircles.c1, summary.driveCircles.measured), `${summary.driveCircles.c1} of ${summary.driveCircles.measured} · within 33 ft (10 m)`),
+          statTile('IN C2', percent(summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c2} of ${summary.driveCircles.measured} · 33–66 ft (10–20 m)`),
+          statTile('INSIDE C2', percent(summary.driveCircles.c1 + summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c1 + summary.driveCircles.c2} of ${summary.driveCircles.measured} · within 66 ft`)),
+        summary.driveCircles.measured < summary.driveCircles.drives
+          ? el('p', { class: 'meta' }, `${summary.driveCircles.measured} of ${summary.driveCircles.drives} drives could be measured; the rest have no logged position or no mapped basket.`)
+          : null,
+      ] : el('p', { class: 'meta' }, 'Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in this round has both.'),
     ] : null,
     el('h3', {}, 'By disc'),
     breakdownTable('DISC', summary.byDisc),

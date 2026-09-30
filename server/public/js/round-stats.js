@@ -57,7 +57,30 @@ const firstPutts = (shots, layouts) => [...new Set(shots.map((shot) => shot.hole
   return [{ made, feet }];
 });
 
-// `layouts` are the hole layouts the round was played on, for first-putt distances; optional.
+// Circles around the basket: C1 is within 10 m, C2 is from 10 m to 20 m.
+export const C1_FEET = 10 / 0.3048;
+export const C2_FEET = 20 / 0.3048;
+
+// Where each drive stopped relative to the basket. Only drives with a logged position on a hole
+// with a mapped basket can be measured; an OB drive is measured but isn't in play, so no circle.
+const driveCircles = (shots, layouts) => {
+  let measuredCount = 0;
+  let c1 = 0;
+  let c2 = 0;
+  for (const shot of shots) {
+    const basket = layouts[shot.hole - 1]?.basket;
+    if (shot.type !== 'Drive' || !basket || (!hasPosition(shot) && shot.lie !== 'Basket')) continue;
+    measuredCount += 1;
+    if (shot.lie === 'OB') continue;
+    const feet = shot.lie === 'Basket' ? 0 : feetBetween(shot, basket);
+    if (feet <= C1_FEET) c1 += 1;
+    else if (feet <= C2_FEET) c2 += 1;
+  }
+  return { drives: shots.filter((shot) => shot.type === 'Drive').length, measured: measuredCount, c1, c2 };
+};
+
+// `layouts` are the hole layouts the round was played on, for first-putt distances and drive
+// circles; optional.
 export const summarizeRound = (shots, layouts = []) => {
   const distances = measured(shots);
   const longest = distances.reduce((best, shot) => (!best || shot.feet > best.feet ? shot : best), null);
@@ -85,6 +108,7 @@ export const summarizeRound = (shots, layouts = []) => {
         measured: firstDistances.length,
       },
     } : null,
+    driveCircles: driveCircles(shots, layouts),
     landings: LANDING_ORDER.map((lie) => ({ lie, count: shots.filter((shot) => shot.lie === lie).length })).filter((item) => item.count),
     qualities: [3, 2, 1].map((value) => ({ label: QUALITY_LABELS[value], count: shots.filter((shot) => quality(shot) === value).length })).filter((item) => item.count),
   };

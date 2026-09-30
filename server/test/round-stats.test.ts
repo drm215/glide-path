@@ -81,6 +81,27 @@ describe('summarizeRound', () => {
     assert.deepEqual([putting.attempts, putting.made], [4, 3]);
   });
 
+  test('drives in C1 and C2, measured from the landing spot to the basket', () => {
+    const at = (latitude: number) => ({ latitude, longitude: -75 });
+    const foot = 1 / 364_000; // about one foot of latitude, in degrees
+    const holes = [1, 2, 3, 4, 5, 6].map((hole) => ({ tee: at(40 + hole), basket: at(40 + hole + 0.001) }));
+    holes.push({ tee: at(47), basket: null as unknown as ReturnType<typeof at> });
+    const drive = (hole: number, feetShort: number | null, lie = 'Fairway') => ({
+      hole, type: 'Drive', disc: 'D', feet: 300, lie, ...(feetShort === null ? {} : at(40 + hole + 0.001 - feetShort * foot)),
+    });
+    const { driveCircles } = summarizeRound([
+      drive(1, 20), // C1
+      drive(2, 32), // C1 (just inside 32.8 ft)
+      drive(3, 50), // C2
+      drive(4, 90), // outside
+      drive(5, 10, 'OB'), // close, but out of bounds
+      { hole: 6, type: 'Drive', disc: 'D', feet: 365, lie: 'Basket' }, // ace with no logged position
+      drive(7, 5), // basket not mapped: not measurable
+      { hole: 1, type: 'Approach', disc: 'A', feet: 20, lie: 'Fairway', ...at(41.001) }, // approaches don't count
+    ], holes);
+    assert.deepEqual(driveCircles, { drives: 7, measured: 6, c1: 3, c2: 1 });
+  });
+
   test('a round without putts or ratings', () => {
     const plain = summarizeRound([shot('Drive', 'Leopard', 250, 'Fairway')]);
     assert.equal(plain.putting, null);
