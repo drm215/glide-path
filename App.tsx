@@ -1676,21 +1676,18 @@ export default function App() {
               </View>
             </View>
 
-            <View style={styles.scoreRow}>
-              <View><Text style={styles.scoreLabel}>HOLE SCORE</Text><Text style={styles.scoreValue}>{String(holeStrokes).padStart(2, '0')}</Text></View>
-              <View style={styles.scoreDivider} />
-              <View><Text style={styles.scoreLabel}>DISTANCE</Text><Text style={styles.scoreValue}>{holeFeet}<Text style={styles.scoreUnit}> ft</Text></Text></View>
-              <View style={styles.parPill}><Text style={styles.parText}>{mode === 'Practice' ? 'OPEN PLAY' : `PAR ${selectedHoleLayout?.par ?? '—'}`}</Text></View>
-            </View>
-            {mode === 'Round' && <View style={styles.roundTotals}>
-              <View style={styles.roundTotal}><Text style={styles.scoreLabel}>ROUND SCORE</Text><Text style={styles.roundTotalValue}>{roundScore.strokes}</Text></View>
-              <View style={styles.roundTotal}><Text style={styles.scoreLabel}>TO PAR</Text><Text style={styles.roundTotalValue}>{roundScore.toPar === null ? '—' : formatScoreToPar(roundScore.toPar)}</Text></View>
-              <View style={styles.roundTotal}><Text style={styles.scoreLabel}>THRU</Text><Text style={styles.roundTotalValue}>{roundScore.holesCompleted}</Text></View>
-            </View>}
-
-            <View style={styles.sectionTitleRow}>
-              <Text style={styles.sectionTitle}>Hole layout</Text>
-              <View style={styles.mapHint}><View style={styles.mapHintDot} /><Text style={styles.mapHintText}>WALK TO YOUR LIE</Text></View>
+            {/* Hole and round numbers in one slim strip; practice has no par or round score. */}
+            <View style={styles.scoreStrip}>
+              {[
+                ['HOLE', String(holeStrokes)],
+                ['DIST', `${holeFeet} ft`],
+                ...(mode === 'Round' ? [
+                  ['PAR', String(selectedHoleLayout?.par ?? '—')],
+                  ['ROUND', String(roundScore.strokes)],
+                  ['TO PAR', roundScore.toPar === null ? '—' : formatScoreToPar(roundScore.toPar)],
+                  ['THRU', String(roundScore.holesCompleted)],
+                ] : []),
+              ].map(([label, value]) => <View key={label} style={styles.scoreStripItem}><Text style={styles.scoreStripLabel}>{label}</Text><Text style={styles.scoreStripValue}>{value}</Text></View>)}
             </View>
 
             {roundMapRegion ? <View style={styles.roundMapFrame}>
@@ -2182,9 +2179,6 @@ const styles = StyleSheet.create({
   parStepValue: { width: 38, textAlign: 'center', color: INK, fontFamily: 'Georgia', fontSize: 18 },
   addHoleButton: { height: 42, marginTop: 12, borderRadius: 6, borderWidth: 1, borderColor: GREEN, alignItems: 'center', justifyContent: 'center' },
   addHoleButtonText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
-  roundTotals: { flexDirection: 'row', marginTop: -8, marginBottom: 18, paddingHorizontal: 4 },
-  roundTotal: { flex: 1 },
-  roundTotalValue: { color: INK, fontFamily: 'Georgia', fontSize: 19, marginTop: 3 },
   secondaryStart: { marginTop: 19, minHeight: 44, borderWidth: 1, borderColor: GREEN, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
   secondaryStartText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   builderFootnote: { color: '#899083', fontSize: 9, lineHeight: 14, marginTop: 11 },
@@ -2222,19 +2216,12 @@ const styles = StyleSheet.create({
   holeNumber: { color: INK, fontFamily: 'Georgia', fontSize: 20 },
   holeTotal: { color: MUTED, fontFamily: 'Arial', fontSize: 11 },
   chevron: { color: GREEN, fontFamily: 'Arial', fontSize: 12 },
-  scoreRow: { height: 82, backgroundColor: '#e9eee5', borderRadius: 10, marginTop: 11, marginBottom: 18, paddingHorizontal: 17, flexDirection: 'row', alignItems: 'center' },
-  scoreLabel: { color: MUTED, fontSize: 8, letterSpacing: 1, fontWeight: '800' },
-  scoreValue: { color: INK, fontFamily: 'Georgia', fontSize: 25, marginTop: 3 },
-  scoreUnit: { color: MUTED, fontFamily: 'Arial', fontSize: 12 },
-  scoreDivider: { height: 39, width: 1, backgroundColor: '#cfd7ca', marginHorizontal: 22 },
-  parPill: { marginLeft: 'auto', backgroundColor: '#d8e5d5', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20 },
-  parText: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
-  sectionTitleRow: { height: 27, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { color: INK, fontFamily: 'Georgia', fontSize: 18 },
-  mapHint: { flexDirection: 'row', alignItems: 'center' },
-  mapHintDot: { width: 6, height: 6, backgroundColor: '#df894c', borderRadius: 3, marginRight: 5 },
-  mapHintText: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
-  roundMapFrame: { height: 300, marginTop: 8, marginBottom: 17, borderRadius: 9, overflow: 'hidden', backgroundColor: '#dce6d5', position: 'relative' },
+  scoreStrip: { flexDirection: 'row', backgroundColor: '#e9eee5', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 4, marginTop: 6, marginBottom: 10 },
+  scoreStripItem: { flex: 1, alignItems: 'center' },
+  scoreStripLabel: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 },
+  scoreStripValue: { color: INK, fontFamily: 'Georgia', fontSize: 16, marginTop: 2, fontVariant: ['tabular-nums'] },
+  roundMapFrame: { height: 300, marginTop: 0, marginBottom: 17, borderRadius: 9, overflow: 'hidden', backgroundColor: '#dce6d5', position: 'relative' },
   shotMarker: { width: 22, height: 22, borderRadius: 12, borderWidth: 2, borderColor: '#fff', backgroundColor: '#df8547', alignItems: 'center', justifyContent: 'center' },
   shotPinText: { color: '#fff', fontSize: 9, fontWeight: '900' },
   boardCaption: { position: 'absolute', bottom: 11, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between' },
