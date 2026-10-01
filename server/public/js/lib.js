@@ -1,3 +1,5 @@
+import { quality } from './round-stats.js';
+
 // Shared helpers for the Glide Path website. Pages with maps load Leaflet as the global `L`,
 // and /js/config.js sets window.GLIDE_PATH_TILES from the server's settings.
 
@@ -121,6 +123,17 @@ export const drawHoles = (map, layouts, { only } = {}) => {
   return { group, bounds };
 };
 
+// Marker color follows the throw's quality (3 good, 2 fair, 1 poor); unrated throws keep the
+// default color, and an OB throw also gets a dark outline.
+const QUALITY_CLASSES = { 1: 'poor', 2: 'fair', 3: 'good' };
+export const throwMarkerClass = (shot) => ['throw-marker', QUALITY_CLASSES[quality(shot)], shot.lie === 'OB' ? 'ob' : null].filter(Boolean).join(' ');
+
+// The key shown under round maps.
+export const throwLegend = () => el('p', { class: 'map-legend' },
+  el('span', { class: 'legend-dot good' }), 'Good', el('span', { class: 'legend-dot fair' }), 'Fair',
+  el('span', { class: 'legend-dot poor' }), 'Poor', el('span', { class: 'legend-dot' }), 'Not rated',
+  el('span', { class: 'legend-dot ob' }), 'OB');
+
 // Numbered throw markers joined from the tee, as in the app.
 export const drawThrows = (map, shots, tee) => {
   const group = L.layerGroup();
@@ -132,7 +145,7 @@ export const drawThrows = (map, shots, tee) => {
     path.push(point);
     bounds.push(point);
     L.marker(point, {
-      icon: L.divIcon({ className: '', html: `<div class="throw-marker${shot.lie === 'OB' ? ' ob' : ''}">${index + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
+      icon: L.divIcon({ className: '', html: `<div class="${throwMarkerClass(shot)}">${index + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
       title: `Throw ${index + 1}`,
     // Disc names are user text, so the popup gets a text node rather than an HTML string.
     }).bindPopup(el('span', {}, `Throw ${index + 1}: ${throwDetail(shot)}`)).addTo(group);

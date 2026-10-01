@@ -1,5 +1,5 @@
 import { renderHistorySummary, renderRoundSummary } from './summary.js';
-import { $, TOKEN_KEY, api, setChildren, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
+import { $, TOKEN_KEY, api, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
 const signedInEl = $('#signed-in');
@@ -113,6 +113,7 @@ const renderRound = (round) => {
     round.shared && round.shareToken ? el('p', {}, el('a', { href: `/r/${encodeURIComponent(round.shareToken)}` }, 'Public share link')) : null,
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard to see where each throw landed.'),
+    throwLegend(),
     table,
     renderRoundSummary(round.shots, layout?.layouts ?? []),
     el('h2', {}, 'Throw by throw'),

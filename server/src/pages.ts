@@ -156,6 +156,7 @@ export const renderRoundPage = (round: {
 <div class="score"><span class="total">${total}</span>${toPar === null ? '' : `<span class="par ${diffClass(toPar)}">${formatToPar(toPar)}</span>`}</div>
 <div id="map" class="map" role="img" aria-label="Satellite map of the selected hole and its throws"></div>
 <p class="map-note">Tap a hole in the scorecard to see where each throw landed.</p>
+<p class="map-legend"><span class="legend-dot good"></span>Good<span class="legend-dot fair"></span>Fair<span class="legend-dot poor"></span>Poor<span class="legend-dot"></span>Not rated<span class="legend-dot ob"></span>OB</p>
 <table>
   <thead><tr><th>HOLE</th><th>PAR</th><th>SCORE</th><th>+/−</th></tr></thead>
   <tbody>${holes.map((item) => {

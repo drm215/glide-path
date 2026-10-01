@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
 import { roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
+// @ts-expect-error: plain browser JavaScript module without type declarations.
+import { throwMarkerClass } from '../public/js/lib.js';
 
 const shot = (type: string, disc: string, feet: number, lie: string, quality?: number, qualityMax = 3) => ({ hole: 1, type, disc, feet, lie, quality, qualityMax });
 
@@ -137,5 +139,15 @@ describe('summarizeRound', () => {
     assert.equal(plain.putting, null);
     assert.equal(plain.averageQuality, null);
     assert.deepEqual(plain.qualities, []);
+  });
+});
+
+describe('throw marker colors', () => {
+  test('follow quality, keep unrated throws plain, and outline OB throws', () => {
+    assert.equal(throwMarkerClass({ quality: 3, qualityMax: 3 }), 'throw-marker good');
+    assert.equal(throwMarkerClass({ quality: 2, qualityMax: 3 }), 'throw-marker fair');
+    assert.equal(throwMarkerClass({ quality: 1, qualityMax: 3, lie: 'OB' }), 'throw-marker poor ob');
+    assert.equal(throwMarkerClass({ quality: 5 }), 'throw-marker good', 'old 1-5 scale');
+    assert.equal(throwMarkerClass({ lie: 'Fairway' }), 'throw-marker');
   });
 });
