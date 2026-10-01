@@ -134,32 +134,44 @@ export const throwLegend = () => el('p', { class: 'map-legend' },
   el('span', { class: 'legend-dot poor' }), 'Poor', el('span', { class: 'legend-dot' }), 'Not rated',
   el('span', { class: 'legend-dot ob' }), 'OB');
 
-// Distance labels sit at the middle of each drive's and approach's line; putts are short and
-// bunched near the basket, so they're left unlabeled. Returns [midpoint, text] pairs.
-export const segmentLabels = (shots, tee) => {
-  const labels = [];
+// Line colors match the marker colors in styles.css; unrated throws use the default throw color.
+const QUALITY_COLORS = { good: '#2e9d5b', fair: '#e3b505', poor: '#d64541' };
+
+// Each throw's line, from where it was thrown (the previous positioned throw, or the tee) to
+// where it landed, styled like its marker: quality color, dashed when OB.
+export const throwSegments = (shots, tee) => {
+  const segments = [];
   let previous = tee ? { latitude: tee.latitude, longitude: tee.longitude } : null;
   for (const shot of shots) {
     if (shot.latitude === undefined || shot.longitude === undefined) continue;
     const point = { latitude: shot.latitude, longitude: shot.longitude };
-    if (previous && (shot.type === 'Drive' || shot.type === 'Approach')) {
-      const feet = shot.feet > 0 ? shot.feet : Math.round(feetBetween(previous, point));
-      labels.push([[(previous.latitude + point.latitude) / 2, (previous.longitude + point.longitude) / 2], `${feet} ft`]);
-    }
+    if (previous) segments.push({ from: previous, to: point, shot, color: QUALITY_COLORS[QUALITY_CLASSES[quality(shot)]] ?? null, dashed: shot.lie === 'OB' });
     previous = point;
   }
-  return labels;
+  return segments;
 };
+
+// Distance labels sit at the middle of each drive's and approach's line; putts are short and
+// bunched near the basket, so they're left unlabeled. Returns [midpoint, text] pairs.
+export const segmentLabels = (shots, tee) => throwSegments(shots, tee)
+  .filter(({ shot }) => shot.type === 'Drive' || shot.type === 'Approach')
+  .map(({ from, to, shot }) => [
+    [(from.latitude + to.latitude) / 2, (from.longitude + to.longitude) / 2],
+    `${shot.feet > 0 ? shot.feet : Math.round(feetBetween(from, to))} ft`,
+  ]);
 
 // Numbered throw markers joined from the tee, as in the app.
 export const drawThrows = (map, shots, tee) => {
   const group = L.layerGroup();
   const bounds = tee ? [latLng(tee)] : [];
-  const path = tee ? [latLng(tee)] : [];
+  // Lines first, so markers and labels draw on top of them.
+  const defaultColor = cssColor('--throw') || '#df8547';
+  for (const segment of throwSegments(shots, tee)) {
+    L.polyline([latLng(segment.from), latLng(segment.to)], { color: segment.color ?? defaultColor, weight: 4, opacity: 0.95, dashArray: segment.dashed ? '8 6' : null }).addTo(group);
+  }
   shots.forEach((shot, index) => {
     if (shot.latitude === undefined || shot.longitude === undefined) return;
     const point = [shot.latitude, shot.longitude];
-    path.push(point);
     bounds.push(point);
     L.marker(point, {
       icon: L.divIcon({ className: '', html: `<div class="${throwMarkerClass(shot)}">${index + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
@@ -167,7 +179,6 @@ export const drawThrows = (map, shots, tee) => {
     // Disc names are user text, so the popup gets a text node rather than an HTML string.
     }).bindPopup(el('span', {}, `Throw ${index + 1}: ${throwDetail(shot)}`)).addTo(group);
   });
-  if (path.length > 1) L.polyline(path, { color: cssColor('--throw') || '#df8547', weight: 3 }).addTo(group);
   for (const [midpoint, text] of segmentLabels(shots, tee)) {
     // Text is built from numbers only, so it's safe as HTML.
     L.marker(midpoint, { icon: L.divIcon({ className: '', html: `<span class="segment-label">${text}</span>`, iconSize: null }), interactive: false, keyboard: false }).addTo(group);

@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
 import { roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
-import { segmentLabels, throwMarkerClass } from '../public/js/lib.js';
+import { segmentLabels, throwMarkerClass, throwSegments } from '../public/js/lib.js';
 
 const shot = (type: string, disc: string, feet: number, lie: string, quality?: number, qualityMax = 3) => ({ hole: 1, type, disc, feet, lie, quality, qualityMax });
 
@@ -169,5 +169,21 @@ describe('distance labels on throw lines', () => {
 
   test('a first throw with no mapped tee has no line to label', () => {
     assert.deepEqual(segmentLabels([{ type: 'Drive', feet: 300, latitude: 40.0008, longitude: -75 }], null), []);
+  });
+});
+
+describe('throw line colors', () => {
+  test("each line takes its throw's quality color, unrated stays default, OB is dashed", () => {
+    const tee = { latitude: 40, longitude: -75 };
+    const segments = throwSegments([
+      { type: 'Drive', quality: 3, qualityMax: 3, latitude: 40.0005, longitude: -75 },
+      { type: 'Approach', quality: 2, qualityMax: 3, latitude: 40.0008, longitude: -75 },
+      { type: 'Approach', quality: 1, qualityMax: 3, lie: 'OB', latitude: 40.0009, longitude: -75.0002 },
+      { type: 'Putt', latitude: 40.001, longitude: -75 },
+    ], tee);
+    assert.deepEqual(segments.map((item: { color: string | null; dashed: boolean }) => [item.color, item.dashed]),
+      [['#2e9d5b', false], ['#e3b505', false], ['#d64541', true], [null, false]]);
+    assert.deepEqual(segments[0].from, tee, 'first line starts at the tee');
+    assert.deepEqual(segments[1].from, { latitude: 40.0005, longitude: -75 }, 'later lines start at the previous throw');
   });
 });
