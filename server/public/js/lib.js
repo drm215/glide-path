@@ -64,7 +64,7 @@ export const holesPlayed = (shots) => [...new Set(shots.map((shot) => shot.hole)
 
 export const throwDetail = (shot) => [
   shot.feet ? `${shot.feet} ft` : null,
-  [shot.disc || 'No disc', shot.type?.toLowerCase()].filter(Boolean).join(' '),
+  [shot.disc || 'No disc', shot.style?.toLowerCase(), shot.type?.toLowerCase()].filter(Boolean).join(' '),
   shot.lie === 'OB' ? 'OB (+1)' : shot.lie?.toLowerCase(),
   shot.quality ? `${shot.quality}/${shot.qualityMax ?? 5}` : null,
 ].filter(Boolean).join(' · ');

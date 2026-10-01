@@ -57,7 +57,7 @@ const syncedData = {
   rounds: [{
     clientId: '1790804819013', updatedAt: 2, courseClientId: 'c1', courseName: 'Cedar Grove', mode: 'Round', shared: false, shareToken: null,
     shots: [
-      { hole: 1, feet: 300, disc: 'Destroyer', type: 'Drive', lie: 'Fairway', quality: 3, qualityMax: 3 },
+      { hole: 1, feet: 300, disc: 'Destroyer', type: 'Drive', style: 'Forehand', lie: 'Fairway', quality: 3, qualityMax: 3 },
       { hole: 1, feet: 60, disc: 'Aviar', type: 'Putt', lie: 'Basket', quality: 3, qualityMax: 3 },
       { hole: 2, feet: 280, disc: 'Destroyer', type: 'Drive', lie: 'OB', quality: 1, qualityMax: 3 },
       { hole: 2, feet: 30, disc: 'Aviar', type: 'Putt', lie: 'Missed', quality: 2, qualityMax: 3 },
@@ -96,7 +96,8 @@ describe('website pages in a browser', () => {
     assert.match(text, /Throw by throw/);
     assert.equal(view.querySelectorAll('h3').length >= 2, true);
     assert.match(text, /Hole 01/);
-    assert.match(text, /300 ft · Destroyer drive · fairway · 3\/3/);
+    assert.match(text, /300 ft · Destroyer forehand drive · fairway · 3\/3/);
+    assert.match(text, /By throw style/);
     assert.equal(view.querySelectorAll('ol.throws li').length, 4);
     assert.match(text, /Round summary/);
     assert.match(text, /FIRST-PUTT MAKES50%1 of 2 holes/);

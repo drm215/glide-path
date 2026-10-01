@@ -102,6 +102,16 @@ describe('summarizeRound', () => {
     assert.deepEqual(driveCircles, { drives: 7, measured: 6, c1: 3, c2: 1 });
   });
 
+  test('breaks down by throw style, most-used first, skipping throws without one', () => {
+    const { byStyle } = summarizeRound([
+      { hole: 1, type: 'Drive', style: 'Forehand', disc: 'D', feet: 300, lie: 'Fairway' },
+      { hole: 2, type: 'Drive', style: 'Backhand', disc: 'D', feet: 320, lie: 'Fairway' },
+      { hole: 3, type: 'Drive', style: 'Backhand', disc: 'D', feet: 340, lie: 'Fairway' },
+      { hole: 3, type: 'Approach', disc: 'A', feet: 50, lie: 'Fairway' },
+    ]);
+    assert.deepEqual(byStyle.map((row: { label: string; count: number; averageFeet: number }) => [row.label, row.count, row.averageFeet]), [['Backhand', 2, 330], ['Forehand', 1, 300]]);
+  });
+
   test('a round without putts or ratings', () => {
     const plain = summarizeRound([shot('Drive', 'Leopard', 250, 'Fairway')]);
     assert.equal(plain.putting, null);

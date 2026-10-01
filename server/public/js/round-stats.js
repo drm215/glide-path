@@ -94,6 +94,8 @@ export const summarizeRound = (shots, layouts = []) => {
     longest: longest && { feet: longest.feet, disc: longest.disc, type: longest.type },
     averageQuality: average(shots.map(quality).filter((value) => value !== null)),
     byType: groupBy(shots, (shot) => shot.type || 'Other').sort(([a], [b]) => typeRank(a) - typeRank(b)).map(([label, group]) => groupStats(label, group)),
+    // Only throws logged with a style; most-used first.
+    byStyle: groupBy(shots.filter((shot) => shot.style), (shot) => shot.style).sort(([, a], [, b]) => b.length - a.length).map(([label, group]) => groupStats(label, group)),
     // Most-thrown disc first.
     byDisc: groupBy(shots, (shot) => shot.disc || 'No disc').sort(([, a], [, b]) => b.length - a.length).map(([label, group]) => groupStats(label, group)),
     putting: putts.length ? {

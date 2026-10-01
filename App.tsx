@@ -36,7 +36,7 @@ import {
 import { placeMadeThrowsAtBasket, remeasureHole } from './lib/rounds';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
-import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowType, Tombstone } from './lib/types';
+import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowStyle, ThrowType, Tombstone } from './lib/types';
 
 // A past round reopened as the round in progress keeps its id, so ending it again updates it.
 type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null };
@@ -78,6 +78,7 @@ const EARTH_RADIUS_METERS = 6_371_000;
 const LEGACY_DEFAULT_DISCS: Disc[] = ['Distance', 'Fairway', 'Midrange', 'Putter'];
 const TYPE_OPTIONS: ThrowType[] = ['Drive', 'Approach', 'Putt'];
 const PAR_OPTIONS = [2, 3, 4, 5, 6];
+const STYLE_OPTIONS: ThrowStyle[] = ['Backhand', 'Forehand', 'Spike hyzer', 'Roller', 'Tomahawk', 'Thumber', 'Recovery', 'Other'];
 const LIE_OPTIONS: Lie[] = ['Fairway', 'Woods', 'Hazard', 'OB', 'Basket', 'Other'];
 // Putts ask for a result instead of a landing spot.
 const PUTT_RESULT_OPTIONS: Lie[] = ['Basket', 'Hit basket', 'Missed', 'OB'];
@@ -162,7 +163,7 @@ const scoreSummary = (sessionShots: Shot[], course: Course | undefined, currentH
 
 const formatThrowDetail = (shot: Shot) => [
   shot.feet ? `${shot.feet} ft` : 'Distance n/a',
-  `${shot.disc || 'No disc'} ${shot.type.toLowerCase()}`,
+  [shot.disc || 'No disc', shot.style?.toLowerCase(), shot.type.toLowerCase()].filter(Boolean).join(' '),
   formatLie(shot.lie),
   formatQuality(shot),
 ].filter(Boolean).join(' · ');
@@ -302,6 +303,8 @@ export default function App() {
   const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; feet: number } | null>(null);
   const [logStep, setLogStep] = useState<1 | 2 | 3 | 4>(1);
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
+  // The last style used is the default for the next throw.
+  const [throwStyle, setThrowStyle] = useState<ThrowStyle>('Backhand');
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const [bagUpdatedAt, setBagUpdatedAt] = useState(0);
@@ -327,7 +330,7 @@ export default function App() {
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [newLayoutName, setNewLayoutName] = useState('');
   const [editingThrow, setEditingThrow] = useState<{ sessionId: string; index: number } | null>(null);
-  const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; lie: Lie; quality: number }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: 2 });
+  const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; style?: ThrowStyle; lie: Lie; quality: number }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: 2 });
 
   useEffect(() => {
     Promise.all([
@@ -796,7 +799,7 @@ export default function App() {
       altitude = basket.altitude ?? null;
       feet = previous ? Math.max(1, Math.round(feetBetween(previous, basket))) : 0;
     }
-    setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, altitude, lie, quality, qualityMax: QUALITY_MAX }]);
+    setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, altitude, style: throwStyle, lie, quality, qualityMax: QUALITY_MAX }]);
     setThrowType(throwType === 'Putt' ? 'Putt' : 'Approach');
     setPendingLie(null);
     if (lie !== 'Basket') return;
@@ -1068,7 +1071,7 @@ export default function App() {
     if (index < 0) return;
     // Throws rated on the old 1-5 scale are converted to the current scale.
     const quality = shot.quality ? Math.min(QUALITY_MAX, Math.max(1, Math.round((shot.quality / (shot.qualityMax ?? 5)) * QUALITY_MAX))) : 2;
-    setThrowDraft({ disc: shot.disc, type: shot.type, lie: shot.lie ?? 'Fairway', quality });
+    setThrowDraft({ disc: shot.disc, type: shot.type, style: shot.style, lie: shot.lie ?? 'Fairway', quality });
     setEditingThrow({ sessionId: session.id, index });
   };
 
@@ -1087,7 +1090,7 @@ export default function App() {
     updateSessionShots(sessionId, (list) => {
       const edited = list.map((shot, position) => (position === index
         ? {
-          ...shot, disc: throwDraft.disc, type: throwDraft.type, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX,
+          ...shot, disc: throwDraft.disc, type: throwDraft.type, style: throwDraft.style, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX,
           ...(moveToBasket ? { latitude: layout.basket!.latitude, longitude: layout.basket!.longitude } : {}),
         }
         : shot));
@@ -1709,7 +1712,7 @@ export default function App() {
             {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
 
             <View style={styles.latestRow}>
-              <View><Text style={styles.latestEyebrow}>LATEST THROW</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', `${latestShot.disc || 'No disc'} ${latestShot.type.toLowerCase()}`, formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></View>
+              <View><Text style={styles.latestEyebrow}>LATEST THROW</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></View>
               {activeShots.length > 0 && <Pressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></Pressable>}
             </View>
             <Pressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></Pressable>
@@ -1946,7 +1949,11 @@ export default function App() {
               </> : logStep === 2 ? <>
                 <Text style={styles.fieldLabel}>TYPE OF THROW</Text>
                 <View style={styles.typeRow}>
-                  {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => { setThrowType(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                  {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowType(item)} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]} accessibilityState={{ selected: throwType === item }}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                </View>
+                <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW DID YOU THROW IT?</Text>
+                <View style={[styles.typeRow, styles.lieGrid]}>
+                  {STYLE_OPTIONS.map((item) => <Pressable key={item} onPress={() => { setThrowStyle(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwStyle === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwStyle === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
                 </View>
               </> : logStep === 3 ? <>
                 <Text style={styles.fieldLabel}>{throwType === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
@@ -1980,6 +1987,10 @@ export default function App() {
               <Text style={[styles.fieldLabel, styles.typeLabel]}>TYPE OF THROW</Text>
               <View style={styles.typeRow}>
                 {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+              </View>
+              <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW WAS IT THROWN?</Text>
+              <View style={[styles.typeRow, styles.lieGrid]}>
+                {STYLE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, style: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwDraft.style === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.style === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>{throwDraft.type === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
               <View style={[styles.typeRow, styles.lieGrid]}>
@@ -2242,6 +2253,8 @@ const styles = StyleSheet.create({
   sheetChip: { height: 40, marginBottom: 8, paddingHorizontal: 14 },
   sheetTypeButton: { height: 46 },
   lieGrid: { flexWrap: 'wrap', marginRight: -7 },
+  // Four per row.
+  styleButton: { flex: 0, width: '22.5%', marginBottom: 7, paddingHorizontal: 2 },
   lieButton: { flex: 0, width: '31%', marginBottom: 7 },
   obButton: { borderColor: '#e2b3a6' },
   obText: { color: '#a55343' },

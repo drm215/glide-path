@@ -69,6 +69,7 @@ export const renderRoundSummary = (shots, layouts = []) => {
       statTile('AVG QUALITY', qualityText(summary.averageQuality), summary.qualities.length ? null : 'Not rated')),
     el('h3', {}, 'By throw type'),
     breakdownTable('TYPE', summary.byType),
+    summary.byStyle.length ? [el('h3', {}, 'By throw style'), breakdownTable('STYLE', summary.byStyle)] : null,
     putting ? [
       el('h3', {}, 'Putting'),
       el('div', { class: 'stats' },
