@@ -134,6 +134,23 @@ export const throwLegend = () => el('p', { class: 'map-legend' },
   el('span', { class: 'legend-dot poor' }), 'Poor', el('span', { class: 'legend-dot' }), 'Not rated',
   el('span', { class: 'legend-dot ob' }), 'OB');
 
+// Distance labels sit at the middle of each drive's and approach's line; putts are short and
+// bunched near the basket, so they're left unlabeled. Returns [midpoint, text] pairs.
+export const segmentLabels = (shots, tee) => {
+  const labels = [];
+  let previous = tee ? { latitude: tee.latitude, longitude: tee.longitude } : null;
+  for (const shot of shots) {
+    if (shot.latitude === undefined || shot.longitude === undefined) continue;
+    const point = { latitude: shot.latitude, longitude: shot.longitude };
+    if (previous && (shot.type === 'Drive' || shot.type === 'Approach')) {
+      const feet = shot.feet > 0 ? shot.feet : Math.round(feetBetween(previous, point));
+      labels.push([[(previous.latitude + point.latitude) / 2, (previous.longitude + point.longitude) / 2], `${feet} ft`]);
+    }
+    previous = point;
+  }
+  return labels;
+};
+
 // Numbered throw markers joined from the tee, as in the app.
 export const drawThrows = (map, shots, tee) => {
   const group = L.layerGroup();
@@ -151,6 +168,10 @@ export const drawThrows = (map, shots, tee) => {
     }).bindPopup(el('span', {}, `Throw ${index + 1}: ${throwDetail(shot)}`)).addTo(group);
   });
   if (path.length > 1) L.polyline(path, { color: cssColor('--throw') || '#df8547', weight: 3 }).addTo(group);
+  for (const [midpoint, text] of segmentLabels(shots, tee)) {
+    // Text is built from numbers only, so it's safe as HTML.
+    L.marker(midpoint, { icon: L.divIcon({ className: '', html: `<span class="segment-label">${text}</span>`, iconSize: null }), interactive: false, keyboard: false }).addTo(group);
+  }
   group.addTo(map);
   return { group, bounds };
 };

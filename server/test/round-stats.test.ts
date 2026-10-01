@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
 import { roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
-import { throwMarkerClass } from '../public/js/lib.js';
+import { segmentLabels, throwMarkerClass } from '../public/js/lib.js';
 
 const shot = (type: string, disc: string, feet: number, lie: string, quality?: number, qualityMax = 3) => ({ hole: 1, type, disc, feet, lie, quality, qualityMax });
 
@@ -149,5 +149,25 @@ describe('throw marker colors', () => {
     assert.equal(throwMarkerClass({ quality: 1, qualityMax: 3, lie: 'OB' }), 'throw-marker poor ob');
     assert.equal(throwMarkerClass({ quality: 5 }), 'throw-marker good', 'old 1-5 scale');
     assert.equal(throwMarkerClass({ lie: 'Fairway' }), 'throw-marker');
+  });
+});
+
+describe('distance labels on throw lines', () => {
+  test('label drives and approaches at the middle of their line, but not putts', () => {
+    const tee = { latitude: 40, longitude: -75 };
+    const labels = segmentLabels([
+      { type: 'Drive', feet: 300, latitude: 40.0008, longitude: -75 },
+      { type: 'Approach', feet: 0, latitude: 40.001, longitude: -75 }, // no stored distance: measured from the line
+      { type: 'Approach', feet: 50 }, // no position: no line, no label
+      { type: 'Putt', feet: 20, latitude: 40.00105, longitude: -75 },
+    ], tee);
+    assert.equal(labels.length, 2);
+    assert.deepEqual(labels[0], [[40.0004, -75], '300 ft']);
+    assert.ok(Math.abs(labels[1][0][0] - 40.0009) < 1e-9);
+    assert.equal(labels[1][1], '73 ft');
+  });
+
+  test('a first throw with no mapped tee has no line to label', () => {
+    assert.deepEqual(segmentLabels([{ type: 'Drive', feet: 300, latitude: 40.0008, longitude: -75 }], null), []);
   });
 });
