@@ -79,14 +79,17 @@ const driveCircles = (shots, layouts) => {
   return { drives: shots.filter((shot) => shot.type === 'Drive').length, measured: measuredCount, c1, c2 };
 };
 
-// `layouts` are the hole layouts the round was played on, for first-putt distances and drive
-// circles; optional.
-export const summarizeRound = (shots, layouts = []) => {
+// Stats across any number of rounds. Each round brings the hole layouts it was played on
+// (optional), since first putts and drive circles are measured against that round's baskets.
+export const summarizeRounds = (rounds) => {
+  const shots = rounds.flatMap((round) => round.shots);
   const distances = measured(shots);
   const longest = distances.reduce((best, shot) => (!best || shot.feet > best.feet ? shot : best), null);
   const putts = shots.filter((shot) => shot.type === 'Putt');
-  const firsts = firstPutts(shots, layouts);
+  const firsts = rounds.flatMap((round) => firstPutts(round.shots, round.layouts ?? []));
   const firstDistances = firsts.map((item) => item.feet).filter((feet) => feet !== null);
+  const circles = rounds.map((round) => driveCircles(round.shots, round.layouts ?? []))
+    .reduce((total, item) => ({ drives: total.drives + item.drives, measured: total.measured + item.measured, c1: total.c1 + item.c1, c2: total.c2 + item.c2 }), { drives: 0, measured: 0, c1: 0, c2: 0 });
   return {
     count: shots.length,
     penalties: shots.filter((shot) => shot.lie === 'OB').length,
@@ -110,8 +113,25 @@ export const summarizeRound = (shots, layouts = []) => {
         measured: firstDistances.length,
       },
     } : null,
-    driveCircles: driveCircles(shots, layouts),
+    driveCircles: circles,
     landings: LANDING_ORDER.map((lie) => ({ lie, count: shots.filter((shot) => shot.lie === lie).length })).filter((item) => item.count),
     qualities: [3, 2, 1].map((value) => ({ label: QUALITY_LABELS[value], count: shots.filter((shot) => quality(shot) === value).length })).filter((item) => item.count),
+  };
+};
+
+// One round's stats; `layouts` are the hole layouts it was played on (optional).
+export const summarizeRound = (shots, layouts = []) => summarizeRounds([{ shots, layouts }]);
+
+// Matches the app: an out-of-bounds throw adds a penalty stroke.
+const strokes = (shots) => shots.length + shots.filter((shot) => shot.lie === 'OB').length;
+
+// A round's score and, over the holes that have a par, its score to par (null when none do).
+export const roundScore = (shots, layouts = []) => {
+  const holes = [...new Set(shots.map((shot) => shot.hole))];
+  const withPar = holes.filter((hole) => layouts[hole - 1]?.par !== undefined);
+  return {
+    holes: holes.length,
+    strokes: strokes(shots),
+    toPar: withPar.length ? withPar.reduce((sum, hole) => sum + strokes(shots.filter((shot) => shot.hole === hole)) - layouts[hole - 1].par, 0) : null,
   };
 };

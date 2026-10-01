@@ -1,7 +1,7 @@
 // Round summary for the website's round pages: totals, and breakdowns by throw type, disc,
 // landing spot and quality. Built from the same throw data the maps use.
 import { el } from './lib.js';
-import { QUALITY_LABELS, quality, summarizeRound } from './round-stats.js';
+import { QUALITY_LABELS, quality, summarizeRounds } from './round-stats.js';
 
 const feet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
 const qualityText = (value) => (value === null ? '—' : `${value.toFixed(1)} / 3`);
@@ -33,7 +33,7 @@ const filterGroup = (label, options, onSelect) => {
 };
 
 // The By disc table with throw-type and quality filters that combine.
-const discBreakdown = (shots, layouts) => {
+const discBreakdown = (shots) => {
   const filters = { type: null, quality: null };
   const types = THROW_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => quality(shot) === value));
@@ -43,7 +43,7 @@ const discBreakdown = (shots, layouts) => {
   const render = () => {
     const matching = shots.filter((shot) => (filters.type === null || shot.type === filters.type) && (filters.quality === null || quality(shot) === filters.quality));
     const next = matching.length
-      ? breakdownTable('DISC', summarizeRound(matching, layouts).byDisc)
+      ? breakdownTable('DISC', summarizeRounds([{ shots: matching }]).byDisc)
       : el('p', { class: 'meta' }, 'No throws match these filters.');
     if (table) table.replaceWith(next);
     else container.append(next);
@@ -56,12 +56,14 @@ const discBreakdown = (shots, layouts) => {
   return container;
 };
 
-export const renderRoundSummary = (shots, layouts = []) => {
+// `rounds` are [{ shots, layouts }]; `scope` names them in notes ("this round", "these rounds").
+const renderSummary = (title, rounds, scope) => {
+  const shots = rounds.flatMap((round) => round.shots);
   if (!shots.length) return null;
-  const summary = summarizeRound(shots, layouts);
+  const summary = summarizeRounds(rounds);
   const { putting } = summary;
   return el('section', { class: 'round-summary', 'aria-labelledby': 'summary-heading' },
-    el('h2', { id: 'summary-heading' }, 'Round summary'),
+    el('h2', { id: 'summary-heading' }, title),
     el('div', { class: 'stats' },
       statTile('THROWS', summary.count, summary.penalties === 1 ? '1 OB penalty' : summary.penalties ? `${summary.penalties} OB penalties` : 'No penalties'),
       statTile('TOTAL DISTANCE', feet(summary.totalFeet), 'Measured by GPS'),
@@ -89,11 +91,16 @@ export const renderRoundSummary = (shots, layouts = []) => {
         summary.driveCircles.measured < summary.driveCircles.drives
           ? el('p', { class: 'meta' }, `${summary.driveCircles.measured} of ${summary.driveCircles.drives} drives could be measured; the rest have no logged position or no mapped basket.`)
           : null,
-      ] : el('p', { class: 'meta' }, 'Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in this round has both.'),
+      ] : el('p', { class: 'meta' }, `Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in ${scope} has both.`),
     ] : null,
     el('h3', {}, 'By disc'),
-    discBreakdown(shots, layouts),
+    discBreakdown(shots),
     summary.landings.length ? [el('h3', {}, 'Where throws landed'), el('div', { class: 'chips' }, summary.landings.map((item) => el('span', { class: 'chip' }, `${item.lie === 'Basket' ? 'In the basket' : item.lie} · ${item.count}`)))] : null,
     summary.qualities.length ? [el('h3', {}, 'Throw quality'), el('div', { class: 'chips' }, summary.qualities.map((item) => el('span', { class: 'chip' }, `${item.label} · ${item.count}`)))] : null,
   );
 };
+
+export const renderRoundSummary = (shots, layouts = []) => renderSummary('Round summary', [{ shots, layouts }], 'this round');
+
+// Throw stats across many rounds, each with the layouts it was played on.
+export const renderHistorySummary = (rounds) => renderSummary('Throw stats', rounds, 'these rounds');

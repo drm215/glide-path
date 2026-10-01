@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
-import { summarizeRound } from '../public/js/round-stats.js';
+import { roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
 
 const shot = (type: string, disc: string, feet: number, lie: string, quality?: number, qualityMax = 3) => ({ hole: 1, type, disc, feet, lie, quality, qualityMax });
 
@@ -110,6 +110,26 @@ describe('summarizeRound', () => {
       { hole: 3, type: 'Approach', disc: 'A', feet: 50, lie: 'Fairway' },
     ]);
     assert.deepEqual(byStyle.map((row: { label: string; count: number; averageFeet: number }) => [row.label, row.count, row.averageFeet]), [['Backhand', 2, 330], ['Forehand', 1, 300]]);
+  });
+
+  test('combines rounds, measuring each against its own layout', () => {
+    const at = (latitude: number) => ({ latitude, longitude: -75 });
+    // Same hole number, different courses: each drive is 20 ft short of its own basket.
+    const roundA = { shots: [{ hole: 1, type: 'Drive', disc: 'D', feet: 345, lie: 'Fairway', ...at(40.001 - 20 / 364_000) }], layouts: [{ tee: at(40), basket: at(40.001), par: 3 }] };
+    const roundB = { shots: [{ hole: 1, type: 'Drive', disc: 'D', feet: 345, lie: 'Fairway', ...at(50.001 - 20 / 364_000) }], layouts: [{ tee: at(50), basket: at(50.001), par: 3 }] };
+    const combined = summarizeRounds([roundA, roundB]);
+    assert.equal(combined.count, 2);
+    assert.deepEqual(combined.driveCircles, { drives: 2, measured: 2, c1: 2, c2: 0 });
+    assert.deepEqual(summarizeRound(roundA.shots, roundA.layouts).driveCircles, { drives: 1, measured: 1, c1: 1, c2: 0 });
+  });
+
+  test('roundScore counts OB penalties and scores to par only over holes with a par', () => {
+    const shots = [
+      { hole: 1, type: 'Drive', lie: 'OB' }, { hole: 1, type: 'Drive', lie: 'Fairway' }, { hole: 1, type: 'Putt', lie: 'Basket' },
+      { hole: 2, type: 'Drive', lie: 'Basket' },
+    ];
+    assert.deepEqual(roundScore(shots, [{ par: 3 }, {}]), { holes: 2, strokes: 5, toPar: 1 });
+    assert.deepEqual(roundScore(shots, []), { holes: 2, strokes: 5, toPar: null });
   });
 
   test('a round without putts or ratings', () => {

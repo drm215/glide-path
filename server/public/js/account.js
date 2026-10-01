@@ -1,4 +1,4 @@
-import { renderRoundSummary } from './summary.js';
+import { renderHistorySummary, renderRoundSummary } from './summary.js';
 import { $, TOKEN_KEY, api, setChildren, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -58,6 +58,7 @@ const renderOverview = () => {
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'ROUNDS'), el('div', { class: 'value' }, rounds.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES'), el('div', { class: 'value' }, courses.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'DISCS IN BAG'), el('div', { class: 'value' }, data.bag?.discs.length ?? 0))),
+    rounds.length ? el('p', {}, el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›')) : null,
     el('h2', {}, 'Rounds'),
     rounds.length
       ? el('ul', { class: 'results' }, rounds.map((round) => {
@@ -159,12 +160,87 @@ const renderCourse = (course) => {
   show(0);
 };
 
+// Stats across every synced round, optionally for one course and with practice sessions.
+const renderStats = () => {
+  const filters = { course: 'all', practice: false };
+  const courseKey = (round) => round.courseClientId ?? `name:${round.courseName}`;
+  const courseName = (key, round) => data.courses.find((course) => course.clientId === key)?.name ?? round.courseName;
+  const content = el('div', {});
+  const courseSelect = el('select', { id: 'stats-course', 'aria-label': 'Course' });
+  const practiceBox = el('input', { type: 'checkbox', id: 'stats-practice' });
+
+  const render = () => {
+    const sessions = data.rounds.filter((round) => filters.practice || round.mode === 'Round');
+    // Courses with matching sessions, most-played first.
+    const courses = [...sessions.reduce((map, round) => {
+      const key = courseKey(round);
+      const entry = map.get(key) ?? { key, name: courseName(key, round), rounds: [] };
+      entry.rounds.push(round);
+      return map.set(key, entry);
+    }, new Map()).values()].sort((a, b) => b.rounds.length - a.rounds.length || a.name.localeCompare(b.name));
+    if (filters.course !== 'all' && !courses.some((course) => course.key === filters.course)) filters.course = 'all';
+    courseSelect.replaceChildren(
+      el('option', { value: 'all', selected: filters.course === 'all' }, `All courses (${sessions.length})`),
+      ...courses.map((course) => el('option', { value: course.key, selected: filters.course === course.key }, `${course.name} (${course.rounds.length})`)));
+
+    const selected = filters.course === 'all' ? sessions : courses.find((course) => course.key === filters.course).rounds;
+    const scored = selected.filter((round) => round.mode === 'Round').map((round) => ({ round, score: roundScore(round) }));
+    const withPar = scored.filter((item) => item.score.toPar !== null);
+    const best = withPar.reduce((top, item) => (!top || item.score.toPar < top.score.toPar ? item : top), null);
+    const average = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+    const sessionWord = filters.practice ? 'session' : 'round';
+
+    setChildren(content,
+      selected.length ? null : el('p', { class: 'meta' }, `No ${sessionWord}s yet.`),
+      scored.length ? el('div', { class: 'stats' },
+        el('div', { class: 'stat' }, el('div', { class: 'label' }, 'ROUNDS'), el('div', { class: 'value' }, scored.length),
+          filters.practice && selected.length > scored.length ? el('div', { class: 'stat-note' }, `+ ${plural(selected.length - scored.length, 'practice session')}`) : null),
+        el('div', { class: 'stat' }, el('div', { class: 'label' }, 'AVG SCORE'), el('div', { class: 'value' }, average(scored.map((item) => item.score.total)).toFixed(1)),
+          filters.course === 'all' && courses.length > 1 ? el('div', { class: 'stat-note' }, 'Across different courses') : null),
+        el('div', { class: 'stat' }, el('div', { class: 'label' }, 'AVG TO PAR'), el('div', { class: 'value' }, withPar.length ? formatToPar(Math.round(average(withPar.map((item) => item.score.toPar)) * 10) / 10) : '—'),
+          withPar.length < scored.length ? el('div', { class: 'stat-note' }, `${withPar.length} of ${scored.length} rounds have pars`) : null),
+        el('div', { class: 'stat' }, el('div', { class: 'label' }, 'BEST ROUND'), el('div', { class: 'value' }, best ? formatToPar(best.score.toPar) : '—'),
+          best ? el('div', { class: 'stat-note' }, el('a', { href: `#round/${encodeURIComponent(best.round.clientId)}` }, `${best.round.courseName}, ${formatDate(roundDate(best.round))}`)) : null)) : null,
+      filters.course === 'all' && courses.length > 1 ? [
+        el('h2', {}, 'By course'),
+        el('table', {},
+          el('thead', {}, el('tr', {}, ['COURSE', 'ROUNDS', 'AVG SCORE', 'AVG TO PAR', 'BEST'].map((heading) => el('th', {}, heading)))),
+          el('tbody', {}, courses.map((course) => {
+            const courseScores = course.rounds.filter((round) => round.mode === 'Round').map((round) => roundScore(round));
+            const courseWithPar = courseScores.filter((item) => item.toPar !== null);
+            return el('tr', { 'data-course': course.key, onclick: () => { filters.course = course.key; render(); } },
+              el('td', {}, el('a', { href: '#stats', onclick: (event) => { event.preventDefault(); filters.course = course.key; render(); } }, course.name)),
+              el('td', {}, course.rounds.length),
+              el('td', {}, courseScores.length ? average(courseScores.map((item) => item.total)).toFixed(1) : '—'),
+              el('td', {}, courseWithPar.length ? formatToPar(Math.round(average(courseWithPar.map((item) => item.toPar)) * 10) / 10) : '—'),
+              el('td', {}, courseWithPar.length ? formatToPar(Math.min(...courseWithPar.map((item) => item.toPar))) : '—'));
+          }))),
+      ] : null,
+      renderHistorySummary(selected.map((round) => ({ shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] }))),
+    );
+  };
+
+  courseSelect.addEventListener('change', () => { filters.course = courseSelect.selectedOptions?.[0]?.value ?? courseSelect.value; render(); });
+  practiceBox.addEventListener('change', () => { filters.practice = practiceBox.checked; render(); });
+  setChildren(signedInEl,
+    back(),
+    el('div', { class: 'eyebrow' }, user.displayName),
+    el('h1', {}, 'All-time stats'),
+    el('div', { class: 'filters' },
+      el('label', { for: 'stats-course' }, 'Course'), courseSelect,
+      el('label', { class: 'check' }, practiceBox, ' Include practice sessions')),
+    content,
+  );
+  render();
+};
+
 const route = () => {
   if (!data) return;
   const [kind, id] = decodeURIComponent(location.hash.slice(1)).split('/');
   const round = kind === 'round' ? data.rounds.find((item) => item.clientId === id) : undefined;
   const course = kind === 'course' ? data.courses.find((item) => item.clientId === id) : undefined;
-  if (round) renderRound(round);
+  if (kind === 'stats') renderStats();
+  else if (round) renderRound(round);
   else if (course) renderCourse(course);
   else renderOverview();
   window.scrollTo(0, 0);

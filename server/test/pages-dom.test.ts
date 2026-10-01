@@ -65,6 +65,11 @@ const syncedData = {
   }],
   bag: { updatedAt: 1, discs: ['Destroyer', 'Aviar'], details: {}, weights: {} },
 };
+// A practice session somewhere else, for the all-time stats filters.
+syncedData.rounds.push({
+  clientId: '1790900000000', updatedAt: 3, courseClientId: undefined as unknown as string, courseName: 'Back Yard', mode: 'Practice', shared: false, shareToken: null,
+  shots: [{ hole: 1, feet: 40, disc: 'Aviar', type: 'Putt', lie: 'Basket', quality: 3, qualityMax: 3 }],
+});
 
 const accountApi: FetchHandler = (path) => (path === '/api/me'
   ? { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat' } }
@@ -135,6 +140,36 @@ describe('website pages in a browser', () => {
     press('Filter by throw quality', 'Any quality');
     assert.deepEqual(discRows(), ['Destroyer:2', 'Aviar:2']);
     assertNoRenderingLeaks(breakdown.textContent ?? '');
+  });
+
+  test('My rounds: all-time stats, filtered by course and practice', async () => {
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
+    assert.ok(document.querySelector('a[href="#stats"]'), 'overview links to all-time stats');
+    await navigate('#stats');
+    const view = document.getElementById('signed-in')!;
+    const options = () => [...document.querySelectorAll('#stats-course option')].map((option) => option.textContent);
+    const tile = (label: string) => [...view.querySelectorAll('.stat')].find((item) => item.querySelector('.label')?.textContent === label)?.querySelector('.value')?.textContent;
+    assertNoRenderingLeaks(view.textContent ?? '');
+    assert.match(view.textContent ?? '', /All-time stats/);
+    assert.match(view.textContent ?? '', /Throw stats/);
+    // Practice is excluded by default: one round at one course.
+    assert.deepEqual(options(), ['All courses (1)', 'Cedar Grove (1)']);
+    assert.equal(tile('ROUNDS'), '1');
+    assert.equal(tile('BEST ROUND'), '-2', 'scored against the main layout pars (3 + 4)');
+
+    const practice = document.getElementById('stats-practice') as unknown as { checked: boolean; dispatchEvent: (event: Event) => void };
+    practice.checked = true;
+    practice.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('change'));
+    // Most-played first; ties alphabetical.
+    assert.deepEqual(options(), ['All courses (2)', 'Back Yard (1)', 'Cedar Grove (1)']);
+    assert.match(view.textContent ?? '', /By course/);
+
+    const select = document.getElementById('stats-course')!;
+    for (const option of select.querySelectorAll('option')) option.toggleAttribute('selected', option.getAttribute('value') === 'name:Back Yard');
+    select.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('change'));
+    assert.doesNotMatch(view.textContent ?? '', /By course/);
+    assert.match(view.querySelector('.round-summary')?.textContent ?? '', /THROWS1/);
+    assertNoRenderingLeaks(view.textContent ?? '');
   });
 
   test('My rounds: a course shows each layout without leaking text', async () => {
