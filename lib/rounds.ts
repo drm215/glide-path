@@ -1,5 +1,5 @@
 // Round data helpers shared by the app and its tests. Pure functions only.
-import type { GpsPoint, HoleLayout, Shot } from './types';
+import type { Disc, DiscInfo, GpsPoint, HoleLayout, Shot, ThrowType } from './types';
 
 type Point = Pick<GpsPoint, 'latitude' | 'longitude'>;
 
@@ -41,3 +41,25 @@ export const placeMadeThrowsAtBasket = (shots: Shot[], layouts: HoleLayout[] | u
   for (const hole of moved) next = remeasureHole(next, hole, layouts[hole - 1]?.tee);
   return next;
 };
+
+// Throws from within C2 (20 m) of the basket are guessed to be putts.
+export const PUTT_RANGE_FEET = 20 / 0.3048;
+
+// Best guess for the throw being logged: a drive to start the hole, a putt when it was thrown
+// from within C2 of the basket, otherwise an approach. Without a mapped basket or a known
+// starting point, a putt follows a putt.
+export const guessThrowType = (holeShots: Shot[], thrownFrom: Point | null | undefined, basket: Point | null | undefined): ThrowType => {
+  if (!holeShots.length) return 'Drive';
+  if (thrownFrom && basket) return feetBetween(thrownFrom, basket) <= PUTT_RANGE_FEET ? 'Putt' : 'Approach';
+  return holeShots.at(-1)?.type === 'Putt' ? 'Putt' : 'Approach';
+};
+
+// DiscIt categories that suit each throw type, for when there's no history to go on.
+const CATEGORY_HINTS: Record<ThrowType, string[]> = { Drive: ['driver'], Approach: ['midrange', 'approach'], Putt: ['putter', 'putt'] };
+
+// Best guess for the disc: the one most recently used for this type of throw (`recentShots` is
+// newest first), then a bag disc whose DiscIt category fits, then the current disc.
+export const guessDisc = (type: ThrowType, recentShots: Shot[], bag: Disc[], details: Record<Disc, DiscInfo>, current: Disc): Disc =>
+  recentShots.find((shot) => shot.type === type && bag.includes(shot.disc))?.disc
+  ?? bag.find((name) => CATEGORY_HINTS[type].some((hint) => details[name]?.category.toLowerCase().includes(hint)))
+  ?? (bag.includes(current) ? current : bag[0] ?? '');

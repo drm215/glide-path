@@ -1,7 +1,7 @@
 // Tests the app's round helpers (lib/rounds.ts).
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { placeMadeThrowsAtBasket, remeasureHole } from '../../lib/rounds.ts';
+import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole } from '../../lib/rounds.ts';
 import type { HoleLayout, Shot } from '../../lib/types.ts';
 
 const point = (latitude: number, longitude: number) => ({ latitude, longitude, accuracy: 3, timestamp: 1 });
@@ -54,5 +54,43 @@ describe('remeasureHole', () => {
     assert.ok(Math.abs(measured[0].feet - 183) <= 1);
     assert.equal(measured[1].feet, 50);
     assert.ok(Math.abs(measured[2].feet - 183) <= 1);
+  });
+});
+
+describe('guessThrowType', () => {
+  const basket = { latitude: 40.001, longitude: -75 };
+  test('the first throw on a hole is a drive', () => {
+    assert.equal(guessThrowType([], { latitude: 40, longitude: -75 }, basket), 'Drive');
+  });
+  test('a putt when thrown from within C2 of the basket, otherwise an approach', () => {
+    const played = [shot(1, 'Fairway', 40.0008, -75)];
+    assert.equal(guessThrowType(played, { latitude: 40.001 - 50 / 364_000, longitude: -75 }, basket), 'Putt', '50 ft away');
+    assert.equal(guessThrowType(played, { latitude: 40.001 - 80 / 364_000, longitude: -75 }, basket), 'Approach', '80 ft away');
+  });
+  test('without a mapped basket, a putt follows a putt', () => {
+    assert.equal(guessThrowType([shot(1, 'Missed')], null, null), 'Putt');
+    assert.equal(guessThrowType([{ ...shot(1, 'Fairway'), type: 'Drive' }], null, null), 'Approach');
+  });
+});
+
+describe('guessDisc', () => {
+  const details = {
+    Wraith: { id: '1', name: 'Wraith', brand: 'Innova', category: 'Distance Driver', speed: '11', glide: '5', turn: '-1', fade: '3', stability: 'Stable' },
+    Aviar: { id: '2', name: 'Aviar', brand: 'Innova', category: 'Putter', speed: '2', glide: '3', turn: '0', fade: '1', stability: 'Stable' },
+  };
+  const bag = ['Wraith', 'Buzzz', 'Aviar'];
+  test('the disc most recently used for that type of throw', () => {
+    const recent = [{ ...shot(2, 'Fairway'), type: 'Approach' as const, disc: 'Buzzz' }, { ...shot(1, 'Fairway'), type: 'Drive' as const, disc: 'Wraith' }];
+    assert.equal(guessDisc('Approach', recent, bag, details, 'Aviar'), 'Buzzz');
+    assert.equal(guessDisc('Drive', recent, bag, details, 'Aviar'), 'Wraith');
+  });
+  test('falls back to the DiscIt category, ignoring discs no longer in the bag', () => {
+    const recent = [{ ...shot(1, 'Basket'), type: 'Putt' as const, disc: 'Lost Putter' }];
+    assert.equal(guessDisc('Putt', recent, bag, details, 'Wraith'), 'Aviar');
+  });
+  test('then the current disc, then the first in the bag', () => {
+    assert.equal(guessDisc('Approach', [], bag, {}, 'Buzzz'), 'Buzzz');
+    assert.equal(guessDisc('Approach', [], bag, {}, 'Gone'), 'Wraith');
+    assert.equal(guessDisc('Drive', [], [], {}, ''), '');
   });
 });

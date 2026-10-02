@@ -2,6 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import * as SecureStore from 'expo-secure-store';
+import * as Brightness from 'expo-brightness';
+import * as Haptics from 'expo-haptics';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -33,7 +36,7 @@ import {
   type PublicCourse,
   type PublicCourseSummary,
 } from './lib/api';
-import { placeMadeThrowsAtBasket, remeasureHole } from './lib/rounds';
+import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole } from './lib/rounds';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
 import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowStyle, ThrowType, Tombstone } from './lib/types';
@@ -84,6 +87,12 @@ const LIE_OPTIONS: Lie[] = ['Fairway', 'Woods', 'Hazard', 'OB', 'Basket', 'Other
 const PUTT_RESULT_OPTIONS: Lie[] = ['Basket', 'Hit basket', 'Missed', 'OB'];
 const lieOptionsFor = (type: ThrowType) => (type === 'Putt' ? PUTT_RESULT_OPTIONS : LIE_OPTIONS);
 const lieLabel = (lie: Lie, type: ThrowType) => (lie === 'Basket' && type === 'Putt' ? 'Made' : lie);
+
+// Pocket mode dims the screen to this brightness (0-1); iOS restores the user's setting on lock.
+const POCKET_BRIGHTNESS = 0.05;
+const POCKET_KEEP_AWAKE_TAG = 'pocket-mode';
+// The throw editor's id for the round in progress (past rounds use their own ids).
+const ACTIVE_SESSION_ID = '__active__';
 
 // The next throw on a hole: a drive to start, a putt after a putt, otherwise an approach.
 const nextThrowType = (holeShots: Shot[]): ThrowType => {
@@ -305,6 +314,10 @@ export default function App() {
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
   // The last style used is the default for the next throw.
   const [throwStyle, setThrowStyle] = useState<ThrowStyle>('Backhand');
+  const [pocketMode, setPocketMode] = useState(false);
+  const [pocketMessage, setPocketMessage] = useState('');
+  const pocketBusy = useRef(false);
+  const savedBrightness = useRef<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const [bagUpdatedAt, setBagUpdatedAt] = useState(0);
@@ -330,7 +343,7 @@ export default function App() {
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [newLayoutName, setNewLayoutName] = useState('');
   const [editingThrow, setEditingThrow] = useState<{ sessionId: string; index: number } | null>(null);
-  const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; style?: ThrowStyle; lie: Lie; quality: number }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: 2 });
+  const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; style?: ThrowStyle; lie: Lie; quality: number | null }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: null });
 
   useEffect(() => {
     Promise.all([
@@ -504,6 +517,15 @@ export default function App() {
   useEffect(() => {
     if (loaded && account?.token) runSyncRef.current();
   }, [loaded, account?.token]);
+
+  // iOS restores the user's brightness when the phone locks, so pocket mode dims again on return.
+  useEffect(() => {
+    if (!pocketMode) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') Brightness.setBrightnessAsync(POCKET_BRIGHTNESS).catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [pocketMode]);
 
   // Sync whenever the app comes back to the foreground.
   useEffect(() => {
@@ -749,60 +771,68 @@ export default function App() {
     });
   };
 
-  // Captures the player's GPS position at the disc, then asks for disc, throw type and quality.
-  const startLogThrow = async () => {
-    if (loggingThrow) return;
-    setLoggingThrow(true);
-    setRoundMessage('Getting a GPS fix at your lie…');
+  // Where the throw being logged was thrown from: the last positioned throw on this hole, or the tee.
+  const previousLiePoint = () => {
+    const previousShot = activeShots.findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
+    return previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee ?? null;
+  };
+
+  // Reads the GPS position at the disc. Reports progress and problems through `report`.
+  const captureLie = async (report: (message: string) => void) => {
+    report('Getting a GPS fix at your lie…');
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
         setLocationAllowed(false);
-        setRoundMessage(permission.canAskAgain ? 'Location permission is needed to log where your disc landed.' : 'Enable location access for Glide Path in Settings, then try again.');
-        return;
+        report(permission.canAskAgain ? 'Location permission is needed to log where your disc landed.' : 'Enable location access for Glide Path in Settings, then try again.');
+        return null;
       }
       setLocationAllowed(true);
       if (!(await Location.hasServicesEnabledAsync())) {
-        setRoundMessage('Turn on Location Services, then log the throw again.');
-        return;
+        report('Turn on Location Services, then log the throw again.');
+        return null;
       }
       const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: true });
       const lie = { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
-      const altitude = fix.coords.altitude;
-      const previousShot = activeShots.findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
-      const previous = previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee;
-      const feet = previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0;
-      setPendingLie({ ...lie, altitude, feet });
-      if (!disc && bag.length) setDisc(bag[0]);
-      setLogStep(1);
-      setRoundMessage('');
+      const previous = previousLiePoint();
+      return { ...lie, altitude: fix.coords.altitude, feet: previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0 };
     } catch {
-      setRoundMessage('Could not get a GPS fix. Wait a moment and try again.');
-    } finally {
-      setLoggingThrow(false);
+      report('Could not get a GPS fix. Wait a moment and try again.');
+      return null;
     }
   };
 
-  const cancelLogThrow = () => setPendingLie(null);
+  // Best guesses for a throw, so most throws need no changes: a drive from the tee, a putt from
+  // within C2 of the basket, otherwise an approach; the disc last used for that kind of throw.
+  const guessThrow = (): { type: ThrowType; disc: Disc } => {
+    const type = guessThrowType(activeShots, previousLiePoint(), selectedHoleLayout?.basket);
+    // Newest first: this round's throws, then past rounds from newest to oldest.
+    const pastShots = [...history].sort((a, b) => Number(a.id) - Number(b.id)).flatMap((session) => session.shots);
+    const recent = [...pastShots, ...shots].reverse();
+    return { type, disc: guessDisc(type, recent, bag, bagDetails, disc) };
+  };
 
-  const saveThrow = (quality: number, lie: Lie = throwLie) => {
-    if (!pendingLie) return;
-    let { latitude, longitude, altitude, feet } = pendingLie;
+  // Adds a throw to the round in progress. Returns a short description for confirmations.
+  const recordThrow = (point: { latitude: number; longitude: number; altitude: number | null; feet: number }, details: { type: ThrowType; disc: Disc; style: ThrowStyle; lie: Lie; quality: number | null }) => {
+    let { latitude, longitude, altitude, feet } = point;
     // A throw that went in is recorded at the basket, measured from the previous lie (or the tee),
     // rather than wherever the player was standing when they logged it.
     const basket = selectedHoleLayout?.basket;
-    if (lie === 'Basket' && basket) {
-      const previousShot = activeShots.findLast((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
-      const previous = previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee;
+    if (details.lie === 'Basket' && basket) {
+      const previous = previousLiePoint();
       latitude = basket.latitude;
       longitude = basket.longitude;
       altitude = basket.altitude ?? null;
       feet = previous ? Math.max(1, Math.round(feetBetween(previous, basket))) : 0;
     }
-    setShots((current) => [...current, { x: 0.5, y: 0.5, feet, disc, type: throwType, hole, courseId: selectedCourse?.id, latitude, longitude, altitude, style: throwStyle, lie, quality, qualityMax: QUALITY_MAX }]);
-    setThrowType(throwType === 'Putt' ? 'Putt' : 'Approach');
-    setPendingLie(null);
-    if (lie !== 'Basket') return;
+    const shot: Shot = {
+      x: 0.5, y: 0.5, feet, disc: details.disc, type: details.type, hole, courseId: selectedCourse?.id, latitude, longitude, altitude,
+      style: details.style, lie: details.lie, ...(details.quality === null ? {} : { quality: details.quality, qualityMax: QUALITY_MAX }),
+    };
+    setShots((current) => [...current, shot]);
+    setThrowType(details.type === 'Putt' ? 'Putt' : 'Approach');
+    const summary = `Throw ${score + 1} · ${formatThrowDetail(shot)}`;
+    if (details.lie !== 'Basket') return summary;
     // A made basket finishes the hole.
     const throwCount = holeStrokes + 1;
     const holeCount = selectedCourse?.holes ?? 18;
@@ -810,11 +840,81 @@ export default function App() {
     if (hole >= holeCount) {
       setRoundMessage(`Hole ${hole} complete in ${throwCount} ${throwCount === 1 ? 'stroke' : 'strokes'}. That was the last hole.`);
       promptLastHoleComplete();
-      return;
+      return `Hole ${hole} complete in ${throwCount}. That was the last hole.`;
     }
     setHole(hole + 1);
     setThrowType('Drive');
     setRoundMessage(`Hole ${hole} complete in ${throwCount} ${throwCount === 1 ? 'stroke' : 'strokes'}. On to hole ${hole + 1}.`);
+    return `Hole ${hole} complete in ${throwCount}. On to hole ${hole + 1}.`;
+  };
+
+  // Captures the player's GPS position at the disc, then asks for disc, throw type and quality,
+  // starting from the best guesses.
+  const startLogThrow = async () => {
+    if (loggingThrow) return;
+    setLoggingThrow(true);
+    const point = await captureLie(setRoundMessage);
+    setLoggingThrow(false);
+    if (!point) return;
+    const guess = guessThrow();
+    setThrowType(guess.type);
+    setDisc(guess.disc);
+    setThrowLie(guess.type === 'Putt' ? 'Missed' : 'Fairway');
+    setPendingLie(point);
+    setLogStep(1);
+    setRoundMessage('');
+  };
+
+  const cancelLogThrow = () => setPendingLie(null);
+
+  // `quality` is null when the throw is saved without a rating.
+  const saveThrow = (quality: number | null, lie: Lie = throwLie) => {
+    if (!pendingLie) return;
+    recordThrow(pendingLie, { type: throwType, disc, style: throwStyle, lie, quality });
+    setPendingLie(null);
+  };
+
+  // ---------------------------------------------------------------- pocket mode
+  // A dimmed, always-on screen with large press-and-hold buttons, so throws can be logged
+  // without unlocking the phone and stray touches in a pocket don't log anything.
+  const enterPocketMode = async () => {
+    setPocketMessage('Hold the button where your disc landed.');
+    setPocketMode(true);
+    try {
+      await activateKeepAwakeAsync(POCKET_KEEP_AWAKE_TAG);
+      savedBrightness.current = await Brightness.getBrightnessAsync();
+      await Brightness.setBrightnessAsync(POCKET_BRIGHTNESS);
+    } catch {
+      // Dimming is a nicety; pocket mode still works without it.
+    }
+  };
+
+  const exitPocketMode = async () => {
+    setPocketMode(false);
+    try {
+      deactivateKeepAwake(POCKET_KEEP_AWAKE_TAG);
+      if (savedBrightness.current !== null) await Brightness.setBrightnessAsync(savedBrightness.current);
+    } catch {
+      // Nothing to restore.
+    }
+    savedBrightness.current = null;
+  };
+
+  const pocketLog = async (made: boolean) => {
+    if (pocketBusy.current) return;
+    pocketBusy.current = true;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    const point = await captureLie(setPocketMessage);
+    if (!point) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      pocketBusy.current = false;
+      return;
+    }
+    const guess = guessThrow();
+    const message = recordThrow(point, { ...guess, style: throwStyle, lie: made ? 'Basket' : guess.type === 'Putt' ? 'Missed' : 'Fairway', quality: null });
+    setPocketMessage(message);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    pocketBusy.current = false;
   };
 
   const startNextHole = () => {
@@ -922,6 +1022,7 @@ export default function App() {
 
   // Ends the session; a finished round opens its summary, anything else returns home.
   const finishSession = () => {
+    if (pocketMode) exitPocketMode();
     const id = archiveSession();
     if (id && mode === 'Round') {
       setViewedSessionId(id);
@@ -1061,21 +1162,31 @@ export default function App() {
     );
   };
 
-  // Editing throws in past rounds.
-  const editingSession = editingThrow ? history.find((session) => session.id === editingThrow.sessionId) : undefined;
-  const editingShot = editingThrow ? editingSession?.shots[editingThrow.index] : undefined;
+  // Editing throws, in past rounds or the round in progress.
+  const editingActive = editingThrow?.sessionId === ACTIVE_SESSION_ID;
+  const editingSession = editingThrow && !editingActive ? history.find((session) => session.id === editingThrow.sessionId) : undefined;
+  const editingShots = editingActive ? shots : editingSession?.shots;
+  const editingShot = editingThrow ? editingShots?.[editingThrow.index] : undefined;
+  // The hole layouts the edited throws were played on, for moving made throws to the basket.
+  const editingLayouts = editingActive ? selectedCourse?.layouts : viewedCourse && viewedCourse.id === editingSession?.courseId ? viewedCourse.layouts : undefined;
   const editDiscOptions = [...new Set([...(editingShot?.disc ? [editingShot.disc] : []), ...bag])];
 
-  const openThrowEditor = (session: SessionArchive, shot: Shot) => {
+  const openThrowEditor = (session: Pick<SessionArchive, 'id' | 'shots'>, shot: Shot) => {
     const index = session.shots.indexOf(shot);
     if (index < 0) return;
     // Throws rated on the old 1-5 scale are converted to the current scale.
-    const quality = shot.quality ? Math.min(QUALITY_MAX, Math.max(1, Math.round((shot.quality / (shot.qualityMax ?? 5)) * QUALITY_MAX))) : 2;
+    const quality = shot.quality ? Math.min(QUALITY_MAX, Math.max(1, Math.round((shot.quality / (shot.qualityMax ?? 5)) * QUALITY_MAX))) : null;
     setThrowDraft({ disc: shot.disc, type: shot.type, style: shot.style, lie: shot.lie ?? 'Fairway', quality });
     setEditingThrow({ sessionId: session.id, index });
   };
 
+  const openActiveThrowEditor = (shot: Shot) => openThrowEditor({ id: ACTIVE_SESSION_ID, shots }, shot);
+
   const updateSessionShots = (sessionId: string, change: (list: Shot[]) => Shot[]) => {
+    if (sessionId === ACTIVE_SESSION_ID) {
+      setShots(change);
+      return;
+    }
     const stamp = nowMs();
     setHistory((current) => current.map((session) => (session.id === sessionId ? { ...session, shots: change(session.shots), updatedAt: stamp } : session)));
   };
@@ -1085,12 +1196,13 @@ export default function App() {
     const { sessionId, index } = editingThrow;
     // A throw changed to "in the basket" moves to the basket, as when it's logged that way;
     // distances on the hole are then remeasured from each previous lie.
-    const layout = editingShot && viewedCourse?.id === editingSession?.courseId ? viewedCourse?.layouts?.[editingShot.hole - 1] : undefined;
+    const layout = editingShot ? editingLayouts?.[editingShot.hole - 1] : undefined;
     const moveToBasket = throwDraft.lie === 'Basket' && editingShot?.lie !== 'Basket' && layout?.basket;
     updateSessionShots(sessionId, (list) => {
       const edited = list.map((shot, position) => (position === index
         ? {
-          ...shot, disc: throwDraft.disc, type: throwDraft.type, style: throwDraft.style, lie: throwDraft.lie, quality: throwDraft.quality, qualityMax: QUALITY_MAX,
+          ...shot, disc: throwDraft.disc, type: throwDraft.type, style: throwDraft.style, lie: throwDraft.lie,
+          ...(throwDraft.quality === null ? {} : { quality: throwDraft.quality, qualityMax: QUALITY_MAX }),
           ...(moveToBasket ? { latitude: layout.basket!.latitude, longitude: layout.basket!.longitude } : {}),
         }
         : shot));
@@ -1100,14 +1212,14 @@ export default function App() {
   };
 
   const deleteEditingThrow = () => {
-    if (!editingThrow || !editingSession || !editingShot) return;
-    if (editingSession.shots.length === 1) {
+    if (!editingThrow || !editingShots || !editingShot) return;
+    if (!editingActive && editingShots.length === 1) {
       Alert.alert('Keep one throw', 'A round needs at least one throw.');
       return;
     }
     const { sessionId, index } = editingThrow;
     const holeNumber = editingShot.hole;
-    const tee = viewedCourse?.id === editingSession.courseId ? viewedCourse?.layouts?.[holeNumber - 1]?.tee : undefined;
+    const tee = editingLayouts?.[holeNumber - 1]?.tee;
     Alert.alert('Delete this throw?', 'It will be removed from the round, and the score and the next throw’s distance updated.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -1706,10 +1818,11 @@ export default function App() {
             </View>}
 
             <Pressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then tap</Text></Pressable>
+            <Pressable onPress={enterPocketMode} style={styles.pocketModeButton} accessibilityRole="button" accessibilityHint="Dims the screen and logs throws with a long press, for keeping the phone in your pocket"><Text style={styles.pocketModeButtonText}>POCKET MODE · LOG WITHOUT UNLOCKING</Text></Pressable>
             {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
 
             <View style={styles.latestRow}>
-              <View><Text style={styles.latestEyebrow}>LATEST THROW</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></View>
+              <Pressable onPress={() => latestShot && openActiveThrowEditor(latestShot)} disabled={!latestShot} style={styles.latestCopy} accessibilityRole="button" accessibilityHint="Opens the throw to change its details"><Text style={styles.latestEyebrow}>LATEST THROW{latestShot ? '  ·  TAP TO EDIT' : ''}</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></Pressable>
               {activeShots.length > 0 && <Pressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></Pressable>}
             </View>
             <Pressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></Pressable>
@@ -1963,11 +2076,38 @@ export default function App() {
                   {QUALITY_OPTIONS.map((option) => <Pressable key={option.value} onPress={() => saveThrow(option.value)} style={[styles.typeButton, styles.qualityButton]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></Pressable>)}
                 </View>
               </>}
-              <View style={styles.sheetFooter}>
-                <Pressable onPress={cancelLogThrow} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
-                {logStep > 1 && <Pressable onPress={() => setLogStep(logStep === 4 ? 3 : logStep === 3 ? 2 : 1)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable>}
+              <View style={styles.editFooter}>
+                {logStep > 1 ? <Pressable onPress={() => setLogStep(logStep === 4 ? 3 : logStep === 3 ? 2 : 1)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable> : <View />}
+                <View style={styles.editFooterActions}>
+                  <Pressable onPress={cancelLogThrow} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
+                  {/* Saves with the choices so far: the guesses plus anything changed. */}
+                  <Pressable onPress={() => saveThrow(null)} style={[styles.sheetFooterButton, styles.saveButton]} accessibilityLabel={`Save now: ${disc || 'no disc'} ${throwStyle.toLowerCase()} ${throwType.toLowerCase()}, ${throwLie.toLowerCase()}`}><Text style={styles.saveButtonText}>SAVE ✓</Text></Pressable>
+                </View>
               </View>
             </View>
+          </View>
+        </Modal>
+
+        <Modal visible={pocketMode} animationType="fade" presentationStyle="fullScreen" onRequestClose={exitPocketMode}>
+          <View style={styles.pocketScreen}>
+            <Text style={styles.pocketTitle}>HOLE {hole}{selectedHoleLayout?.par ? ` · PAR ${selectedHoleLayout.par}` : ''}</Text>
+            <Text style={styles.pocketStats}>{[
+              `Hole score ${holeStrokes}`,
+              mode === 'Round' && roundScore.toPar !== null ? `Round ${formatScoreToPar(roundScore.toPar)}` : null,
+              lieToBasket ? `${lieToBasket.feet} ft to basket${lieToBasket.elevation === null ? '' : ` ${formatElevation(lieToBasket.elevation)}`}` : null,
+            ].filter(Boolean).join('  ·  ')}</Text>
+            <Pressable onLongPress={() => pocketLog(false)} delayLongPress={600} onPressIn={() => Haptics.selectionAsync().catch(() => undefined)} style={({ pressed }) => [styles.pocketLogButton, pressed && styles.pocketLogButtonPressed]} accessibilityRole="button" accessibilityLabel="Log throw" accessibilityHint="Press and hold to save a throw where you are standing">
+              <Text style={styles.pocketLogText}>HOLD TO{'\n'}LOG THROW</Text>
+              <Text style={styles.pocketLogHint}>Throw {score + 1}</Text>
+            </Pressable>
+            <Pressable onLongPress={() => pocketLog(true)} delayLongPress={600} style={({ pressed }) => [styles.pocketBasketButton, pressed && styles.pocketLogButtonPressed]} accessibilityRole="button" accessibilityLabel="In the basket" accessibilityHint="Press and hold when a throw goes in, to finish the hole">
+              <Text style={styles.pocketBasketText}>HOLD · IN THE BASKET</Text>
+            </Pressable>
+            <Text style={styles.pocketMessage} accessibilityLiveRegion="polite">{pocketMessage}</Text>
+            <Text style={styles.pocketNote}>Throws are saved with best guesses. Fix them later by tapping Latest throw.</Text>
+            <Pressable onLongPress={exitPocketMode} delayLongPress={800} style={styles.pocketExitButton} accessibilityRole="button" accessibilityLabel="Exit pocket mode" accessibilityHint="Press and hold to return to the round screen">
+              <Text style={styles.pocketExitText}>HOLD TO EXIT</Text>
+            </Pressable>
           </View>
         </Modal>
 
@@ -2032,6 +2172,23 @@ const styles = StyleSheet.create({
   weightField: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
   weightInput: { width: 48, height: 34, borderWidth: 1, borderColor: '#dedfd5', borderRadius: 6, textAlign: 'center', color: INK, fontSize: 13, fontVariant: ['tabular-nums'], backgroundColor: '#fff' },
   weightUnit: { color: MUTED, fontSize: 10, fontWeight: '700', marginLeft: 4 },
+  pocketModeButton: { minHeight: 40, marginTop: 8, borderRadius: 8, borderWidth: 1, borderColor: '#dedfd5', alignItems: 'center', justifyContent: 'center' },
+  pocketModeButtonText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
+  latestCopy: { flex: 1, paddingVertical: 6, marginRight: 8 },
+  // Black screen: nearly no power on OLED iPhones, and easy to read in a dim pocket glance.
+  pocketScreen: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 48 },
+  pocketTitle: { color: '#8fa598', fontSize: 14, fontWeight: '800', letterSpacing: 2 },
+  pocketStats: { color: '#5d6b63', fontSize: 13, marginTop: 8, textAlign: 'center' },
+  pocketLogButton: { width: 240, height: 240, borderRadius: 120, borderWidth: 3, borderColor: '#2e6e52', backgroundColor: '#0c1a14', alignItems: 'center', justifyContent: 'center', marginTop: 36 },
+  pocketLogButtonPressed: { backgroundColor: '#1d684c', borderColor: '#6fbf97' },
+  pocketLogText: { color: '#cfe3d7', fontSize: 22, fontWeight: '800', letterSpacing: 1.5, textAlign: 'center', lineHeight: 28 },
+  pocketLogHint: { color: '#5d6b63', fontSize: 12, marginTop: 10 },
+  pocketBasketButton: { marginTop: 28, minWidth: 240, minHeight: 64, borderRadius: 32, borderWidth: 2, borderColor: '#7a5a2c', backgroundColor: '#15110a', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  pocketBasketText: { color: '#e0b77a', fontSize: 14, fontWeight: '800', letterSpacing: 1.2 },
+  pocketMessage: { color: '#a9bcb1', fontSize: 14, marginTop: 28, minHeight: 40, textAlign: 'center' },
+  pocketNote: { color: '#45524b', fontSize: 11, marginTop: 6, textAlign: 'center' },
+  pocketExitButton: { marginTop: 'auto', minWidth: 180, minHeight: 48, borderRadius: 24, borderWidth: 1, borderColor: '#2b3530', alignItems: 'center', justifyContent: 'center' },
+  pocketExitText: { color: '#6b7a71', fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },
