@@ -1600,11 +1600,6 @@ export default function App() {
 
         {screen === 'Home' ? (
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-            <View style={styles.menuIntro}>
-              <Text style={styles.menuIntroLabel}>YOUR NEXT SESSION</Text>
-              <Text style={styles.menuIntroTitle}>{selectedCourse?.name ?? 'Build your first course'}</Text>
-              <Text style={styles.menuIntroCopy}>{selectedCourse ? `${hasMultipleLayouts ? `${selectedCourse.layoutLabel} layout · ` : ''}${selectedCourse.holes} holes · ${shots.length} throws saved on this device` : 'Add a course, build your bag, or head to practice.'}</Text>
-            </View>
             {sessionActive && <Pressable onPress={() => setScreen('Round')} style={[styles.menuItem, styles.menuItemPrimary, styles.resumeItem]} accessibilityRole="button">
               <Text style={[styles.menuNumber, styles.menuNumberPrimary]}>▶</Text><View style={styles.menuItemCopy}><Text style={[styles.menuTitle, styles.menuTitlePrimary]}>Resume {mode === 'Round' ? 'round' : 'practice'}</Text><Text style={[styles.menuSubtitle, styles.menuSubtitlePrimary]}>{mode === 'Round' ? selectedCourse?.name ?? 'Round' : `${practiceFocus} practice`} · Hole {hole} · {shots.length} {shots.length === 1 ? 'throw' : 'throws'}</Text></View><Text style={[styles.menuArrow, styles.menuArrowPrimary]}>›</Text>
             </Pressable>}
