@@ -13,6 +13,7 @@ import {
   Linking,
   Modal,
   Pressable,
+  type PressableProps,
   ScrollView,
   Share,
   StyleSheet,
@@ -68,10 +69,11 @@ const SYNC_DEBOUNCE_MS = 4_000;
 const DISCIT_API_URL = 'https://discit-api.fly.dev/disc';
 const DISC_SEARCH_MIN_CHARS = 2;
 const DISC_SEARCH_MAX_RESULTS = 12;
-const INK = '#18231f';
-const MUTED = '#737c70';
-const GREEN = '#1d684c';
-const PAPER = '#f6f5ee';
+// Dark, low-glare theme: black background, soft light text, muted green accents.
+const INK = '#d6ddd8';
+const MUTED = '#7d8981';
+const GREEN = '#3a8f68';
+const PAPER = '#000000';
 // Deliberately tighter than any map can render; the map clamps to its maximum zoom level.
 const MAP_VIEW_WIDTH_FEET = 20;
 const MAP_SCALE_BAR_OPTIONS_FEET = [5, 10, 25, 50, 100];
@@ -88,9 +90,12 @@ const PUTT_RESULT_OPTIONS: Lie[] = ['Basket', 'Hit basket', 'Missed', 'OB'];
 const lieOptionsFor = (type: ThrowType) => (type === 'Putt' ? PUTT_RESULT_OPTIONS : LIE_OPTIONS);
 const lieLabel = (lie: Lie, type: ThrowType) => (lie === 'Basket' && type === 'Putt' ? 'Made' : lie);
 
-// Pocket mode dims the screen to this brightness (0-1); iOS restores the user's setting on lock.
-const POCKET_BRIGHTNESS = 0.05;
-const POCKET_KEEP_AWAKE_TAG = 'pocket-mode';
+// During a round the screen stays on and is dimmed to this brightness (0-1), and every button
+// needs a deliberate hold, so the phone can stay out without unlocking or stray taps.
+// iOS restores the user's brightness when the phone locks.
+const ROUND_BRIGHTNESS = 0.3;
+const ROUND_KEEP_AWAKE_TAG = 'round-in-progress';
+const HOLD_DELAY_MS = 400;
 // The throw editor's id for the round in progress (past rounds use their own ids).
 const ACTIVE_SESSION_ID = '__active__';
 
@@ -267,6 +272,24 @@ const regionForHole = (layout: HoleLayout | undefined): MapRegion | null => {
   };
 };
 
+// A button that only responds to a press-and-hold, with a light buzz when the hold registers.
+// Used during a round so that bumps and stray taps never act.
+const HoldPressable = ({ onPress, style, children, ...rest }: Omit<PressableProps, 'onPress' | 'onLongPress'> & { onPress?: () => void }) => (
+  <Pressable
+    {...rest}
+    delayLongPress={HOLD_DELAY_MS}
+    onLongPress={() => {
+      Haptics.selectionAsync().catch(() => undefined);
+      onPress?.();
+    }}
+    style={(state) => [typeof style === 'function' ? style(state) : style, state.pressed && holdStyles.holding]}
+  >
+    {children}
+  </Pressable>
+);
+
+const holdStyles = StyleSheet.create({ holding: { opacity: 0.55 } });
+
 export default function App() {
   const { width } = useWindowDimensions();
   const compact = width < 390;
@@ -314,9 +337,6 @@ export default function App() {
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
   // The last style used is the default for the next throw.
   const [throwStyle, setThrowStyle] = useState<ThrowStyle>('Backhand');
-  const [pocketMode, setPocketMode] = useState(false);
-  const [pocketMessage, setPocketMessage] = useState('');
-  const pocketBusy = useRef(false);
   const savedBrightness = useRef<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
@@ -518,14 +538,33 @@ export default function App() {
     if (loaded && account?.token) runSyncRef.current();
   }, [loaded, account?.token]);
 
-  // iOS restores the user's brightness when the phone locks, so pocket mode dims again on return.
+  // While the round screen is open: keep the screen on and dimmed, restoring brightness on the
+  // way out. iOS restores brightness itself when the phone locks, so dim again on return.
   useEffect(() => {
-    if (!pocketMode) return;
+    if (screen !== 'Round') return;
+    let left = false;
+    (async () => {
+      try {
+        await activateKeepAwakeAsync(ROUND_KEEP_AWAKE_TAG);
+        const current = await Brightness.getBrightnessAsync();
+        if (left) return;
+        savedBrightness.current = current;
+        await Brightness.setBrightnessAsync(ROUND_BRIGHTNESS);
+      } catch {
+        // Dimming and keep-awake are niceties; the round works without them.
+      }
+    })();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') Brightness.setBrightnessAsync(POCKET_BRIGHTNESS).catch(() => undefined);
+      if (state === 'active') Brightness.setBrightnessAsync(ROUND_BRIGHTNESS).catch(() => undefined);
     });
-    return () => subscription.remove();
-  }, [pocketMode]);
+    return () => {
+      left = true;
+      subscription.remove();
+      Promise.resolve(deactivateKeepAwake(ROUND_KEEP_AWAKE_TAG)).catch(() => undefined);
+      if (savedBrightness.current !== null) Brightness.setBrightnessAsync(savedBrightness.current).catch(() => undefined);
+      savedBrightness.current = null;
+    };
+  }, [screen]);
 
   // Sync whenever the app comes back to the foreground.
   useEffect(() => {
@@ -830,6 +869,7 @@ export default function App() {
       style: details.style, lie: details.lie, ...(details.quality === null ? {} : { quality: details.quality, qualityMax: QUALITY_MAX }),
     };
     setShots((current) => [...current, shot]);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     setThrowType(details.type === 'Putt' ? 'Putt' : 'Approach');
     const summary = `Throw ${score + 1} · ${formatThrowDetail(shot)}`;
     if (details.lie !== 'Basket') return summary;
@@ -855,7 +895,10 @@ export default function App() {
     setLoggingThrow(true);
     const point = await captureLie(setRoundMessage);
     setLoggingThrow(false);
-    if (!point) return;
+    if (!point) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      return;
+    }
     const guess = guessThrow();
     setThrowType(guess.type);
     setDisc(guess.disc);
@@ -874,48 +917,6 @@ export default function App() {
     setPendingLie(null);
   };
 
-  // ---------------------------------------------------------------- pocket mode
-  // A dimmed, always-on screen with large press-and-hold buttons, so throws can be logged
-  // without unlocking the phone and stray touches in a pocket don't log anything.
-  const enterPocketMode = async () => {
-    setPocketMessage('Hold the button where your disc landed.');
-    setPocketMode(true);
-    try {
-      await activateKeepAwakeAsync(POCKET_KEEP_AWAKE_TAG);
-      savedBrightness.current = await Brightness.getBrightnessAsync();
-      await Brightness.setBrightnessAsync(POCKET_BRIGHTNESS);
-    } catch {
-      // Dimming is a nicety; pocket mode still works without it.
-    }
-  };
-
-  const exitPocketMode = async () => {
-    setPocketMode(false);
-    try {
-      deactivateKeepAwake(POCKET_KEEP_AWAKE_TAG);
-      if (savedBrightness.current !== null) await Brightness.setBrightnessAsync(savedBrightness.current);
-    } catch {
-      // Nothing to restore.
-    }
-    savedBrightness.current = null;
-  };
-
-  const pocketLog = async (made: boolean) => {
-    if (pocketBusy.current) return;
-    pocketBusy.current = true;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-    const point = await captureLie(setPocketMessage);
-    if (!point) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
-      pocketBusy.current = false;
-      return;
-    }
-    const guess = guessThrow();
-    const message = recordThrow(point, { ...guess, style: throwStyle, lie: made ? 'Basket' : guess.type === 'Putt' ? 'Missed' : 'Fairway', quality: null });
-    setPocketMessage(message);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-    pocketBusy.current = false;
-  };
 
   const startNextHole = () => {
     setHole((current) => (current >= (selectedCourse?.holes ?? 18) ? 1 : current + 1));
@@ -1022,7 +1023,6 @@ export default function App() {
 
   // Ends the session; a finished round opens its summary, anything else returns home.
   const finishSession = () => {
-    if (pocketMode) exitPocketMode();
     const id = archiveSession();
     if (id && mode === 'Round') {
       setViewedSessionId(id);
@@ -1567,21 +1567,24 @@ export default function App() {
     setBagEntry('');
   };
 
+  // Buttons shared with other screens (header, throw editor) need a hold only during a round.
+  const RoundButton = (screen === 'Round' ? HoldPressable : Pressable) as typeof HoldPressable;
+
   return (
     <View style={styles.screen}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <View style={[styles.appFrame, compact && styles.appFrameCompact]}>
         <View style={styles.topline}>
-          <Pressable onPress={() => setScreen('Home')} style={styles.brand} accessibilityRole="button" accessibilityLabel="Glide Path home">
+          <RoundButton onPress={() => setScreen('Home')} style={styles.brand} accessibilityRole="button" accessibilityLabel="Glide Path home">
             <View style={styles.brandMark}><Text style={styles.brandGlyph}>G</Text></View>
             <View style={styles.brandCopy}>
               <Text style={styles.brandName}>GLIDE PATH</Text>
               <Text style={styles.brandSub}>FIELD LOG · EST. 2025</Text>
             </View>
-          </Pressable>
-          <Pressable onPress={() => setScreen('Account')} style={[styles.avatar, account && styles.avatarSignedIn]} accessibilityRole="button" accessibilityLabel={account ? `Account: ${account.user.displayName}` : 'Sign in'}>
+          </RoundButton>
+          <RoundButton onPress={() => setScreen('Account')} style={[styles.avatar, account && styles.avatarSignedIn]} accessibilityRole="button" accessibilityLabel={account ? `Account: ${account.user.displayName}` : 'Sign in'}>
             <Text style={[styles.avatarText, account && styles.avatarTextSignedIn]}>{account ? initialsFor(account.user.displayName) : '?'}</Text>
-          </Pressable>
+          </RoundButton>
         </View>
 
         <View style={[styles.pageHeading, screen === 'Round' && styles.pageHeadingCompact]}>
@@ -1591,7 +1594,7 @@ export default function App() {
           </View>}
           {screen !== 'Home' && (() => {
             const backToRounds = screen === 'RoundDetail' && !showingRoundSummary;
-            return <Pressable onPress={() => setScreen(screen === 'HoleWizard' ? 'CourseBuilder' : backToRounds ? 'Rounds' : 'Home')} style={styles.homeButton} accessibilityLabel={screen === 'HoleWizard' ? 'Return to course builder' : backToRounds ? 'Return to rounds' : 'Return to main menu'}><Text style={styles.homeButtonText}>{screen === 'HoleWizard' ? '‹ COURSES' : backToRounds ? '‹ ROUNDS' : '⌂ MENU'}</Text></Pressable>;
+            return <RoundButton onPress={() => setScreen(screen === 'HoleWizard' ? 'CourseBuilder' : backToRounds ? 'Rounds' : 'Home')} style={styles.homeButton} accessibilityLabel={screen === 'HoleWizard' ? 'Return to course builder' : backToRounds ? 'Return to rounds' : 'Return to main menu'}><Text style={styles.homeButtonText}>{screen === 'HoleWizard' ? '‹ COURSES' : backToRounds ? '‹ ROUNDS' : '⌂ MENU'}</Text></RoundButton>;
           })()}
         </View>
 
@@ -1633,7 +1636,7 @@ export default function App() {
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
             <View style={styles.builderPanel}>
               <Text style={styles.builderLabel}>COURSE NAME</Text>
-              <TextInput value={courseName} onChangeText={setCourseName} placeholder="e.g. Cedar Grove" placeholderTextColor="#92988c" style={styles.builderInput} returnKeyType="done" />
+              <TextInput value={courseName} onChangeText={setCourseName} placeholder="e.g. Cedar Grove" placeholderTextColor="#5f6a63" style={styles.builderInput} returnKeyType="done" />
               <Pressable onPress={addCourse} style={[styles.primaryButton, !courseName.trim() && styles.disabledButton]}><Text style={styles.primaryButtonText}>CREATE COURSE & MAP HOLE 1 ↗</Text></Pressable>
               <Text style={styles.builderHint}>Add holes one at a time while you map, then tap Finish.</Text>
             </View>
@@ -1657,9 +1660,9 @@ export default function App() {
                 </View>;
               })}
               <Text style={[styles.builderLabel, styles.detailLabel]}>SELECTED LAYOUT NAME</Text>
-              <TextInput value={selectedCourseLayouts.find((layout) => layout.id === selectedCourse.layoutId)?.name ?? ''} onChangeText={(name) => updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => ({ ...layout, name }))} placeholder={selectedCourse.layoutId === MAIN_LAYOUT_ID ? 'Main' : 'Layout name'} placeholderTextColor="#92988c" style={styles.builderInput} />
+              <TextInput value={selectedCourseLayouts.find((layout) => layout.id === selectedCourse.layoutId)?.name ?? ''} onChangeText={(name) => updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => ({ ...layout, name }))} placeholder={selectedCourse.layoutId === MAIN_LAYOUT_ID ? 'Main' : 'Layout name'} placeholderTextColor="#5f6a63" style={styles.builderInput} />
               <Text style={[styles.builderLabel, styles.detailLabel]}>NEW LAYOUT</Text>
-              <TextInput value={newLayoutName} onChangeText={setNewLayoutName} placeholder="e.g. Blue tees or Winter pins" placeholderTextColor="#92988c" style={styles.builderInput} />
+              <TextInput value={newLayoutName} onChangeText={setNewLayoutName} placeholder="e.g. Blue tees or Winter pins" placeholderTextColor="#5f6a63" style={styles.builderInput} />
               <View style={styles.courseLinks}>
                 <Pressable onPress={() => addLayout(true)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ COPY OF {selectedCourse.layoutLabel.toUpperCase()}</Text></Pressable>
                 <Pressable onPress={() => addLayout(false)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ BLANK LAYOUT</Text></Pressable>
@@ -1685,25 +1688,25 @@ export default function App() {
                 <View style={styles.courseStat}><Text style={styles.statLabel}>ELEVATION CHANGE</Text><Text style={styles.courseStatValue}>{selectedCourseStats.elevationFeet === null ? '—' : `${selectedCourseStats.elevationFeet} ft`}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.elevationFeet === null ? 'Save tee and basket points to measure' : 'Highest to lowest point'}</Text></View>
               </View>}
               <Text style={styles.builderLabel}>STREET</Text>
-              <TextInput value={courseStreet(selectedCourse)} onChangeText={(street) => updateCourseDetails(selectedCourse.id, { street, address: undefined })} placeholder="123 Park Road" placeholderTextColor="#92988c" style={styles.builderInput} textContentType="streetAddressLine1" />
+              <TextInput value={courseStreet(selectedCourse)} onChangeText={(street) => updateCourseDetails(selectedCourse.id, { street, address: undefined })} placeholder="123 Park Road" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="streetAddressLine1" />
               <View style={styles.cityStateRow}>
                 <View style={styles.cityField}>
                   <Text style={[styles.builderLabel, styles.detailLabel]}>CITY</Text>
-                  <TextInput value={selectedCourse.city ?? ''} onChangeText={(city) => updateCourseDetails(selectedCourse.id, { city })} placeholder="City" placeholderTextColor="#92988c" style={styles.builderInput} textContentType="addressCity" />
+                  <TextInput value={selectedCourse.city ?? ''} onChangeText={(city) => updateCourseDetails(selectedCourse.id, { city })} placeholder="City" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="addressCity" />
                 </View>
                 <View style={styles.stateField}>
                   <Text style={[styles.builderLabel, styles.detailLabel]}>STATE</Text>
-                  <TextInput value={selectedCourse.state ?? ''} onChangeText={(state) => updateCourseDetails(selectedCourse.id, { state: state.toUpperCase() })} placeholder="ST" placeholderTextColor="#92988c" style={styles.builderInput} autoCapitalize="characters" autoCorrect={false} maxLength={2} textContentType="addressState" />
+                  <TextInput value={selectedCourse.state ?? ''} onChangeText={(state) => updateCourseDetails(selectedCourse.id, { state: state.toUpperCase() })} placeholder="ST" placeholderTextColor="#5f6a63" style={styles.builderInput} autoCapitalize="characters" autoCorrect={false} maxLength={2} textContentType="addressState" />
                 </View>
               </View>
               <Text style={[styles.builderLabel, styles.detailLabel]}>PHONE</Text>
-              <TextInput value={selectedCourse.phone ?? ''} onChangeText={(phone) => updateCourseDetails(selectedCourse.id, { phone: formatPhone(phone) })} placeholder="(555) 123-4567" placeholderTextColor="#92988c" style={styles.builderInput} keyboardType="phone-pad" textContentType="telephoneNumber" />
+              <TextInput value={selectedCourse.phone ?? ''} onChangeText={(phone) => updateCourseDetails(selectedCourse.id, { phone: formatPhone(phone) })} placeholder="(555) 123-4567" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="phone-pad" textContentType="telephoneNumber" />
               <Text style={[styles.builderLabel, styles.detailLabel]}>EMAIL</Text>
-              <TextInput value={selectedCourse.email ?? ''} onChangeText={(email) => updateCourseDetails(selectedCourse.id, { email })} placeholder="contact@example.com" placeholderTextColor="#92988c" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" />
+              <TextInput value={selectedCourse.email ?? ''} onChangeText={(email) => updateCourseDetails(selectedCourse.id, { email })} placeholder="contact@example.com" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" />
               <Text style={[styles.builderLabel, styles.detailLabel]}>WEBSITE</Text>
-              <TextInput value={selectedCourse.website ?? ''} onChangeText={(website) => updateCourseDetails(selectedCourse.id, { website })} placeholder="udisc.com/courses/…" placeholderTextColor="#92988c" style={styles.builderInput} keyboardType="url" autoCapitalize="none" autoCorrect={false} textContentType="URL" />
+              <TextInput value={selectedCourse.website ?? ''} onChangeText={(website) => updateCourseDetails(selectedCourse.id, { website })} placeholder="udisc.com/courses/…" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="url" autoCapitalize="none" autoCorrect={false} textContentType="URL" />
               <Text style={[styles.builderLabel, styles.detailLabel]}>INFO TO KNOW</Text>
-              <TextInput value={selectedCourse.notes ?? ''} onChangeText={(notes) => updateCourseDetails(selectedCourse.id, { notes })} placeholder="Parking, fees, hours, restrooms, mandos, water hazards…" placeholderTextColor="#92988c" style={[styles.builderInput, styles.notesInput]} multiline textAlignVertical="top" />
+              <TextInput value={selectedCourse.notes ?? ''} onChangeText={(notes) => updateCourseDetails(selectedCourse.id, { notes })} placeholder="Parking, fees, hours, restrooms, mandos, water hazards…" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.notesInput]} multiline textAlignVertical="top" />
               {renderCourseLinks(selectedCourse)}
             </View>}
             {selectedCourse && <View style={styles.mapEditor}><View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Map holes</Text><Text style={styles.mapProgress}>{mappedHoleCount}/{selectedCourse.holes} MAPPED</Text></View><Text style={styles.mapInstruction}>Map each hole with satellite imagery and on-site GPS capture.</Text><Pressable onPress={() => openHoleWizard(selectedCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{hasMultipleLayouts ? `MAP ${selectedCourse.layoutLabel.toUpperCase()} LAYOUT ↗` : 'MAP SELECTED COURSE ↗'}</Text></Pressable>
@@ -1758,7 +1761,7 @@ export default function App() {
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
             <View style={styles.builderPanel}>
               <Text style={styles.builderLabel}>ADD A DISC</Text>
-              <View style={styles.addDiscRow}><TextInput value={bagEntry} onChangeText={setBagEntry} onSubmitEditing={addDisc} placeholder="Disc name or mold" placeholderTextColor="#92988c" style={[styles.builderInput, styles.discInput]} returnKeyType="done" /><Pressable onPress={addDisc} style={styles.addDiscButton}><Text style={styles.addDiscButtonText}>ADD</Text></Pressable></View>
+              <View style={styles.addDiscRow}><TextInput value={bagEntry} onChangeText={setBagEntry} onSubmitEditing={addDisc} placeholder="Disc name or mold" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.discInput]} returnKeyType="done" /><Pressable onPress={addDisc} style={styles.addDiscButton}><Text style={styles.addDiscButtonText}>ADD</Text></Pressable></View>
               {discQuery.length >= DISC_SEARCH_MIN_CHARS && <View style={styles.discResults}>
                 {discSearchPending ? <Text style={styles.discResultsNote}>Searching DiscIt…</Text>
                   : discSearch.failed ? <Text style={styles.discResultsNote}>Could not reach DiscIt. Check your connection, or tap ADD to save this name.</Text>
@@ -1769,7 +1772,7 @@ export default function App() {
             </View>
             <Text style={styles.builderSectionTitle}>Your bag · {bag.length} discs</Text>
             {!bag.length && <Text style={styles.mapInstruction}>Your bag is empty. Search for a disc above to add it.</Text>}
-            {bag.map((item, index) => <View key={`${item}-${index}`} style={styles.bagItem}><View style={styles.bagItemSelect}><View style={[styles.discSwatch, { backgroundColor: bagDetails[item]?.background_color ?? ['#e08b48', '#619276', '#8ba4a0', '#d4d1c3'][index % 4] }]}><Text style={[styles.discSwatchText, bagDetails[item]?.color ? { color: bagDetails[item].color } : null]}>{item.charAt(0).toUpperCase()}</Text></View><View style={styles.bagItemCopy}><Text style={styles.bagItemName}>{item}</Text>{bagDetails[item] && <Text style={styles.bagItemMeta}>{formatDiscMeta(bagDetails[item])}</Text>}{shots.some((shot) => shot.disc === item) && <Text style={styles.bagItemMeta}>{shots.filter((shot) => shot.disc === item).length} throws logged</Text>}</View></View><View style={styles.weightField}><TextInput value={bagWeights[item] ? String(bagWeights[item]) : ''} onChangeText={(text) => setDiscWeight(item, text)} placeholder="—" placeholderTextColor="#a5aa9c" keyboardType="number-pad" maxLength={3} style={styles.weightInput} accessibilityLabel={`Weight of ${item} in grams`} /><Text style={styles.weightUnit}>g</Text></View><Pressable onPress={() => deleteDisc(item)} accessibilityRole="button" accessibilityLabel={`Remove ${item} from bag`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
+            {bag.map((item, index) => <View key={`${item}-${index}`} style={styles.bagItem}><View style={styles.bagItemSelect}><View style={[styles.discSwatch, { backgroundColor: bagDetails[item]?.background_color ?? ['#e08b48', '#619276', '#8ba4a0', '#d4d1c3'][index % 4] }]}><Text style={[styles.discSwatchText, bagDetails[item]?.color ? { color: bagDetails[item].color } : null]}>{item.charAt(0).toUpperCase()}</Text></View><View style={styles.bagItemCopy}><Text style={styles.bagItemName}>{item}</Text>{bagDetails[item] && <Text style={styles.bagItemMeta}>{formatDiscMeta(bagDetails[item])}</Text>}{shots.some((shot) => shot.disc === item) && <Text style={styles.bagItemMeta}>{shots.filter((shot) => shot.disc === item).length} throws logged</Text>}</View></View><View style={styles.weightField}><TextInput value={bagWeights[item] ? String(bagWeights[item]) : ''} onChangeText={(text) => setDiscWeight(item, text)} placeholder="—" placeholderTextColor="#5f6a63" keyboardType="number-pad" maxLength={3} style={styles.weightInput} accessibilityLabel={`Weight of ${item} in grams`} /><Text style={styles.weightUnit}>g</Text></View><Pressable onPress={() => deleteDisc(item)} accessibilityRole="button" accessibilityLabel={`Remove ${item} from bag`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
           </ScrollView>
         ) : screen === 'Practice' ? (
           <ScrollView contentContainerStyle={styles.content}>
@@ -1782,9 +1785,9 @@ export default function App() {
             <View style={styles.roundToolbar}>
               <View style={styles.courseLabel}><Text style={styles.holeLabel}>{mode === 'Practice' ? `${practiceFocus.toUpperCase()} PRACTICE` : 'PLAYING AT'}</Text><Text style={styles.courseLabelName}>{selectedCourse?.name ?? 'Practice area'}{hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''}</Text></View>
               <View style={styles.roundHoleNav}>
-                <Pressable onPress={goToPreviousHole} disabled={hole <= 1} style={[styles.roundHoleArrow, hole <= 1 && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Previous hole"><Text style={styles.holeNavArrow}>‹</Text></Pressable>
+                <HoldPressable onPress={goToPreviousHole} disabled={hole <= 1} style={[styles.roundHoleArrow, hole <= 1 && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Previous hole"><Text style={styles.holeNavArrow}>‹</Text></HoldPressable>
                 <View style={styles.holeSelector}><Text style={styles.holeLabel}>HOLE</Text><Text style={styles.holeNumber}>{String(hole).padStart(2, '0')}<Text style={styles.holeTotal}> / {selectedCourse?.holes ?? 18}</Text></Text></View>
-                <Pressable onPress={startNextHole} style={styles.roundHoleArrow} accessibilityRole="button" accessibilityLabel="Next hole"><Text style={styles.holeNavArrow}>›</Text></Pressable>
+                <HoldPressable onPress={startNextHole} style={styles.roundHoleArrow} accessibilityRole="button" accessibilityLabel="Next hole"><Text style={styles.holeNavArrow}>›</Text></HoldPressable>
               </View>
             </View>
 
@@ -1817,20 +1820,19 @@ export default function App() {
               {lieToBasket && <View style={styles.basketDistanceRow}><Text style={styles.holeDistanceLabel}>YOUR LIE TO BASKET</Text><Text style={styles.holeDistanceValue}>{lieToBasket.feet} ft{lieToBasket.elevation === null ? '' : `  ${formatElevation(lieToBasket.elevation)}`}</Text></View>}
             </View>}
 
-            <Pressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then tap</Text></Pressable>
-            <Pressable onPress={enterPocketMode} style={styles.pocketModeButton} accessibilityRole="button" accessibilityHint="Dims the screen and logs throws with a long press, for keeping the phone in your pocket"><Text style={styles.pocketModeButtonText}>POCKET MODE · LOG WITHOUT UNLOCKING</Text></Pressable>
+            <HoldPressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then press and hold</Text></HoldPressable>
             {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
 
             <View style={styles.latestRow}>
-              <Pressable onPress={() => latestShot && openActiveThrowEditor(latestShot)} disabled={!latestShot} style={styles.latestCopy} accessibilityRole="button" accessibilityHint="Opens the throw to change its details"><Text style={styles.latestEyebrow}>LATEST THROW{latestShot ? '  ·  TAP TO EDIT' : ''}</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and tap Log throw'}</Text></Pressable>
-              {activeShots.length > 0 && <Pressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></Pressable>}
+              <HoldPressable onPress={() => latestShot && openActiveThrowEditor(latestShot)} disabled={!latestShot} style={styles.latestCopy} accessibilityRole="button" accessibilityHint="Opens the throw to change its details"><Text style={styles.latestEyebrow}>LATEST THROW{latestShot ? '  ·  HOLD TO EDIT' : ''}</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'Walk to your disc and hold Log throw'}</Text></HoldPressable>
+              {activeShots.length > 0 && <HoldPressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></HoldPressable>}
             </View>
-            <Pressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></Pressable>
-            <Pressable onPress={endSession} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></Pressable>
+            <HoldPressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></HoldPressable>
+            <HoldPressable onPress={endSession} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></HoldPressable>
             {selectedCourse ? <View style={styles.roundCourseInfo}>
-              <Pressable onPress={() => setShowCourseInfo((current) => !current)} style={styles.roundCourseInfoHeader} accessibilityRole="button" accessibilityState={{ expanded: showCourseInfo }}>
+              <HoldPressable onPress={() => setShowCourseInfo((current) => !current)} style={styles.roundCourseInfoHeader} accessibilityRole="button" accessibilityState={{ expanded: showCourseInfo }}>
                 <Text style={styles.sectionTitle}>Course info</Text><Text style={styles.menuArrow}>{showCourseInfo ? '−' : '+'}</Text>
-              </Pressable>
+              </HoldPressable>
               {showCourseInfo && <>
                 {selectedCourseStats && <Text style={styles.roundCourseInfoText}>{[
                   `${selectedCourseStats.holes} ${selectedCourseStats.holes === 1 ? 'hole' : 'holes'}`,
@@ -1876,12 +1878,12 @@ export default function App() {
               <View style={styles.builderPanel}>
                 {authMode === 'register' && <>
                   <Text style={styles.builderLabel}>NAME</Text>
-                  <TextInput value={authName} onChangeText={setAuthName} placeholder="Shown on courses you publish" placeholderTextColor="#92988c" style={styles.builderInput} textContentType="name" autoComplete="name" />
+                  <TextInput value={authName} onChangeText={setAuthName} placeholder="Shown on courses you publish" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="name" autoComplete="name" />
                 </>}
                 <Text style={[styles.builderLabel, authMode === 'register' && styles.detailLabel]}>EMAIL</Text>
-                <TextInput value={authEmail} onChangeText={setAuthEmail} placeholder="you@example.com" placeholderTextColor="#92988c" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" autoComplete="email" />
+                <TextInput value={authEmail} onChangeText={setAuthEmail} placeholder="you@example.com" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" autoComplete="email" />
                 <Text style={[styles.builderLabel, styles.detailLabel]}>PASSWORD</Text>
-                <TextInput value={authPassword} onChangeText={setAuthPassword} onSubmitEditing={submitAuth} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Password'} placeholderTextColor="#92988c" style={styles.builderInput} secureTextEntry textContentType={authMode === 'register' ? 'newPassword' : 'password'} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} returnKeyType="go" />
+                <TextInput value={authPassword} onChangeText={setAuthPassword} onSubmitEditing={submitAuth} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Password'} placeholderTextColor="#5f6a63" style={styles.builderInput} secureTextEntry textContentType={authMode === 'register' ? 'newPassword' : 'password'} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} returnKeyType="go" />
                 {authError ? <Text style={styles.authError}>{authError}</Text> : null}
                 <Pressable onPress={submitAuth} disabled={authBusy} style={[styles.primaryButton, authBusy && styles.disabledButton]}><Text style={styles.primaryButtonText}>{authBusy ? 'PLEASE WAIT…' : authMode === 'register' ? 'CREATE ACCOUNT' : 'SIGN IN'}</Text></Pressable>
                 {authBusy && <Text style={styles.builderHint}>The server can take up to a minute to wake if it hasn’t been used recently.</Text>}
@@ -1915,7 +1917,7 @@ export default function App() {
               <View style={styles.builderPanel}>
                 <Text style={styles.builderLabel}>COURSE, CITY OR STATE</Text>
                 <View style={styles.addDiscRow}>
-                  <TextInput value={findQuery} onChangeText={setFindQuery} onSubmitEditing={() => runCourseSearch(false)} placeholder="e.g. Cedar Grove or PA" placeholderTextColor="#92988c" style={[styles.builderInput, styles.discInput]} returnKeyType="search" />
+                  <TextInput value={findQuery} onChangeText={setFindQuery} onSubmitEditing={() => runCourseSearch(false)} placeholder="e.g. Cedar Grove or PA" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.discInput]} returnKeyType="search" />
                   <Pressable onPress={() => runCourseSearch(false)} disabled={findBusy} style={[styles.addDiscButton, findBusy && styles.disabledButton]}><Text style={styles.addDiscButtonText}>SEARCH</Text></Pressable>
                 </View>
                 <Pressable onPress={() => runCourseSearch(true)} disabled={findBusy} style={[styles.courseLink, styles.toggleAction, findBusy && styles.disabledButton]}><Text style={styles.courseLinkText}>◎ COURSES NEAR ME</Text></Pressable>
@@ -2053,61 +2055,38 @@ export default function App() {
               {logStep === 1 ? <>
                 <Text style={styles.fieldLabel}>WHICH DISC?</Text>
                 <View style={styles.sheetOptions}>
-                  {bag.map((item, index) => <Pressable key={`${item}-${index}`} onPress={() => { setDisc(item); setLogStep(2); }} style={[styles.chip, styles.sheetChip, disc === item && styles.chipSelected]}><Text style={[styles.chipText, disc === item && styles.chipTextSelected]}>{item}</Text></Pressable>)}
-                  {!bag.length && <Pressable onPress={() => { setDisc(''); setLogStep(2); }} style={[styles.chip, styles.sheetChip]}><Text style={styles.chipText}>No disc (bag is empty)</Text></Pressable>}
+                  {bag.map((item, index) => <HoldPressable key={`${item}-${index}`} onPress={() => { setDisc(item); setLogStep(2); }} style={[styles.chip, styles.sheetChip, disc === item && styles.chipSelected]}><Text style={[styles.chipText, disc === item && styles.chipTextSelected]}>{item}</Text></HoldPressable>)}
+                  {!bag.length && <HoldPressable onPress={() => { setDisc(''); setLogStep(2); }} style={[styles.chip, styles.sheetChip]}><Text style={styles.chipText}>No disc (bag is empty)</Text></HoldPressable>}
                 </View>
               </> : logStep === 2 ? <>
                 <Text style={styles.fieldLabel}>TYPE OF THROW</Text>
                 <View style={styles.typeRow}>
-                  {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowType(item)} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]} accessibilityState={{ selected: throwType === item }}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                  {TYPE_OPTIONS.map((item) => <HoldPressable key={item} onPress={() => setThrowType(item)} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]} accessibilityState={{ selected: throwType === item }}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></HoldPressable>)}
                 </View>
                 <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW DID YOU THROW IT?</Text>
                 <View style={[styles.typeRow, styles.lieGrid]}>
-                  {STYLE_OPTIONS.map((item) => <Pressable key={item} onPress={() => { setThrowStyle(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwStyle === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwStyle === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                  {STYLE_OPTIONS.map((item) => <HoldPressable key={item} onPress={() => { setThrowStyle(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwStyle === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwStyle === item && styles.typeTextSelected]}>{item}</Text></HoldPressable>)}
                 </View>
               </> : logStep === 3 ? <>
                 <Text style={styles.fieldLabel}>{throwType === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
                 <View style={[styles.typeRow, styles.lieGrid]}>
-                  {lieOptionsFor(throwType).map((item) => <Pressable key={item} onPress={() => { if (item === 'Basket') { saveThrow(QUALITY_MAX, 'Basket'); return; } setThrowLie(item); setLogStep(4); }} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwLie === item && styles.typeButtonSelected]} accessibilityLabel={item === 'OB' ? 'Out of bounds, one penalty stroke' : lieLabel(item, throwType)}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwLie === item && styles.typeTextSelected]}>{lieLabel(item, throwType)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
+                  {lieOptionsFor(throwType).map((item) => <HoldPressable key={item} onPress={() => { if (item === 'Basket') { saveThrow(QUALITY_MAX, 'Basket'); return; } setThrowLie(item); setLogStep(4); }} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwLie === item && styles.typeButtonSelected]} accessibilityLabel={item === 'OB' ? 'Out of bounds, one penalty stroke' : lieLabel(item, throwType)}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwLie === item && styles.typeTextSelected]}>{lieLabel(item, throwType)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</HoldPressable>)}
                 </View>
               </> : <>
                 <Text style={styles.fieldLabel}>HOW WAS THE THROW?</Text>
                 <View style={styles.typeRow}>
-                  {QUALITY_OPTIONS.map((option) => <Pressable key={option.value} onPress={() => saveThrow(option.value)} style={[styles.typeButton, styles.qualityButton]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></Pressable>)}
+                  {QUALITY_OPTIONS.map((option) => <HoldPressable key={option.value} onPress={() => saveThrow(option.value)} style={[styles.typeButton, styles.qualityButton]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></HoldPressable>)}
                 </View>
               </>}
               <View style={styles.editFooter}>
-                {logStep > 1 ? <Pressable onPress={() => setLogStep(logStep === 4 ? 3 : logStep === 3 ? 2 : 1)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable> : <View />}
+                {logStep > 1 ? <HoldPressable onPress={() => setLogStep(logStep === 4 ? 3 : logStep === 3 ? 2 : 1)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></HoldPressable> : <View />}
                 <View style={styles.editFooterActions}>
-                  <Pressable onPress={cancelLogThrow} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
+                  <HoldPressable onPress={cancelLogThrow} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></HoldPressable>
                   {/* Saves with the choices so far: the guesses plus anything changed. */}
-                  <Pressable onPress={() => saveThrow(null)} style={[styles.sheetFooterButton, styles.saveButton]} accessibilityLabel={`Save now: ${disc || 'no disc'} ${throwStyle.toLowerCase()} ${throwType.toLowerCase()}, ${throwLie.toLowerCase()}`}><Text style={styles.saveButtonText}>SAVE ✓</Text></Pressable>
+                  <HoldPressable onPress={() => saveThrow(null)} style={[styles.sheetFooterButton, styles.saveButton]} accessibilityLabel={`Save now: ${disc || 'no disc'} ${throwStyle.toLowerCase()} ${throwType.toLowerCase()}, ${throwLie.toLowerCase()}`}><Text style={styles.saveButtonText}>SAVE ✓</Text></HoldPressable>
                 </View>
               </View>
             </View>
-          </View>
-        </Modal>
-
-        <Modal visible={pocketMode} animationType="fade" presentationStyle="fullScreen" onRequestClose={exitPocketMode}>
-          <View style={styles.pocketScreen}>
-            <Text style={styles.pocketTitle}>HOLE {hole}{selectedHoleLayout?.par ? ` · PAR ${selectedHoleLayout.par}` : ''}</Text>
-            <Text style={styles.pocketStats}>{[
-              `Hole score ${holeStrokes}`,
-              mode === 'Round' && roundScore.toPar !== null ? `Round ${formatScoreToPar(roundScore.toPar)}` : null,
-              lieToBasket ? `${lieToBasket.feet} ft to basket${lieToBasket.elevation === null ? '' : ` ${formatElevation(lieToBasket.elevation)}`}` : null,
-            ].filter(Boolean).join('  ·  ')}</Text>
-            <Pressable onLongPress={() => pocketLog(false)} delayLongPress={600} onPressIn={() => Haptics.selectionAsync().catch(() => undefined)} style={({ pressed }) => [styles.pocketLogButton, pressed && styles.pocketLogButtonPressed]} accessibilityRole="button" accessibilityLabel="Log throw" accessibilityHint="Press and hold to save a throw where you are standing">
-              <Text style={styles.pocketLogText}>HOLD TO{'\n'}LOG THROW</Text>
-              <Text style={styles.pocketLogHint}>Throw {score + 1}</Text>
-            </Pressable>
-            <Pressable onLongPress={() => pocketLog(true)} delayLongPress={600} style={({ pressed }) => [styles.pocketBasketButton, pressed && styles.pocketLogButtonPressed]} accessibilityRole="button" accessibilityLabel="In the basket" accessibilityHint="Press and hold when a throw goes in, to finish the hole">
-              <Text style={styles.pocketBasketText}>HOLD · IN THE BASKET</Text>
-            </Pressable>
-            <Text style={styles.pocketMessage} accessibilityLiveRegion="polite">{pocketMessage}</Text>
-            <Text style={styles.pocketNote}>Throws are saved with best guesses. Fix them later by tapping Latest throw.</Text>
-            <Pressable onLongPress={exitPocketMode} delayLongPress={800} style={styles.pocketExitButton} accessibilityRole="button" accessibilityLabel="Exit pocket mode" accessibilityHint="Press and hold to return to the round screen">
-              <Text style={styles.pocketExitText}>HOLD TO EXIT</Text>
-            </Pressable>
           </View>
         </Modal>
 
@@ -2118,30 +2097,30 @@ export default function App() {
               {editingShot && <Text style={styles.sheetDistance}>{editingShot.feet ? `${editingShot.feet} ft` : 'Distance unavailable'}</Text>}
               <Text style={styles.fieldLabel}>DISC</Text>
               <View style={styles.sheetOptions}>
-                {editDiscOptions.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, disc: item }))} style={[styles.chip, styles.sheetChip, throwDraft.disc === item && styles.chipSelected]}><Text style={[styles.chipText, throwDraft.disc === item && styles.chipTextSelected]}>{item}</Text></Pressable>)}
+                {editDiscOptions.map((item) => <RoundButton key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, disc: item }))} style={[styles.chip, styles.sheetChip, throwDraft.disc === item && styles.chipSelected]}><Text style={[styles.chipText, throwDraft.disc === item && styles.chipTextSelected]}>{item}</Text></RoundButton>)}
                 {!editDiscOptions.length && <Text style={styles.chipText}>No discs in your bag</Text>}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>TYPE OF THROW</Text>
               <View style={styles.typeRow}>
-                {TYPE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                {TYPE_OPTIONS.map((item) => <RoundButton key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></RoundButton>)}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW WAS IT THROWN?</Text>
               <View style={[styles.typeRow, styles.lieGrid]}>
-                {STYLE_OPTIONS.map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, style: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwDraft.style === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.style === item && styles.typeTextSelected]}>{item}</Text></Pressable>)}
+                {STYLE_OPTIONS.map((item) => <RoundButton key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, style: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwDraft.style === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.style === item && styles.typeTextSelected]}>{item}</Text></RoundButton>)}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>{throwDraft.type === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
               <View style={[styles.typeRow, styles.lieGrid]}>
-                {lieOptionsFor(throwDraft.type).map((item) => <Pressable key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{lieLabel(item, throwDraft.type)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Pressable>)}
+                {lieOptionsFor(throwDraft.type).map((item) => <RoundButton key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{lieLabel(item, throwDraft.type)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</RoundButton>)}
               </View>
               <Text style={[styles.fieldLabel, styles.typeLabel]}>QUALITY</Text>
               <View style={styles.typeRow}>
-                {QUALITY_OPTIONS.map((option) => <Pressable key={option.value} onPress={() => setThrowDraft((draft) => ({ ...draft, quality: option.value }))} style={[styles.typeButton, styles.qualityButton, throwDraft.quality === option.value && styles.typeButtonSelected]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></Pressable>)}
+                {QUALITY_OPTIONS.map((option) => <RoundButton key={option.value} onPress={() => setThrowDraft((draft) => ({ ...draft, quality: option.value }))} style={[styles.typeButton, styles.qualityButton, throwDraft.quality === option.value && styles.typeButtonSelected]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></RoundButton>)}
               </View>
               <View style={styles.editFooter}>
-                <Pressable onPress={deleteEditingThrow} style={styles.sheetFooterButton}><Text style={styles.endSessionText}>DELETE</Text></Pressable>
+                <RoundButton onPress={deleteEditingThrow} style={styles.sheetFooterButton}><Text style={styles.endSessionText}>DELETE</Text></RoundButton>
                 <View style={styles.editFooterActions}>
-                  <Pressable onPress={() => setEditingThrow(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
-                  <Pressable onPress={saveThrowEdit} style={[styles.sheetFooterButton, styles.saveButton]}><Text style={styles.saveButtonText}>SAVE</Text></Pressable>
+                  <RoundButton onPress={() => setEditingThrow(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></RoundButton>
+                  <RoundButton onPress={saveThrowEdit} style={[styles.sheetFooterButton, styles.saveButton]}><Text style={styles.saveButtonText}>SAVE</Text></RoundButton>
                 </View>
               </View>
             </View>
@@ -2155,40 +2134,24 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#e8e9df', alignItems: 'center' },
+  screen: { flex: 1, backgroundColor: '#000000', alignItems: 'center' },
   appFrame: { flex: 1, width: '100%', maxWidth: 560, backgroundColor: PAPER, paddingTop: 48 },
   appFrameCompact: { paddingTop: 38 },
   topline: { height: 46, marginHorizontal: 23, flexDirection: 'row', alignItems: 'center' },
   brandMark: { width: 34, height: 34, borderRadius: 11, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },
-  brandGlyph: { color: '#fff', fontFamily: 'Georgia', fontSize: 22, fontWeight: '700' },
+  brandGlyph: { color: '#e6ece8', fontFamily: 'Georgia', fontSize: 22, fontWeight: '700' },
   brand: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   brandCopy: { marginLeft: 10, flex: 1 },
   brandName: { color: INK, fontSize: 12, fontWeight: '800', letterSpacing: 1.25 },
   brandSub: { color: MUTED, fontSize: 8, fontWeight: '700', marginTop: 3 },
-  avatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#d5d7cd', alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#26302b', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: INK, fontSize: 10, fontWeight: '800' },
   avatarSignedIn: { backgroundColor: GREEN, borderColor: GREEN },
-  avatarTextSignedIn: { color: '#fff' },
+  avatarTextSignedIn: { color: '#e6ece8' },
   weightField: { flexDirection: 'row', alignItems: 'center', marginLeft: 6 },
-  weightInput: { width: 48, height: 34, borderWidth: 1, borderColor: '#dedfd5', borderRadius: 6, textAlign: 'center', color: INK, fontSize: 13, fontVariant: ['tabular-nums'], backgroundColor: '#fff' },
+  weightInput: { width: 48, height: 34, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, textAlign: 'center', color: INK, fontSize: 13, fontVariant: ['tabular-nums'], backgroundColor: '#101412' },
   weightUnit: { color: MUTED, fontSize: 10, fontWeight: '700', marginLeft: 4 },
-  pocketModeButton: { minHeight: 40, marginTop: 8, borderRadius: 8, borderWidth: 1, borderColor: '#dedfd5', alignItems: 'center', justifyContent: 'center' },
-  pocketModeButtonText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
   latestCopy: { flex: 1, paddingVertical: 6, marginRight: 8 },
-  // Black screen: nearly no power on OLED iPhones, and easy to read in a dim pocket glance.
-  pocketScreen: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 48 },
-  pocketTitle: { color: '#8fa598', fontSize: 14, fontWeight: '800', letterSpacing: 2 },
-  pocketStats: { color: '#5d6b63', fontSize: 13, marginTop: 8, textAlign: 'center' },
-  pocketLogButton: { width: 240, height: 240, borderRadius: 120, borderWidth: 3, borderColor: '#2e6e52', backgroundColor: '#0c1a14', alignItems: 'center', justifyContent: 'center', marginTop: 36 },
-  pocketLogButtonPressed: { backgroundColor: '#1d684c', borderColor: '#6fbf97' },
-  pocketLogText: { color: '#cfe3d7', fontSize: 22, fontWeight: '800', letterSpacing: 1.5, textAlign: 'center', lineHeight: 28 },
-  pocketLogHint: { color: '#5d6b63', fontSize: 12, marginTop: 10 },
-  pocketBasketButton: { marginTop: 28, minWidth: 240, minHeight: 64, borderRadius: 32, borderWidth: 2, borderColor: '#7a5a2c', backgroundColor: '#15110a', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  pocketBasketText: { color: '#e0b77a', fontSize: 14, fontWeight: '800', letterSpacing: 1.2 },
-  pocketMessage: { color: '#a9bcb1', fontSize: 14, marginTop: 28, minHeight: 40, textAlign: 'center' },
-  pocketNote: { color: '#45524b', fontSize: 11, marginTop: 6, textAlign: 'center' },
-  pocketExitButton: { marginTop: 'auto', minWidth: 180, minHeight: 48, borderRadius: 24, borderWidth: 1, borderColor: '#2b3530', alignItems: 'center', justifyContent: 'center' },
-  pocketExitText: { color: '#6b7a71', fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },
@@ -2196,14 +2159,14 @@ const styles = StyleSheet.create({
   editFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 },
   editFooterActions: { flexDirection: 'row' },
   saveButton: { backgroundColor: GREEN, borderColor: GREEN, marginLeft: 8 },
-  saveButtonText: { color: '#fff', fontSize: 8, fontWeight: '800' },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 10, padding: 12, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e5dc' },
+  saveButtonText: { color: '#e6ece8', fontSize: 8, fontWeight: '800' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 10, padding: 12, borderRadius: 8, backgroundColor: '#101412', borderWidth: 1, borderColor: '#26302b' },
   toggleCopy: { flex: 1, marginRight: 12 },
   toggleAction: { alignSelf: 'flex-start', marginTop: 0, marginBottom: 16 },
   authTabs: { marginTop: 0, marginBottom: 12 },
-  authError: { color: '#a55343', fontSize: 10, lineHeight: 15, marginTop: 10 },
+  authError: { color: '#d07a68', fontSize: 10, lineHeight: 15, marginTop: 10 },
   accountStatus: { color: INK, fontFamily: 'Georgia', fontSize: 17, marginTop: 6, marginBottom: 4 },
-  serverNote: { color: '#a5aa9c', fontSize: 7, fontWeight: '700', letterSpacing: 0.6, marginTop: 24, textAlign: 'center' },
+  serverNote: { color: '#6b766f', fontSize: 7, fontWeight: '700', letterSpacing: 0.6, marginTop: 24, textAlign: 'center' },
   backLink: { alignSelf: 'flex-start', paddingVertical: 6, marginBottom: 8 },
   pageHeadingCompact: { marginTop: 4, marginBottom: 0, justifyContent: 'flex-end' },
   pageHeading: { marginHorizontal: 23, marginTop: 28, marginBottom: 19, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
@@ -2212,27 +2175,27 @@ const styles = StyleSheet.create({
   weather: { flexDirection: 'row', alignItems: 'center', marginBottom: 5 },
   weatherIcon: { fontSize: 14, color: '#d38244', marginRight: 4 },
   weatherText: { color: MUTED, fontSize: 8, fontWeight: '800' },
-  homeButton: { borderWidth: 1, borderColor: '#d9dbd0', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 6 },
+  homeButton: { borderWidth: 1, borderColor: '#26302b', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 6 },
   homeButtonText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   content: { paddingHorizontal: 23, paddingTop: 15, paddingBottom: 20 },
-  menuIntro: { backgroundColor: '#e9eee5', borderRadius: 9, padding: 18, marginTop: 1, marginBottom: 17 },
+  menuIntro: { backgroundColor: '#0f1a14', borderRadius: 9, padding: 18, marginTop: 1, marginBottom: 17 },
   menuIntroLabel: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   menuIntroTitle: { color: INK, fontFamily: 'Georgia', fontSize: 21, marginTop: 8 },
   menuIntroCopy: { color: MUTED, fontSize: 10, marginTop: 5 },
-  menuOptions: { borderTopWidth: 1, borderTopColor: '#dedfd5' },
-  menuItem: { minHeight: 76, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#dedfd5', paddingHorizontal: 5 },
+  menuOptions: { borderTopWidth: 1, borderTopColor: '#26302b' },
+  menuItem: { minHeight: 76, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b', paddingHorizontal: 5 },
   resumeItem: { marginTop: 0, marginBottom: 14 },
   menuItemPrimary: { backgroundColor: GREEN, borderBottomColor: GREEN, paddingHorizontal: 12, marginTop: 9, borderRadius: 7 },
-  menuNumber: { color: '#a5aa9c', fontSize: 10, fontWeight: '800', width: 37 },
+  menuNumber: { color: '#6b766f', fontSize: 10, fontWeight: '800', width: 37 },
   menuNumberPrimary: { color: '#bcd2c0' },
   menuItemCopy: { flex: 1 },
   menuTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17 },
-  menuTitlePrimary: { color: '#fff' },
+  menuTitlePrimary: { color: '#e6ece8' },
   menuSubtitle: { color: MUTED, fontSize: 9, marginTop: 4 },
   menuSubtitlePrimary: { color: '#d2e1d5' },
   menuArrow: { color: GREEN, fontSize: 24, paddingHorizontal: 8 },
-  menuArrowPrimary: { color: '#fff' },
-  builderPanel: { backgroundColor: '#fff', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#e5e5dc', marginBottom: 24 },
+  menuArrowPrimary: { color: '#e6ece8' },
+  builderPanel: { backgroundColor: '#101412', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#26302b', marginBottom: 24 },
   builderLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 },
   detailLabel: { marginTop: 14 },
   cityStateRow: { flexDirection: 'row' },
@@ -2240,7 +2203,7 @@ const styles = StyleSheet.create({
   courseStat: { width: '50%', paddingVertical: 10, paddingRight: 10 },
   courseStatValue: { color: INK, fontFamily: 'Georgia', fontSize: 21, marginTop: 4 },
   courseStatNote: { color: MUTED, fontSize: 8, marginTop: 3 },
-  roundCourseInfo: { marginTop: 18, padding: 14, borderRadius: 9, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e8e7de' },
+  roundCourseInfo: { marginTop: 18, padding: 14, borderRadius: 9, backgroundColor: '#101412', borderWidth: 1, borderColor: '#26302b' },
   roundCourseInfoHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   roundCourseInfoText: { color: INK, fontSize: 11, marginTop: 6 },
   roundCourseNotesLabel: { marginTop: 12 },
@@ -2251,109 +2214,109 @@ const styles = StyleSheet.create({
   courseLinks: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 14 },
   courseLink: { height: 34, paddingHorizontal: 12, marginRight: 8, marginBottom: 8, borderRadius: 6, borderWidth: 1, borderColor: GREEN, alignItems: 'center', justifyContent: 'center' },
   courseLinkText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
-  builderInput: { height: 43, borderBottomWidth: 1, borderBottomColor: '#dfe1d7', color: INK, fontSize: 13, paddingHorizontal: 2, marginTop: 5 },
+  builderInput: { height: 43, borderBottomWidth: 1, borderBottomColor: '#26302b', color: INK, fontSize: 13, paddingHorizontal: 2, marginTop: 5 },
   primaryButton: { minHeight: 46, borderRadius: 7, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center', marginTop: 18 },
   disabledButton: { opacity: 0.5 },
-  primaryButtonText: { color: '#fff', fontSize: 9, fontWeight: '800', letterSpacing: 0.7 },
+  primaryButtonText: { color: '#e6ece8', fontSize: 9, fontWeight: '800', letterSpacing: 0.7 },
   builderSectionTitle: { color: INK, fontFamily: 'Georgia', fontSize: 18, marginBottom: 7 },
-  courseItem: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#dedfd5', paddingHorizontal: 7 },
-  courseItemSelected: { backgroundColor: '#edf0e8' },
+  courseItem: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b', paddingHorizontal: 7 },
+  courseItemSelected: { backgroundColor: '#16231c' },
   courseItemSelect: { flex: 1, minHeight: 61, flexDirection: 'row', alignItems: 'center' },
   courseItemCopy: { flex: 1 },
   courseItemName: { color: INK, fontSize: 12, fontWeight: '700' },
   courseItemMeta: { color: MUTED, fontSize: 9, marginTop: 4 },
   courseSelectedMark: { color: GREEN, fontSize: 16, paddingHorizontal: 8 },
   deleteButton: { minHeight: 36, minWidth: 54, alignItems: 'center', justifyContent: 'center', marginLeft: 6 },
-  deleteButtonText: { color: '#a55343', fontSize: 8, fontWeight: '800', letterSpacing: 0.4 },
+  deleteButtonText: { color: '#d07a68', fontSize: 8, fontWeight: '800', letterSpacing: 0.4 },
   deleteHoleButton: { minHeight: 34, alignSelf: 'flex-end', justifyContent: 'center', paddingHorizontal: 8, marginTop: 6 },
-  mapEditor: { marginTop: 24, paddingTop: 18, borderTopWidth: 1, borderTopColor: '#dedfd5' },
+  mapEditor: { marginTop: 24, paddingTop: 18, borderTopWidth: 1, borderTopColor: '#26302b' },
   mapEditorHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   mapProgress: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
   editorHoleNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
-  holeNavButton: { width: 38, height: 36, borderWidth: 1, borderColor: '#dfe1d7', borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  holeNavButton: { width: 38, height: 36, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
   holeNavDisabled: { opacity: 0.35 },
   holeNavArrow: { color: GREEN, fontSize: 22, lineHeight: 25 },
   editorHoleCopy: { alignItems: 'center' },
   editorHoleName: { color: INK, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
   editorHoleStatus: { color: MUTED, fontSize: 8, marginTop: 4 },
-  markerTargetRow: { flexDirection: 'row', marginTop: 13, backgroundColor: '#eaeae1', borderRadius: 7, padding: 3 },
+  markerTargetRow: { flexDirection: 'row', marginTop: 13, backgroundColor: '#151917', borderRadius: 7, padding: 3 },
   markerTarget: { flex: 1, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 5 },
-  markerTargetActive: { backgroundColor: '#fff' },
+  markerTargetActive: { backgroundColor: '#101412' },
   markerTargetText: { color: MUTED, fontSize: 9, fontWeight: '700' },
   markerTargetTextActive: { color: GREEN, fontWeight: '800' },
   mapInstruction: { color: MUTED, fontSize: 9, marginTop: 10 },
-  gpsPointCard: { padding: 12, marginTop: 9, borderWidth: 1, borderColor: '#e1e2d8', borderRadius: 7, backgroundColor: '#fff' },
+  gpsPointCard: { padding: 12, marginTop: 9, borderWidth: 1, borderColor: '#26302b', borderRadius: 7, backgroundColor: '#101412' },
   gpsPointHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   gpsPointLabel: { color: INK, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
-  gpsPointState: { color: '#aa6a3f', fontSize: 7, fontWeight: '800', letterSpacing: 0.4 },
+  gpsPointState: { color: '#d39a6e', fontSize: 7, fontWeight: '800', letterSpacing: 0.4 },
   gpsPointSaved: { color: GREEN },
   gpsCoordinates: { color: INK, fontSize: 12, fontVariant: ['tabular-nums'], marginTop: 7 },
   gpsAccuracy: { color: MUTED, fontSize: 8, marginTop: 4 },
-  holeDistance: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 7, backgroundColor: '#e9eee5' },
+  holeDistance: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 7, backgroundColor: '#0f1a14' },
   parPicker: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
   parOptions: { flexDirection: 'row' },
-  parOption: { width: 40, height: 36, marginLeft: 6, borderRadius: 6, borderWidth: 1, borderColor: '#dedfd5', alignItems: 'center', justifyContent: 'center' },
+  parOption: { width: 40, height: 36, marginLeft: 6, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', alignItems: 'center', justifyContent: 'center' },
   parOptionSelected: { backgroundColor: GREEN, borderColor: GREEN },
   parOptionText: { color: INK, fontFamily: 'Georgia', fontSize: 16 },
-  parOptionTextSelected: { color: '#fff' },
+  parOptionTextSelected: { color: '#e6ece8' },
   holeDistanceLabel: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   holeDistanceValue: { color: INK, fontFamily: 'Georgia', fontSize: 20, fontVariant: ['tabular-nums'] },
   gpsMessage: { color: GREEN, fontSize: 9, lineHeight: 14, marginTop: 10 },
   holeWizard: { flex: 1, paddingHorizontal: 23, paddingBottom: 14 },
   wizardProgress: { height: 38, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   wizardMappedCount: { marginTop: 4 },
-  satelliteFrame: { flex: 1, minHeight: 230, marginTop: 6, borderRadius: 8, overflow: 'hidden', backgroundColor: '#dce6d5', position: 'relative' },
+  satelliteFrame: { flex: 1, minHeight: 230, marginTop: 6, borderRadius: 8, overflow: 'hidden', backgroundColor: '#0d1410', position: 'relative' },
   satelliteMap: { ...StyleSheet.absoluteFill },
   satelliteBadge: { position: 'absolute', top: 11, left: 11, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 5, backgroundColor: 'rgba(24,35,31,0.82)' },
-  satelliteBadgeText: { color: '#fff', fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
-  recenterButton: { position: 'absolute', top: 10, right: 10, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 5, backgroundColor: '#fff' },
+  satelliteBadgeText: { color: '#e6ece8', fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
+  recenterButton: { position: 'absolute', top: 10, right: 10, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 5, backgroundColor: '#101412' },
   recenterButtonText: { color: INK, fontSize: 8, fontWeight: '800' },
-  mapScaleBadge: { position: 'absolute', left: 11, bottom: 11, minWidth: 120, paddingHorizontal: 9, paddingVertical: 8, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.92)' },
+  mapScaleBadge: { position: 'absolute', left: 11, bottom: 11, minWidth: 120, paddingHorizontal: 9, paddingVertical: 8, borderRadius: 5, backgroundColor: 'rgba(0,0,0,0.75)' },
   mapScaleRule: { height: 4, maxWidth: '100%', borderBottomWidth: 2, borderLeftWidth: 1, borderRightWidth: 1, borderColor: INK, marginBottom: 4 },
   mapScaleLabel: { color: INK, fontSize: 8, fontWeight: '800' },
   mapScaleWidth: { color: MUTED, fontSize: 7, fontWeight: '700', marginTop: 2 },
-  mapUnavailable: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#e9eee5' },
+  mapUnavailable: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#0f1a14' },
   mapUnavailableTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17, textAlign: 'center' },
   mapUnavailableText: { color: MUTED, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 8 },
   captureButtons: { flexDirection: 'row', marginTop: 10 },
-  captureButton: { flex: 1, minHeight: 78, paddingHorizontal: 9, paddingVertical: 10, borderRadius: 7, borderWidth: 1, borderColor: '#dfe1d7', backgroundColor: '#fff', marginRight: 8 },
-  captureButtonSaved: { borderColor: GREEN, backgroundColor: '#edf2e9' },
+  captureButton: { flex: 1, minHeight: 78, paddingHorizontal: 9, paddingVertical: 10, borderRadius: 7, borderWidth: 1, borderColor: '#26302b', backgroundColor: '#101412', marginRight: 8 },
+  captureButtonSaved: { borderColor: GREEN, backgroundColor: '#16231c' },
   captureButtonLabel: { color: INK, fontSize: 9, fontWeight: '800', letterSpacing: 0.7 },
   captureButtonValue: { color: GREEN, fontSize: 8, fontWeight: '800', marginTop: 5 },
   captureButtonCoords: { color: MUTED, fontSize: 8, marginTop: 5, fontVariant: ['tabular-nums'] },
   wizardNavigation: { flexDirection: 'row', marginTop: 9 },
-  wizardNavButton: { flex: 1, minHeight: 42, borderWidth: 1, borderColor: '#dfe1d7', borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginRight: 7 },
+  wizardNavButton: { flex: 1, minHeight: 42, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginRight: 7 },
   wizardNavNext: { backgroundColor: GREEN, borderColor: GREEN, marginRight: 0, marginLeft: 7 },
   wizardNavText: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.4 },
-  wizardNavNextText: { color: '#fff' },
+  wizardNavNextText: { color: '#e6ece8' },
   wizardNavFinish: { marginRight: 0, borderColor: GREEN },
   wizardNavFinishText: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 0.4 },
   builderHint: { color: MUTED, fontSize: 9, marginTop: 8 },
   parEditorHeading: { marginTop: 22 },
-  parRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e1e2d8' },
-  parStepButton: { width: 36, height: 36, borderRadius: 6, borderWidth: 1, borderColor: '#dedfd5', alignItems: 'center', justifyContent: 'center' },
+  parRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b' },
+  parStepButton: { width: 36, height: 36, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', alignItems: 'center', justifyContent: 'center' },
   parStepText: { color: GREEN, fontSize: 18, fontWeight: '600' },
   parStepValue: { width: 38, textAlign: 'center', color: INK, fontFamily: 'Georgia', fontSize: 18 },
   addHoleButton: { height: 42, marginTop: 12, borderRadius: 6, borderWidth: 1, borderColor: GREEN, alignItems: 'center', justifyContent: 'center' },
   addHoleButtonText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
   secondaryStart: { marginTop: 19, minHeight: 44, borderWidth: 1, borderColor: GREEN, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
   secondaryStartText: { color: GREEN, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
-  builderFootnote: { color: '#899083', fontSize: 9, lineHeight: 14, marginTop: 11 },
+  builderFootnote: { color: '#6b766f', fontSize: 9, lineHeight: 14, marginTop: 11 },
   addDiscRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
   discInput: { flex: 1, marginRight: 12 },
-  discResults: { marginTop: 10, borderTopWidth: 1, borderTopColor: '#e1e2d8' },
-  discResult: { minHeight: 52, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e1e2d8' },
+  discResults: { marginTop: 10, borderTopWidth: 1, borderTopColor: '#26302b' },
+  discResult: { minHeight: 52, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b' },
   discResultCopy: { flex: 1, marginRight: 8 },
   discResultFlight: { color: INK, fontSize: 10, fontWeight: '700', fontVariant: ['tabular-nums'] },
   discResultsNote: { color: MUTED, fontSize: 10, lineHeight: 15, paddingVertical: 10 },
   discResultsCredit: { color: MUTED, fontSize: 7, fontWeight: '700', letterSpacing: 0.5, marginTop: 8 },
   addDiscButton: { height: 34, minWidth: 56, paddingHorizontal: 13, backgroundColor: GREEN, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
-  addDiscButtonText: { color: '#fff', fontSize: 9, fontWeight: '800' },
-  practiceIntro: { backgroundColor: '#e9eee5', borderRadius: 9, padding: 18, marginBottom: 17 },
+  addDiscButtonText: { color: '#e6ece8', fontSize: 9, fontWeight: '800' },
+  practiceIntro: { backgroundColor: '#0f1a14', borderRadius: 9, padding: 18, marginBottom: 17 },
   practiceIntroTitle: { color: INK, fontFamily: 'Georgia', fontSize: 20, marginTop: 9 },
   practiceIntroCopy: { color: MUTED, fontSize: 10, lineHeight: 15, marginTop: 6 },
-  practiceChoice: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#dedfd5', paddingHorizontal: 8 },
-  practiceChoiceSelected: { backgroundColor: '#edf0e8' },
+  practiceChoice: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b', paddingHorizontal: 8 },
+  practiceChoiceSelected: { backgroundColor: '#16231c' },
   practiceChoiceCopy: { flex: 1 },
   practiceChoiceTitle: { color: INK, fontFamily: 'Georgia', fontSize: 16 },
   practiceChoiceSubtitle: { color: MUTED, fontSize: 9, marginTop: 4 },
@@ -2361,36 +2324,36 @@ const styles = StyleSheet.create({
   courseLabel: { flex: 1, paddingRight: 10 },
   courseLabelName: { color: INK, fontSize: 12, fontWeight: '700', marginTop: 4 },
   roundToolbar: { height: 45, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  modeSwitch: { flexDirection: 'row', backgroundColor: '#eaeae1', borderRadius: 8, padding: 3 },
+  modeSwitch: { flexDirection: 'row', backgroundColor: '#151917', borderRadius: 8, padding: 3 },
   modeOption: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 6 },
-  modeSelected: { backgroundColor: '#fff' },
+  modeSelected: { backgroundColor: '#101412' },
   modeText: { color: MUTED, fontSize: 10, fontWeight: '700' },
   modeTextSelected: { color: INK },
   holeSelector: { alignItems: 'center' },
   roundHoleNav: { flexDirection: 'row', alignItems: 'center' },
-  roundHoleArrow: { width: 34, height: 40, borderWidth: 1, borderColor: '#dedfd5', borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
+  roundHoleArrow: { width: 34, height: 40, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
   holeLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   holeNumber: { color: INK, fontFamily: 'Georgia', fontSize: 20 },
   holeTotal: { color: MUTED, fontFamily: 'Arial', fontSize: 11 },
   chevron: { color: GREEN, fontFamily: 'Arial', fontSize: 12 },
   sectionTitle: { color: INK, fontFamily: 'Georgia', fontSize: 18 },
-  scoreStrip: { flexDirection: 'row', backgroundColor: '#e9eee5', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 4, marginTop: 6, marginBottom: 10 },
+  scoreStrip: { flexDirection: 'row', backgroundColor: '#0f1a14', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 4, marginTop: 6, marginBottom: 10 },
   scoreStripItem: { flex: 1, alignItems: 'center' },
   scoreStripLabel: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 },
   scoreStripValue: { color: INK, fontFamily: 'Georgia', fontSize: 16, marginTop: 2, fontVariant: ['tabular-nums'] },
-  roundMapFrame: { height: 300, marginTop: 0, marginBottom: 17, borderRadius: 9, overflow: 'hidden', backgroundColor: '#dce6d5', position: 'relative' },
-  shotMarker: { width: 22, height: 22, borderRadius: 12, borderWidth: 2, borderColor: '#fff', backgroundColor: '#df8547', alignItems: 'center', justifyContent: 'center' },
-  shotPinText: { color: '#fff', fontSize: 9, fontWeight: '900' },
+  roundMapFrame: { height: 300, marginTop: 0, marginBottom: 17, borderRadius: 9, overflow: 'hidden', backgroundColor: '#0d1410', position: 'relative' },
+  shotMarker: { width: 22, height: 22, borderRadius: 12, borderWidth: 2, borderColor: '#fff', backgroundColor: '#b8622c', alignItems: 'center', justifyContent: 'center' },
+  shotPinText: { color: '#e6ece8', fontSize: 9, fontWeight: '900' },
   boardCaption: { position: 'absolute', bottom: 11, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between' },
-  boardCaptionText: { color: '#667b60', fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
-  boardScale: { color: '#7c8e75', fontSize: 7, fontWeight: '700' },
+  boardCaptionText: { color: '#7d8981', fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
+  boardScale: { color: '#6b766f', fontSize: 7, fontWeight: '700' },
   basketDistances: { flexDirection: 'column', alignItems: 'stretch' },
   basketDistanceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingVertical: 2 },
   roundHoleDistance: { marginTop: -5, marginBottom: 15 },
-  logThrowButton: { minHeight: 64, backgroundColor: '#df8547', borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
-  logThrowButtonText: { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
-  logThrowButtonHint: { color: '#fdeee2', fontSize: 9, marginTop: 4 },
-  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(24,35,31,0.45)' },
+  logThrowButton: { minHeight: 64, backgroundColor: '#b8622c', borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
+  logThrowButtonText: { color: '#e6ece8', fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
+  logThrowButtonHint: { color: '#f3dccb', fontSize: 9, marginTop: 4 },
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.65)' },
   sheet: { backgroundColor: PAPER, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, paddingBottom: 34, width: '100%', maxWidth: 560, alignSelf: 'center' },
   sheetDistance: { color: GREEN, fontSize: 11, fontWeight: '700', marginTop: -4, marginBottom: 16 },
   sheetOptions: { flexDirection: 'row', flexWrap: 'wrap', paddingTop: 9 },
@@ -2400,45 +2363,45 @@ const styles = StyleSheet.create({
   // Four per row.
   styleButton: { flex: 0, width: '22.5%', marginBottom: 7, paddingHorizontal: 2 },
   lieButton: { flex: 0, width: '31%', marginBottom: 7 },
-  obButton: { borderColor: '#e2b3a6' },
-  obText: { color: '#a55343' },
-  obPenaltyText: { color: '#a55343', fontSize: 7, fontWeight: '800', marginTop: 2 },
+  obButton: { borderColor: '#6e3b31' },
+  obText: { color: '#d07a68' },
+  obPenaltyText: { color: '#d07a68', fontSize: 7, fontWeight: '800', marginTop: 2 },
   qualityButton: { height: 58 },
   qualityValue: { color: INK, fontFamily: 'Georgia', fontSize: 19 },
   qualityLabel: { color: MUTED, fontSize: 8, fontWeight: '700', marginTop: 2 },
   sheetFooter: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginTop: 18 },
-  sheetFooterButton: { borderWidth: 1, borderColor: '#dedfd5', borderRadius: 5, paddingHorizontal: 14, paddingVertical: 10 },
+  sheetFooterButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 14, paddingVertical: 10 },
   controlHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   controlTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17 },
   controlStep: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 },
   fieldLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.9 },
   chipRow: { flexDirection: 'row', paddingTop: 7, paddingBottom: 2 },
-  chip: { paddingHorizontal: 12, height: 30, borderRadius: 6, borderWidth: 1, borderColor: '#e2e4da', marginRight: 7, justifyContent: 'center' },
+  chip: { paddingHorizontal: 12, height: 30, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', marginRight: 7, justifyContent: 'center' },
   chipSelected: { backgroundColor: GREEN, borderColor: GREEN },
-  chipText: { color: '#5d685e', fontSize: 10, fontWeight: '700' },
-  chipTextSelected: { color: '#fff' },
+  chipText: { color: '#a9b4ad', fontSize: 10, fontWeight: '700' },
+  chipTextSelected: { color: '#e6ece8' },
   typeLabel: { marginTop: 9 },
   typeRow: { flexDirection: 'row', marginTop: 7 },
-  typeButton: { flex: 1, height: 31, borderRadius: 6, borderWidth: 1, borderColor: '#e2e4da', alignItems: 'center', justifyContent: 'center', marginRight: 7 },
-  typeButtonSelected: { backgroundColor: '#f2e6d9', borderColor: '#e7c9ad' },
-  typeText: { color: '#697169', fontSize: 10, fontWeight: '700' },
-  typeTextSelected: { color: '#98572f' },
-  latestRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e3d9' },
+  typeButton: { flex: 1, height: 31, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', alignItems: 'center', justifyContent: 'center', marginRight: 7 },
+  typeButtonSelected: { backgroundColor: '#2a1d12', borderColor: '#7a5634' },
+  typeText: { color: '#a9b4ad', fontSize: 10, fontWeight: '700' },
+  typeTextSelected: { color: '#e0a070' },
+  latestRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#26302b' },
   latestEyebrow: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.8 },
   latestText: { color: INK, fontSize: 11, fontWeight: '600', marginTop: 4 },
-  undoButton: { borderWidth: 1, borderColor: '#dedfd5', borderRadius: 5, paddingHorizontal: 10, paddingVertical: 7 },
+  undoButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 10, paddingVertical: 7 },
   undoText: { color: MUTED, fontSize: 8, fontWeight: '800' },
   finishButton: { height: 46, backgroundColor: GREEN, borderRadius: 7, marginTop: 12, alignItems: 'center', justifyContent: 'center' },
-  endSessionButton: { height: 42, borderRadius: 7, borderWidth: 1, borderColor: '#dedfd5', marginTop: 8, alignItems: 'center', justifyContent: 'center' },
-  endSessionText: { color: '#a55343', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
-  finishButtonText: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  endSessionButton: { height: 42, borderRadius: 7, borderWidth: 1, borderColor: '#26302b', marginTop: 8, alignItems: 'center', justifyContent: 'center' },
+  endSessionText: { color: '#d07a68', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  finishButtonText: { color: '#e6ece8', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   finishArrow: { fontSize: 14 },
-  footnote: { textAlign: 'center', color: '#899083', fontSize: 8, marginTop: 10, marginBottom: 2 },
-  bottomBar: { height: 36, borderTopWidth: 1, borderTopColor: '#e1e2d8', paddingHorizontal: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  footnote: { textAlign: 'center', color: '#6b766f', fontSize: 8, marginTop: 10, marginBottom: 2 },
+  bottomBar: { height: 36, borderTopWidth: 1, borderTopColor: '#26302b', paddingHorizontal: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bottomStatus: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
   statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#6f9a68', marginRight: 5 },
   bottomCount: { color: MUTED, fontSize: 7, fontWeight: '800' },
-  insightHero: { marginTop: 6, padding: 20, backgroundColor: '#e9eee5', borderRadius: 9 },
+  insightHero: { marginTop: 6, padding: 20, backgroundColor: '#0f1a14', borderRadius: 9 },
   insightEyebrow: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   insightNumber: { color: INK, fontFamily: 'Georgia', fontSize: 48, marginTop: 10 },
   insightUnit: { color: MUTED, fontFamily: 'Arial', fontSize: 16 },
@@ -2446,51 +2409,51 @@ const styles = StyleSheet.create({
   sparkline: { height: 105, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 13, paddingHorizontal: 4 },
   sparkBar: { width: '10%', backgroundColor: '#6b9b73', borderTopLeftRadius: 4, borderTopRightRadius: 4 },
   sparkLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  finalScore: { backgroundColor: '#e9eee5', borderRadius: 9, padding: 18, marginTop: 1, marginBottom: 20 },
+  finalScore: { backgroundColor: '#0f1a14', borderRadius: 9, padding: 18, marginTop: 1, marginBottom: 20 },
   finalScoreRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 6 },
   finalScoreValue: { color: INK, fontFamily: 'Georgia', fontSize: 44 },
   finalScoreToPar: { color: INK, fontFamily: 'Georgia', fontSize: 26, marginLeft: 12 },
   underPar: { color: GREEN },
-  overPar: { color: '#c0682f' },
+  overPar: { color: '#d9884e' },
   resultChips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12 },
-  resultChip: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5, marginRight: 6, marginBottom: 6 },
+  resultChip: { backgroundColor: '#101412', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5, marginRight: 6, marginBottom: 6 },
   resultChipText: { color: INK, fontSize: 9, fontWeight: '700' },
-  scorecard: { marginTop: 8, marginBottom: 22, borderRadius: 9, borderWidth: 1, borderColor: '#e1e2d8', backgroundColor: '#fff', overflow: 'hidden' },
-  scorecardRow: { flexDirection: 'row', alignItems: 'center', minHeight: 38, borderBottomWidth: 1, borderBottomColor: '#eeeee6' },
-  scorecardHeader: { minHeight: 32, backgroundColor: '#f1f1ea' },
-  scorecardTotal: { borderBottomWidth: 0, backgroundColor: '#f1f1ea' },
+  scorecard: { marginTop: 8, marginBottom: 22, borderRadius: 9, borderWidth: 1, borderColor: '#26302b', backgroundColor: '#101412', overflow: 'hidden' },
+  scorecardRow: { flexDirection: 'row', alignItems: 'center', minHeight: 38, borderBottomWidth: 1, borderBottomColor: '#26302b' },
+  scorecardHeader: { minHeight: 32, backgroundColor: '#141816' },
+  scorecardTotal: { borderBottomWidth: 0, backgroundColor: '#141816' },
   scorecardCell: { flex: 1, textAlign: 'center', color: INK, fontSize: 12, fontVariant: ['tabular-nums'] },
   scorecardHoleCell: { textAlign: 'left', paddingLeft: 14 },
   scorecardHeaderText: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.7 },
   scorecardScore: { fontWeight: '800' },
   throwByThrowTitle: { marginBottom: 4 },
   sessionModeTag: { color: GREEN, fontSize: 7, fontWeight: '800', letterSpacing: 0.6, marginRight: 8 },
-  roundHole: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#e1e2d8' },
+  roundHole: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#26302b' },
   roundHoleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 },
   roundHoleMapToggle: { color: GREEN, fontFamily: 'Arial', fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
-  roundHoleMap: { height: 260, marginTop: 4, marginBottom: 10, borderRadius: 9, overflow: 'hidden', backgroundColor: '#dce6d5' },
-  scorecardRowActive: { backgroundColor: '#e9eee5' },
+  roundHoleMap: { height: 260, marginTop: 4, marginBottom: 10, borderRadius: 9, overflow: 'hidden', backgroundColor: '#0d1410' },
+  scorecardRowActive: { backgroundColor: '#0f1a14' },
   obMarker: { backgroundColor: '#a55343' },
   roundHoleTitle: { color: INK, fontFamily: 'Georgia', fontSize: 16 },
   roundHoleMeta: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
   roundThrow: { color: MUTED, fontSize: 10, lineHeight: 17 },
   statsGrid: { flexDirection: 'row', marginTop: 12, marginBottom: 25 },
-  statBlock: { flex: 1, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#dedfd5' },
+  statBlock: { flex: 1, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#26302b' },
   statLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.7 },
   statValue: { color: INK, fontFamily: 'Georgia', fontSize: 23, marginTop: 7 },
-  discStat: { flexDirection: 'row', alignItems: 'center', height: 48, borderBottomWidth: 1, borderBottomColor: '#e3e3da' },
+  discStat: { flexDirection: 'row', alignItems: 'center', height: 48, borderBottomWidth: 1, borderBottomColor: '#26302b' },
   discStatName: { width: 82, color: INK, fontSize: 10, fontWeight: '700' },
-  discStatTrack: { flex: 1, height: 5, backgroundColor: '#e3e5dc', borderRadius: 4, overflow: 'hidden' },
+  discStatTrack: { flex: 1, height: 5, backgroundColor: '#1a1f1c', borderRadius: 4, overflow: 'hidden' },
   discStatFill: { height: 5, backgroundColor: '#6c9a72', borderRadius: 4 },
   discStatValue: { width: 51, textAlign: 'right', color: MUTED, fontSize: 9, fontWeight: '700' },
-  bagIntro: { backgroundColor: '#e9eee5', padding: 20, borderRadius: 9, marginTop: 6, marginBottom: 15 },
+  bagIntro: { backgroundColor: '#0f1a14', padding: 20, borderRadius: 9, marginTop: 6, marginBottom: 15 },
   bagHeadline: { color: INK, fontFamily: 'Georgia', fontSize: 28, marginTop: 10 },
   bagBody: { color: MUTED, fontSize: 11, lineHeight: 17, marginTop: 6 },
-  bagItem: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e1e2d8', paddingHorizontal: 4 },
+  bagItem: { minHeight: 67, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#26302b', paddingHorizontal: 4 },
   bagItemSelect: { flex: 1, minHeight: 66, flexDirection: 'row', alignItems: 'center' },
-  bagItemSelected: { backgroundColor: '#eeefe7' },
+  bagItemSelected: { backgroundColor: '#16231c' },
   discSwatch: { width: 39, height: 39, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  discSwatchText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  discSwatchText: { color: '#e6ece8', fontSize: 12, fontWeight: '900' },
   bagItemCopy: { marginLeft: 12, flex: 1 },
   bagItemName: { color: INK, fontSize: 12, fontWeight: '800' },
   bagItemMeta: { color: MUTED, fontSize: 9, marginTop: 4 },
