@@ -48,7 +48,7 @@ type SavedRound = {
   shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
   layoutId?: string; resumedFrom?: ResumedFrom | null;
 };
-type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses';
+type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses' | 'NewCourse';
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
 
 // Keys keep the app's original name (Flight Notes) so existing on-device data still loads.
@@ -362,6 +362,11 @@ export default function App() {
   const [selectedLayoutId, setSelectedLayoutId] = useState(MAIN_LAYOUT_ID);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [newLayoutName, setNewLayoutName] = useState('');
+  // New-course flow: 1 name, 2 details, 3 layouts, 4 map holes. The course is created after step 1.
+  const [newCourseStep, setNewCourseStep] = useState<1 | 2 | 3 | 4>(1);
+  const [newCourseId, setNewCourseId] = useState<string | null>(null);
+  // Where the hole-mapping screen returns to.
+  const [wizardReturn, setWizardReturn] = useState<'CourseBuilder' | 'NewCourse'>('CourseBuilder');
   const [editingThrow, setEditingThrow] = useState<{ sessionId: string; index: number } | null>(null);
   const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; style?: ThrowStyle; lie: Lie; quality: number | null }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: null });
 
@@ -1246,15 +1251,36 @@ export default function App() {
     );
   };
 
-  // New courses start with one hole; holes are added while mapping until the user finishes.
-  const addCourse = () => {
+  const startNewCourse = () => {
+    setCourseName('');
+    setNewCourseId(null);
+    setNewCourseStep(1);
+    setScreen('NewCourse');
+  };
+
+  // Step 1 of the new-course flow. New courses start with one hole on a Main layout; holes are
+  // added while mapping. Coming back to step 1 renames the course instead of making another.
+  const saveNewCourseName = () => {
     const name = courseName.trim();
     if (!name) return;
-    const course: Course = { id: newSessionId(), name, holes: 1, layouts: [{ tee: null, basket: null }] };
-    updateCourses((current) => [...current, course]);
-    setSelectedLayoutId(MAIN_LAYOUT_ID);
-    setCourseName('');
-    openHoleWizard(course);
+    if (newCourseId && courses.some((course) => course.id === newCourseId)) {
+      updateCourses((current) => current.map((course) => (course.id === newCourseId ? { ...course, name } : course)));
+    } else {
+      const course: Course = { id: newSessionId(), name, holes: 1, layouts: [{ tee: null, basket: null }] };
+      updateCourses((current) => [...current, course]);
+      setNewCourseId(course.id);
+      setSelectedCourseId(course.id);
+      setSelectedLayoutId(MAIN_LAYOUT_ID);
+      setBuilderHole(1);
+    }
+    setNewCourseStep(2);
+  };
+
+  // Opens hole mapping for one layout of a course, returning to `from` when finished.
+  const mapLayout = (course: Course, layoutId: string, from: 'CourseBuilder' | 'NewCourse') => {
+    setSelectedLayoutId(layoutId);
+    setWizardReturn(from);
+    openHoleWizard(withLayout(course, layoutId));
   };
 
   const updateCourseDetails = (courseId: string, details: CourseDetails) => {
@@ -1567,6 +1593,62 @@ export default function App() {
     setBagEntry('');
   };
 
+  // Layout list, rename and add; used by Course builder and the new-course flow.
+  const renderLayoutsEditor = (base: Course, view: CourseView) => {
+    const viewLayouts = courseLayouts(base);
+    return <>
+    <View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Layouts</Text><Text style={styles.mapProgress}>{viewLayouts.length} {viewLayouts.length === 1 ? 'LAYOUT' : 'LAYOUTS'}</Text></View>
+    <Text style={styles.mapInstruction}>Each layout has its own holes, tees, baskets and pars, such as different tee pads or pin positions. The selected layout is the one you map, edit and play.</Text>
+    {viewLayouts.map((layout) => {
+      const stats = courseStats(withLayout(base, layout.id));
+      const selected = view.layoutId === layout.id;
+      return <View key={layout.id} style={[styles.courseItem, selected && styles.courseItemSelected]}>
+        <Pressable onPress={() => selectLayout(layout.id)} style={styles.courseItemSelect} accessibilityRole="button" accessibilityState={{ selected }}>
+          <View style={styles.courseItemCopy}>
+            <Text style={styles.courseItemName}>{layoutDisplayName(layout)}</Text>
+            <Text style={styles.courseItemMeta}>{[`${stats.holes} ${stats.holes === 1 ? 'hole' : 'holes'}`, stats.parHoles ? `Par ${stats.par}` : null, `${stats.mappedHoles} mapped`].filter(Boolean).join(' · ')}</Text>
+          </View>
+          <Text style={styles.courseSelectedMark}>{selected ? '✓' : '○'}</Text>
+        </Pressable>
+        {layout.id !== MAIN_LAYOUT_ID && <Pressable onPress={() => deleteLayout(base, layout)} style={styles.deleteButton} accessibilityRole="button" accessibilityLabel={`Delete the ${layoutDisplayName(layout)} layout`}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable>}
+      </View>;
+    })}
+    <Text style={[styles.builderLabel, styles.detailLabel]}>SELECTED LAYOUT NAME</Text>
+    <TextInput value={viewLayouts.find((layout) => layout.id === view.layoutId)?.name ?? ''} onChangeText={(name) => updateCourseLayout(view.id, view.layoutId, (layout) => ({ ...layout, name }))} placeholder={view.layoutId === MAIN_LAYOUT_ID ? 'Main' : 'Layout name'} placeholderTextColor="#5f6a63" style={styles.builderInput} />
+    <Text style={[styles.builderLabel, styles.detailLabel]}>NEW LAYOUT</Text>
+    <TextInput value={newLayoutName} onChangeText={setNewLayoutName} placeholder="e.g. Blue tees or Winter pins" placeholderTextColor="#5f6a63" style={styles.builderInput} />
+    <View style={styles.courseLinks}>
+      <Pressable onPress={() => addLayout(true)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ COPY OF {view.layoutLabel.toUpperCase()}</Text></Pressable>
+      <Pressable onPress={() => addLayout(false)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ BLANK LAYOUT</Text></Pressable>
+    </View>
+    </>;
+  };
+
+  // Address, contact details, info to know, and the quick-action links.
+  const renderDetailsFields = (view: CourseView) => <>
+    <Text style={styles.builderLabel}>STREET</Text>
+    <TextInput value={courseStreet(view)} onChangeText={(street) => updateCourseDetails(view.id, { street, address: undefined })} placeholder="123 Park Road" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="streetAddressLine1" />
+    <View style={styles.cityStateRow}>
+      <View style={styles.cityField}>
+        <Text style={[styles.builderLabel, styles.detailLabel]}>CITY</Text>
+        <TextInput value={view.city ?? ''} onChangeText={(city) => updateCourseDetails(view.id, { city })} placeholder="City" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="addressCity" />
+      </View>
+      <View style={styles.stateField}>
+        <Text style={[styles.builderLabel, styles.detailLabel]}>STATE</Text>
+        <TextInput value={view.state ?? ''} onChangeText={(state) => updateCourseDetails(view.id, { state: state.toUpperCase() })} placeholder="ST" placeholderTextColor="#5f6a63" style={styles.builderInput} autoCapitalize="characters" autoCorrect={false} maxLength={2} textContentType="addressState" />
+      </View>
+    </View>
+    <Text style={[styles.builderLabel, styles.detailLabel]}>PHONE</Text>
+    <TextInput value={view.phone ?? ''} onChangeText={(phone) => updateCourseDetails(view.id, { phone: formatPhone(phone) })} placeholder="(555) 123-4567" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="phone-pad" textContentType="telephoneNumber" />
+    <Text style={[styles.builderLabel, styles.detailLabel]}>EMAIL</Text>
+    <TextInput value={view.email ?? ''} onChangeText={(email) => updateCourseDetails(view.id, { email })} placeholder="contact@example.com" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" />
+    <Text style={[styles.builderLabel, styles.detailLabel]}>WEBSITE</Text>
+    <TextInput value={view.website ?? ''} onChangeText={(website) => updateCourseDetails(view.id, { website })} placeholder="udisc.com/courses/…" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="url" autoCapitalize="none" autoCorrect={false} textContentType="URL" />
+    <Text style={[styles.builderLabel, styles.detailLabel]}>INFO TO KNOW</Text>
+    <TextInput value={view.notes ?? ''} onChangeText={(notes) => updateCourseDetails(view.id, { notes })} placeholder="Parking, fees, hours, restrooms, mandos, water hazards…" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.notesInput]} multiline textAlignVertical="top" />
+    {renderCourseLinks(view)}
+  </>;
+
   // Buttons shared with other screens (header, throw editor) need a hold only during a round.
   const RoundButton = (screen === 'Round' ? HoldPressable : Pressable) as typeof HoldPressable;
 
@@ -1589,12 +1671,14 @@ export default function App() {
 
         <View style={[styles.pageHeading, screen === 'Round' && styles.pageHeadingCompact]}>
           {screen !== 'Round' && <View>
-            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
-            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
+            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'NewCourse' ? `NEW COURSE · STEP ${newCourseStep} OF 4` : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
+            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'NewCourse' ? ['Name it.', 'Details.', 'Layouts.', 'Map holes.'][newCourseStep - 1] : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
           </View>}
           {screen !== 'Home' && (() => {
             const backToRounds = screen === 'RoundDetail' && !showingRoundSummary;
-            return <RoundButton onPress={() => setScreen(screen === 'HoleWizard' ? 'CourseBuilder' : backToRounds ? 'Rounds' : 'Home')} style={styles.homeButton} accessibilityLabel={screen === 'HoleWizard' ? 'Return to course builder' : backToRounds ? 'Return to rounds' : 'Return to main menu'}><Text style={styles.homeButtonText}>{screen === 'HoleWizard' ? '‹ COURSES' : backToRounds ? '‹ ROUNDS' : '⌂ MENU'}</Text></RoundButton>;
+            const backTo: Screen = screen === 'HoleWizard' ? wizardReturn : screen === 'NewCourse' ? 'CourseBuilder' : backToRounds ? 'Rounds' : 'Home';
+            const backLabel = screen === 'HoleWizard' && wizardReturn === 'NewCourse' ? '‹ NEW COURSE' : backTo === 'CourseBuilder' ? '‹ COURSES' : backToRounds ? '‹ ROUNDS' : '⌂ MENU';
+            return <RoundButton onPress={() => setScreen(backTo)} style={styles.homeButton} accessibilityLabel={`Back to ${backTo === 'NewCourse' ? 'the new course' : backTo === 'CourseBuilder' ? 'course builder' : backToRounds ? 'rounds' : 'the main menu'}`}><Text style={styles.homeButtonText}>{backLabel}</Text></RoundButton>;
           })()}
         </View>
 
@@ -1629,39 +1713,12 @@ export default function App() {
           </ScrollView>
         ) : screen === 'CourseBuilder' ? (
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            <View style={styles.builderPanel}>
-              <Text style={styles.builderLabel}>COURSE NAME</Text>
-              <TextInput value={courseName} onChangeText={setCourseName} placeholder="e.g. Cedar Grove" placeholderTextColor="#5f6a63" style={styles.builderInput} returnKeyType="done" />
-              <Pressable onPress={addCourse} style={[styles.primaryButton, !courseName.trim() && styles.disabledButton]}><Text style={styles.primaryButtonText}>CREATE COURSE & MAP HOLE 1 ↗</Text></Pressable>
-              <Text style={styles.builderHint}>Add holes one at a time while you map, then tap Finish.</Text>
-            </View>
+            <Pressable onPress={startNewCourse} style={[styles.primaryButton, styles.newCourseButton]} accessibilityRole="button"><Text style={styles.primaryButtonText}>+ NEW COURSE</Text></Pressable>
+            <Text style={styles.builderHint}>Name it, add its details and layouts, then map each layout’s holes.</Text>
             <Text style={styles.builderSectionTitle}>Your courses</Text>
             {courses.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { if (course.id !== selectedCourseId) setSelectedLayoutId(MAIN_LAYOUT_ID); setSelectedCourseId(course.id); setBuilderHole(1); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{courseLayouts(course).length > 1 ? `${courseLayouts(course).length} layouts` : `${course.holes} holes`} · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
             {selectedBaseCourse && selectedCourse && <View style={styles.mapEditor}>
-              <View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Layouts</Text><Text style={styles.mapProgress}>{selectedCourseLayouts.length} {selectedCourseLayouts.length === 1 ? 'LAYOUT' : 'LAYOUTS'}</Text></View>
-              <Text style={styles.mapInstruction}>Each layout has its own holes, tees, baskets and pars, such as different tee pads or pin positions. The selected layout is the one you map, edit and play.</Text>
-              {selectedCourseLayouts.map((layout) => {
-                const stats = courseStats(withLayout(selectedBaseCourse, layout.id));
-                const selected = selectedCourse.layoutId === layout.id;
-                return <View key={layout.id} style={[styles.courseItem, selected && styles.courseItemSelected]}>
-                  <Pressable onPress={() => selectLayout(layout.id)} style={styles.courseItemSelect} accessibilityRole="button" accessibilityState={{ selected }}>
-                    <View style={styles.courseItemCopy}>
-                      <Text style={styles.courseItemName}>{layoutDisplayName(layout)}</Text>
-                      <Text style={styles.courseItemMeta}>{[`${stats.holes} ${stats.holes === 1 ? 'hole' : 'holes'}`, stats.parHoles ? `Par ${stats.par}` : null, `${stats.mappedHoles} mapped`].filter(Boolean).join(' · ')}</Text>
-                    </View>
-                    <Text style={styles.courseSelectedMark}>{selected ? '✓' : '○'}</Text>
-                  </Pressable>
-                  {layout.id !== MAIN_LAYOUT_ID && <Pressable onPress={() => deleteLayout(selectedBaseCourse, layout)} style={styles.deleteButton} accessibilityRole="button" accessibilityLabel={`Delete the ${layoutDisplayName(layout)} layout`}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable>}
-                </View>;
-              })}
-              <Text style={[styles.builderLabel, styles.detailLabel]}>SELECTED LAYOUT NAME</Text>
-              <TextInput value={selectedCourseLayouts.find((layout) => layout.id === selectedCourse.layoutId)?.name ?? ''} onChangeText={(name) => updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => ({ ...layout, name }))} placeholder={selectedCourse.layoutId === MAIN_LAYOUT_ID ? 'Main' : 'Layout name'} placeholderTextColor="#5f6a63" style={styles.builderInput} />
-              <Text style={[styles.builderLabel, styles.detailLabel]}>NEW LAYOUT</Text>
-              <TextInput value={newLayoutName} onChangeText={setNewLayoutName} placeholder="e.g. Blue tees or Winter pins" placeholderTextColor="#5f6a63" style={styles.builderInput} />
-              <View style={styles.courseLinks}>
-                <Pressable onPress={() => addLayout(true)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ COPY OF {selectedCourse.layoutLabel.toUpperCase()}</Text></Pressable>
-                <Pressable onPress={() => addLayout(false)} style={styles.courseLink}><Text style={styles.courseLinkText}>+ BLANK LAYOUT</Text></Pressable>
-              </View>
+              {renderLayoutsEditor(selectedBaseCourse, selectedCourse)}
             </View>}
             {selectedCourse && <View style={styles.mapEditor}>
               <Text style={styles.builderSectionTitle}>Course details</Text>
@@ -1682,29 +1739,9 @@ export default function App() {
                 <View style={styles.courseStat}><Text style={styles.statLabel}>DISTANCE</Text><Text style={styles.courseStatValue}>{selectedCourseStats.mappedHoles ? `${selectedCourseStats.distanceFeet.toLocaleString()} ft` : '—'}</Text><Text style={styles.courseStatNote}>Tee to basket, mapped holes</Text></View>
                 <View style={styles.courseStat}><Text style={styles.statLabel}>ELEVATION CHANGE</Text><Text style={styles.courseStatValue}>{selectedCourseStats.elevationFeet === null ? '—' : `${selectedCourseStats.elevationFeet} ft`}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.elevationFeet === null ? 'Save tee and basket points to measure' : 'Highest to lowest point'}</Text></View>
               </View>}
-              <Text style={styles.builderLabel}>STREET</Text>
-              <TextInput value={courseStreet(selectedCourse)} onChangeText={(street) => updateCourseDetails(selectedCourse.id, { street, address: undefined })} placeholder="123 Park Road" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="streetAddressLine1" />
-              <View style={styles.cityStateRow}>
-                <View style={styles.cityField}>
-                  <Text style={[styles.builderLabel, styles.detailLabel]}>CITY</Text>
-                  <TextInput value={selectedCourse.city ?? ''} onChangeText={(city) => updateCourseDetails(selectedCourse.id, { city })} placeholder="City" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="addressCity" />
-                </View>
-                <View style={styles.stateField}>
-                  <Text style={[styles.builderLabel, styles.detailLabel]}>STATE</Text>
-                  <TextInput value={selectedCourse.state ?? ''} onChangeText={(state) => updateCourseDetails(selectedCourse.id, { state: state.toUpperCase() })} placeholder="ST" placeholderTextColor="#5f6a63" style={styles.builderInput} autoCapitalize="characters" autoCorrect={false} maxLength={2} textContentType="addressState" />
-                </View>
-              </View>
-              <Text style={[styles.builderLabel, styles.detailLabel]}>PHONE</Text>
-              <TextInput value={selectedCourse.phone ?? ''} onChangeText={(phone) => updateCourseDetails(selectedCourse.id, { phone: formatPhone(phone) })} placeholder="(555) 123-4567" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="phone-pad" textContentType="telephoneNumber" />
-              <Text style={[styles.builderLabel, styles.detailLabel]}>EMAIL</Text>
-              <TextInput value={selectedCourse.email ?? ''} onChangeText={(email) => updateCourseDetails(selectedCourse.id, { email })} placeholder="contact@example.com" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" />
-              <Text style={[styles.builderLabel, styles.detailLabel]}>WEBSITE</Text>
-              <TextInput value={selectedCourse.website ?? ''} onChangeText={(website) => updateCourseDetails(selectedCourse.id, { website })} placeholder="udisc.com/courses/…" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="url" autoCapitalize="none" autoCorrect={false} textContentType="URL" />
-              <Text style={[styles.builderLabel, styles.detailLabel]}>INFO TO KNOW</Text>
-              <TextInput value={selectedCourse.notes ?? ''} onChangeText={(notes) => updateCourseDetails(selectedCourse.id, { notes })} placeholder="Parking, fees, hours, restrooms, mandos, water hazards…" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.notesInput]} multiline textAlignVertical="top" />
-              {renderCourseLinks(selectedCourse)}
+              {renderDetailsFields(selectedCourse)}
             </View>}
-            {selectedCourse && <View style={styles.mapEditor}><View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Map holes</Text><Text style={styles.mapProgress}>{mappedHoleCount}/{selectedCourse.holes} MAPPED</Text></View><Text style={styles.mapInstruction}>Map each hole with satellite imagery and on-site GPS capture.</Text><Pressable onPress={() => openHoleWizard(selectedCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{hasMultipleLayouts ? `MAP ${selectedCourse.layoutLabel.toUpperCase()} LAYOUT ↗` : 'MAP SELECTED COURSE ↗'}</Text></Pressable>
+            {selectedCourse && <View style={styles.mapEditor}><View style={styles.mapEditorHeading}><Text style={styles.builderSectionTitle}>Map holes</Text><Text style={styles.mapProgress}>{mappedHoleCount}/{selectedCourse.holes} MAPPED</Text></View><Text style={styles.mapInstruction}>Map each hole with satellite imagery and on-site GPS capture.</Text><Pressable onPress={() => mapLayout(selectedBaseCourse!, selectedCourse.layoutId, 'CourseBuilder')} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{hasMultipleLayouts ? `MAP ${selectedCourse.layoutLabel.toUpperCase()} LAYOUT ↗` : 'MAP SELECTED COURSE ↗'}</Text></Pressable>
               <View style={[styles.mapEditorHeading, styles.parEditorHeading]}><Text style={styles.builderSectionTitle}>Hole pars{hasMultipleLayouts ? ` · ${selectedCourse.layoutLabel}` : ''}</Text><Text style={styles.mapProgress}>PAR {selectedCourse.layouts?.reduce((sum, layout) => sum + (layout.par ?? 0), 0) ?? 0}</Text></View>
               {Array.from({ length: selectedCourse.holes }, (_, index) => {
                 const layout = selectedCourse.layouts?.[index];
@@ -1721,6 +1758,50 @@ export default function App() {
               <Pressable onPress={() => addHoleToCourse(selectedCourse.id)} style={styles.addHoleButton} accessibilityRole="button"><Text style={styles.addHoleButtonText}>+ ADD HOLE</Text></Pressable>
             </View>}
             <Text style={styles.builderFootnote}>Coordinates are captured only when you save a point. Glide Path does not track your location in the background.</Text>
+          </ScrollView>
+        ) : screen === 'NewCourse' ? (
+          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <View style={styles.stepDots} accessibilityLabel={`Step ${newCourseStep} of 4`}>
+              {['NAME', 'DETAILS', 'LAYOUTS', 'MAP HOLES'].map((label, index) => <View key={label} style={styles.stepDot}>
+                <View style={[styles.stepDotMark, index + 1 <= newCourseStep && styles.stepDotMarkDone]} />
+                <Text style={[styles.stepDotLabel, index + 1 === newCourseStep && styles.stepDotLabelCurrent]}>{label}</Text>
+              </View>)}
+            </View>
+            {newCourseStep === 1 ? <View style={styles.builderPanel}>
+              <Text style={styles.builderLabel}>COURSE NAME</Text>
+              <TextInput value={courseName} onChangeText={setCourseName} onSubmitEditing={saveNewCourseName} placeholder="e.g. Cedar Grove" placeholderTextColor="#5f6a63" style={styles.builderInput} returnKeyType="next" autoFocus />
+            </View> : !selectedBaseCourse || !selectedCourse || selectedBaseCourse.id !== newCourseId ? <Text style={styles.mapInstruction}>This course is no longer available.</Text>
+              : newCourseStep === 2 ? <View style={styles.builderPanel}>
+                <Text style={styles.mapInstruction}>All optional. You can change these any time in Course builder.</Text>
+                {renderDetailsFields(selectedCourse)}
+              </View>
+              : newCourseStep === 3 ? <View>
+                <Text style={styles.mapInstruction}>Name the first layout (for example Main or Red tees), then add any others: different tee pads, pin positions or seasonal setups.</Text>
+                {renderLayoutsEditor(selectedBaseCourse, selectedCourse)}
+              </View>
+              : <View>
+                <Text style={styles.mapInstruction}>Map each layout by walking to every tee and basket. Holes are added as you go: on the last hole, + ADD HOLE adds the next one.</Text>
+                {courseLayouts(selectedBaseCourse).map((layout) => {
+                  const stats = courseStats(withLayout(selectedBaseCourse, layout.id));
+                  return <View key={layout.id} style={styles.courseItem}>
+                    <View style={[styles.courseItemCopy, styles.layoutMapCopy]}>
+                      <Text style={styles.courseItemName}>{layoutDisplayName(layout)}</Text>
+                      <Text style={styles.courseItemMeta}>{stats.mappedHoles ? `${stats.mappedHoles} of ${stats.holes} ${stats.holes === 1 ? 'hole' : 'holes'} mapped` : 'Not mapped yet'}</Text>
+                    </View>
+                    <Pressable onPress={() => mapLayout(selectedBaseCourse, layout.id, 'NewCourse')} style={styles.courseLink} accessibilityRole="button" accessibilityLabel={`Map the ${layoutDisplayName(layout)} layout`}><Text style={styles.courseLinkText}>{stats.mappedHoles ? 'CONTINUE ↗' : 'MAP ↗'}</Text></Pressable>
+                  </View>;
+                })}
+              </View>}
+            <View style={styles.wizardNavigation}>
+              {newCourseStep > 1
+                ? <Pressable onPress={() => setNewCourseStep((newCourseStep - 1) as 1 | 2 | 3)} style={styles.wizardNavButton}><Text style={styles.wizardNavText}>‹ BACK</Text></Pressable>
+                : <Pressable onPress={() => setScreen('CourseBuilder')} style={styles.wizardNavButton}><Text style={styles.wizardNavText}>CANCEL</Text></Pressable>}
+              {newCourseStep === 1
+                ? <Pressable onPress={saveNewCourseName} disabled={!courseName.trim()} style={[styles.wizardNavButton, styles.wizardNavNext, !courseName.trim() && styles.disabledButton]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>NEXT: DETAILS ›</Text></Pressable>
+                : newCourseStep < 4
+                  ? <Pressable onPress={() => setNewCourseStep((newCourseStep + 1) as 3 | 4)} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>{newCourseStep === 2 ? 'NEXT: LAYOUTS ›' : 'NEXT: MAP HOLES ›'}</Text></Pressable>
+                  : <Pressable onPress={() => setScreen('CourseBuilder')} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>DONE ✓</Text></Pressable>}
+            </View>
           </ScrollView>
         ) : screen === 'HoleWizard' ? (
           <View style={styles.holeWizard}>
@@ -1748,7 +1829,7 @@ export default function App() {
             {gpsMessage ? <Text style={styles.gpsMessage}>{gpsMessage}</Text> : null}
             <View style={styles.wizardNavigation}>
               <Pressable onPress={() => moveWizardHole(builderHole - 1)} disabled={builderHole === 1} style={[styles.wizardNavButton, builderHole === 1 && styles.holeNavDisabled]}><Text style={styles.wizardNavText}>‹ PREVIOUS</Text></Pressable>
-              <Pressable onPress={() => setScreen('CourseBuilder')} style={[styles.wizardNavButton, styles.wizardNavFinish]}><Text style={styles.wizardNavFinishText}>FINISH ✓</Text></Pressable>
+              <Pressable onPress={() => setScreen(wizardReturn)} style={[styles.wizardNavButton, styles.wizardNavFinish]}><Text style={styles.wizardNavFinishText}>FINISH ✓</Text></Pressable>
               <Pressable onPress={() => builderHole < (selectedCourse?.holes ?? 1) ? moveWizardHole(builderHole + 1) : addWizardHole()} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>{builderHole < (selectedCourse?.holes ?? 1) ? 'NEXT HOLE ›' : '+ ADD HOLE'}</Text></Pressable>
             </View>
           </View>
@@ -2147,6 +2228,14 @@ const styles = StyleSheet.create({
   weightInput: { width: 48, height: 34, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, textAlign: 'center', color: INK, fontSize: 13, fontVariant: ['tabular-nums'], backgroundColor: '#101412' },
   weightUnit: { color: MUTED, fontSize: 10, fontWeight: '700', marginLeft: 4 },
   latestCopy: { flex: 1, paddingVertical: 6, marginRight: 8 },
+  newCourseButton: { marginTop: 0 },
+  layoutMapCopy: { paddingVertical: 10 },
+  stepDots: { flexDirection: 'row', marginBottom: 16 },
+  stepDot: { flex: 1, alignItems: 'center' },
+  stepDotMark: { width: '90%', height: 4, borderRadius: 2, backgroundColor: '#26302b' },
+  stepDotMarkDone: { backgroundColor: GREEN },
+  stepDotLabel: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6, marginTop: 5 },
+  stepDotLabelCurrent: { color: INK },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },
