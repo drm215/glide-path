@@ -37,7 +37,8 @@ import {
   type PublicCourse,
   type PublicCourseSummary,
 } from './lib/api';
-import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole } from './lib/rounds';
+import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole, suggestDiscs } from './lib/rounds';
+import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, roundScore as statsRoundScore, summarizeRounds, type GroupStats, type StatsRound } from './lib/round-stats';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
 import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowStyle, ThrowType, Tombstone } from './lib/types';
@@ -272,6 +273,102 @@ const regionForHole = (layout: HoleLayout | undefined): MapRegion | null => {
   };
 };
 
+const statFeet = (value: number | null) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
+const statQuality = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}/3`);
+const statPercent = (count: number, total: number) => `${Math.round((count / total) * 100)}%`;
+
+const StatTile = ({ label, value, note }: { label: string; value: string | number; note?: string | null }) => (
+  <View style={styles.courseStat}>
+    <Text style={styles.statLabel}>{label}</Text>
+    <Text style={styles.courseStatValue}>{value}</Text>
+    {note ? <Text style={styles.courseStatNote}>{note}</Text> : null}
+  </View>
+);
+
+const GroupTable = ({ heading, rows }: { heading: string; rows: GroupStats[] }) => (
+  <View style={styles.statTable}>
+    <View style={[styles.statTableRow, styles.statTableHead]}>
+      {[heading, 'THROWS', 'AVG', 'LONGEST', 'QUALITY'].map((label, index) => <Text key={label} style={[index ? styles.statCell : styles.statCellName, styles.statHeadText]}>{label}</Text>)}
+    </View>
+    {rows.map((row) => <View key={row.label} style={styles.statTableRow}>
+      <Text style={styles.statCellName} numberOfLines={1}>{row.label}</Text>
+      <Text style={styles.statCell}>{row.count}</Text>
+      <Text style={styles.statCell}>{statFeet(row.averageFeet)}</Text>
+      <Text style={styles.statCell}>{statFeet(row.longestFeet)}</Text>
+      <Text style={styles.statCell}>{statQuality(row.averageQuality)}</Text>
+    </View>)}
+  </View>
+);
+
+const FILTER_TYPES: ThrowType[] = ['Drive', 'Approach', 'Putt'];
+
+// Throw stats for one or many rounds, matching the website's round summary. Each round brings
+// the hole layouts it was played on, for first-putt distances and drive circles.
+const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: StatsRound[]; scope: string }) => {
+  const [discType, setDiscType] = useState<ThrowType | null>(null);
+  const [discQuality, setDiscQuality] = useState<number | null>(null);
+  const shots = rounds.flatMap((round) => round.shots);
+  if (!shots.length) return null;
+  const summary = summarizeRounds(rounds);
+  const { putting, driveCircles } = summary;
+  const types = FILTER_TYPES.filter((type) => shots.some((shot) => shot.type === type));
+  const ratings = [3, 2, 1].filter((value) => shots.some((shot) => qualityOf(shot) === value));
+  const discShots = shots.filter((shot) => (discType === null || shot.type === discType) && (discQuality === null || qualityOf(shot) === discQuality));
+  const filterChip = (label: string, selected: boolean, onPress: () => void) => (
+    <Pressable key={label} onPress={onPress} style={[styles.chip, selected && styles.chipSelected]} accessibilityRole="button" accessibilityState={{ selected }}>
+      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+    </Pressable>
+  );
+  return (
+    <View style={styles.statsSection}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <View style={styles.courseStatsGrid}>
+        <StatTile label="THROWS" value={summary.count} note={summary.penalties === 1 ? '1 OB penalty' : summary.penalties ? `${summary.penalties} OB penalties` : 'No penalties'} />
+        <StatTile label="TOTAL DISTANCE" value={statFeet(summary.totalFeet)} note="Measured by GPS" />
+        <StatTile label="LONGEST" value={statFeet(summary.longest?.feet ?? null)} note={summary.longest ? `${summary.longest.disc} ${summary.longest.type.toLowerCase()}` : null} />
+        <StatTile label="AVG QUALITY" value={statQuality(summary.averageQuality)} note={summary.qualities.length ? null : 'Not rated'} />
+      </View>
+      <Text style={styles.statsHeading}>By throw type</Text>
+      <GroupTable heading="TYPE" rows={summary.byType} />
+      {summary.byStyle.length > 0 && <><Text style={styles.statsHeading}>By throw style</Text><GroupTable heading="STYLE" rows={summary.byStyle} /></>}
+      {putting && <>
+        <Text style={styles.statsHeading}>Putting</Text>
+        <View style={styles.courseStatsGrid}>
+          <StatTile label="FIRST-PUTT MAKES" value={statPercent(putting.firstPutts.made, putting.firstPutts.attempts)} note={`${putting.firstPutts.made} of ${putting.firstPutts.attempts} holes`} />
+          <StatTile label="AVG FIRST PUTT" value={statFeet(putting.firstPutts.averageFeet)} note={putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'} />
+          <StatTile label="ALL PUTTS" value={statPercent(putting.made, putting.attempts)} note={`${putting.made} of ${putting.attempts} made`} />
+          <StatTile label="MISSES" value={putting.hit + putting.missed} note={`${putting.hit} hit the basket · ${putting.missed} missed`} />
+        </View>
+      </>}
+      {driveCircles.drives > 0 && <>
+        <Text style={styles.statsHeading}>Drives in the circles</Text>
+        {driveCircles.measured ? <View style={styles.courseStatsGrid}>
+          <StatTile label="IN C1" value={statPercent(driveCircles.c1, driveCircles.measured)} note={`${driveCircles.c1} of ${driveCircles.measured} · within 33 ft`} />
+          <StatTile label="IN C2" value={statPercent(driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c2} of ${driveCircles.measured} · 33–66 ft`} />
+          <StatTile label="INSIDE C2" value={statPercent(driveCircles.c1 + driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c1 + driveCircles.c2} of ${driveCircles.measured} drives`} />
+          <StatTile label="MEASURED" value={`${driveCircles.measured}/${driveCircles.drives}`} note="Need a logged spot and mapped basket" />
+        </View> : <Text style={styles.mapInstruction}>Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in {scope} has both.</Text>}
+      </>}
+      <Text style={styles.statsHeading}>By disc</Text>
+      {types.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+        {[filterChip('All throws', discType === null, () => setDiscType(null)), ...types.map((type) => filterChip(type, discType === type, () => setDiscType(type)))]}
+      </ScrollView>}
+      {ratings.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+        {[filterChip('Any quality', discQuality === null, () => setDiscQuality(null)), ...ratings.map((value) => filterChip(QUALITY_NAMES[value], discQuality === value, () => setDiscQuality(value)))]}
+      </ScrollView>}
+      {discShots.length ? <GroupTable heading="DISC" rows={summarizeRounds([{ shots: discShots }]).byDisc} /> : <Text style={styles.mapInstruction}>No throws match these filters.</Text>}
+      {summary.landings.length > 0 && <>
+        <Text style={styles.statsHeading}>Where throws landed</Text>
+        <Text style={styles.statsChips}>{summary.landings.map((item) => `${item.lie === 'Basket' ? 'In the basket' : item.lie} ${item.count}`).join('  ·  ')}</Text>
+      </>}
+      {summary.qualities.length > 0 && <>
+        <Text style={styles.statsHeading}>Throw quality</Text>
+        <Text style={styles.statsChips}>{summary.qualities.map((item) => `${item.label} ${item.count}`).join('  ·  ')}</Text>
+      </>}
+    </View>
+  );
+};
+
 // A button that only responds to a press-and-hold, with a light buzz when the hold registers.
 // Used during a round so that bumps and stray taps never act.
 const HoldPressable = ({ onPress, style, children, ...rest }: Omit<PressableProps, 'onPress' | 'onLongPress'> & { onPress?: () => void }) => (
@@ -362,6 +459,9 @@ export default function App() {
   const [selectedLayoutId, setSelectedLayoutId] = useState(MAIN_LAYOUT_ID);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [newLayoutName, setNewLayoutName] = useState('');
+  // Stats screen filters: a course key ('all', a course id, or name:<course name>) and practice.
+  const [statsCourse, setStatsCourse] = useState('all');
+  const [statsPractice, setStatsPractice] = useState(false);
   // New-course flow: 1 name, 2 details, 3 layouts, 4 map holes. The course is created after step 1.
   const [newCourseStep, setNewCourseStep] = useState<1 | 2 | 3 | 4>(1);
   const [newCourseId, setNewCourseId] = useState<string | null>(null);
@@ -663,10 +763,25 @@ export default function App() {
   const holeStrokes = countStrokes(activeShots);
   const holeFeet = activeShots.reduce((total, shot) => total + shot.feet, 0);
   const allShots = [...history.flatMap((session) => session.shots), ...shots];
-  const totalFeet = allShots.reduce((total, shot) => total + shot.feet, 0);
-  const averageFeet = allShots.length ? Math.round(totalFeet / allShots.length) : 0;
-  const recentShots = allShots.slice(-8);
-  const longestRecentThrow = Math.max(1, ...recentShots.map((shot) => shot.feet));
+  // Stats screen: finished sessions, optionally with practice, grouped by course.
+  const sessionLayouts = (session: SessionArchive) => {
+    const base = courses.find((course) => course.id === session.courseId);
+    return (base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [];
+  };
+  const statsSessions = history.filter((session) => statsPractice || session.mode === 'Round');
+  const statsCourseKey = (session: SessionArchive) => session.courseId ?? `name:${session.courseName}`;
+  const statsCourses = [...statsSessions.reduce((groups, session) => {
+    const key = statsCourseKey(session);
+    const group = groups.get(key) ?? { key, name: courses.find((course) => course.id === session.courseId)?.name ?? session.courseName, sessions: [] as SessionArchive[] };
+    group.sessions.push(session);
+    return groups.set(key, group);
+  }, new Map<string, { key: string; name: string; sessions: SessionArchive[] }>()).values()].sort((a, b) => b.sessions.length - a.sessions.length || a.name.localeCompare(b.name));
+  const activeStatsCourse = statsCourses.some((group) => group.key === statsCourse) ? statsCourse : 'all';
+  const statsSelected = activeStatsCourse === 'all' ? statsSessions : statsCourses.find((group) => group.key === activeStatsCourse)!.sessions;
+  const statsScores = statsSelected.filter((session) => session.mode === 'Round').map((session) => ({ session, score: statsRoundScore(session.shots, sessionLayouts(session)) }));
+  const statsWithPar = statsScores.filter((item) => item.score.toPar !== null);
+  const statsBest = statsWithPar.reduce<(typeof statsWithPar)[number] | null>((best, item) => (!best || item.score.toPar! < best.score.toPar! ? item : best), null);
+  const averageOf = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
   const selectedBaseCourse = courses.find((course) => course.id === selectedCourseId) ?? courses[0];
   // Most screens work on the selected layout of the selected course.
   const selectedCourse: CourseView | undefined = selectedBaseCourse ? withLayout(selectedBaseCourse, selectedLayoutId) : undefined;
@@ -693,6 +808,11 @@ export default function App() {
     feet: Math.round(feetBetween({ latitude: lastLie.latitude!, longitude: lastLie.longitude! }, holeBasket)),
     elevation: typeof lastLie.altitude === 'number' && typeof holeBasket.altitude === 'number' ? Math.round((holeBasket.altitude - lastLie.altitude) / 0.3048) : null,
   } : null;
+  // The caddie: discs whose average distance best matches what's left to the basket.
+  const caddieFrom = lastLie ? { latitude: lastLie.latitude!, longitude: lastLie.longitude! } : selectedHoleLayout?.tee ?? null;
+  const caddieTargetFeet = caddieFrom && holeBasket && !shots.some((shot) => shot.hole === hole && shot.lie === 'Basket') ? Math.round(feetBetween(caddieFrom, holeBasket)) : null;
+  const caddieType = guessThrowType(shots.filter((shot) => shot.hole === hole), caddieFrom, holeBasket);
+  const caddie = caddieTargetFeet === null ? [] : suggestDiscs(caddieTargetFeet, caddieType, allShots, bag);
   const mappedShots = activeShots.flatMap((shot, index) =>
     shot.latitude !== undefined && shot.longitude !== undefined ? [{ index, coordinate: { latitude: shot.latitude, longitude: shot.longitude } }] : []);
   const lastMappedShot = mappedShots.at(-1);
@@ -849,11 +969,15 @@ export default function App() {
   // Best guesses for a throw, so most throws need no changes: a drive from the tee, a putt from
   // within C2 of the basket, otherwise an approach; the disc last used for that kind of throw.
   const guessThrow = (): { type: ThrowType; disc: Disc } => {
-    const type = guessThrowType(activeShots, previousLiePoint(), selectedHoleLayout?.basket);
+    const from = previousLiePoint();
+    const basket = selectedHoleLayout?.basket;
+    const type = guessThrowType(activeShots, from, basket);
     // Newest first: this round's throws, then past rounds from newest to oldest.
     const pastShots = [...history].sort((a, b) => Number(a.id) - Number(b.id)).flatMap((session) => session.shots);
     const recent = [...pastShots, ...shots].reverse();
-    return { type, disc: guessDisc(type, recent, bag, bagDetails, disc) };
+    // The caddie's pick from where this throw was thrown, then the last disc used for the type.
+    const suggested = from && basket ? suggestDiscs(Math.round(feetBetween(from, basket)), type, recent, bag, 1)[0]?.disc : undefined;
+    return { type, disc: suggested ?? guessDisc(type, recent, bag, bagDetails, disc) };
   };
 
   // Adds a throw to the round in progress. Returns a short description for confirmations.
@@ -1671,8 +1795,8 @@ export default function App() {
 
         <View style={[styles.pageHeading, screen === 'Round' && styles.pageHeadingCompact]}>
           {screen !== 'Round' && <View>
-            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'NewCourse' ? `NEW COURSE · STEP ${newCourseStep} OF 4` : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'YOUR GAME, IN FOCUS'}</Text>
-            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'NewCourse' ? ['Name it.', 'Details.', 'Layouts.', 'Map holes.'][newCourseStep - 1] : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'The long view.'}</Text>
+            <Text style={styles.eyebrow}>{screen === 'Home' ? 'DISC GOLF FIELD LOG' : screen === 'HoleWizard' ? `${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP` : screen === 'Practice' ? 'FOCUSED SESSION' : screen === 'Rounds' ? 'PREVIOUS SESSIONS' : screen === 'Account' ? 'SYNC & SHARING' : screen === 'NewCourse' ? `NEW COURSE · STEP ${newCourseStep} OF 4` : screen === 'FindCourses' ? 'COURSE DIRECTORY' : screen === 'RoundDetail' ? (showingRoundSummary ? 'ROUND COMPLETE' : viewedSession ? formatSessionDate(viewedSession).toUpperCase() : 'ROUND') : 'ALL FINISHED ROUNDS'}</Text>
+            <Text style={styles.title}>{screen === 'Home' ? 'Ready when you are.' : screen === 'CourseBuilder' ? 'Course builder.' : screen === 'HoleWizard' ? `Hole ${String(builderHole).padStart(2, '0')}.` : screen === 'BagBuilder' ? 'Bag builder.' : screen === 'Practice' ? 'Practice.' : screen === 'Rounds' ? 'Rounds.' : screen === 'Account' ? (account ? 'Your account.' : 'Sign in.') : screen === 'NewCourse' ? ['Name it.', 'Details.', 'Layouts.', 'Map holes.'][newCourseStep - 1] : screen === 'FindCourses' ? 'Find courses.' : screen === 'RoundDetail' ? `${viewedSession?.courseName ?? 'Round'}.` : 'Stats.'}</Text>
           </View>}
           {screen !== 'Home' && (() => {
             const backToRounds = screen === 'RoundDetail' && !showingRoundSummary;
@@ -1704,7 +1828,7 @@ export default function App() {
                 <Text style={styles.menuNumber}>05</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Rounds</Text><Text style={styles.menuSubtitle}>{history.length ? `${history.length} previous ${history.length === 1 ? 'session' : 'sessions'}` : 'Review your previous rounds'}</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={() => setScreen('Insights')} style={styles.menuItem}>
-                <Text style={styles.menuNumber}>06</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Session insights</Text><Text style={styles.menuSubtitle}>Distances and disc averages</Text></View><Text style={styles.menuArrow}>›</Text>
+                <Text style={styles.menuNumber}>06</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Stats</Text><Text style={styles.menuSubtitle}>Scores, putting, drives and discs</Text></View><Text style={styles.menuArrow}>›</Text>
               </Pressable>
               <Pressable onPress={startRound} style={[styles.menuItem, !sessionActive && styles.menuItemPrimary]}>
                 <Text style={[styles.menuNumber, !sessionActive && styles.menuNumberPrimary]}>07</Text><View style={styles.menuItemCopy}><Text style={[styles.menuTitle, !sessionActive && styles.menuTitlePrimary]}>{sessionActive ? 'Start a new round' : 'Start a round'}</Text><Text style={[styles.menuSubtitle, !sessionActive && styles.menuSubtitlePrimary]}>Track throws hole by hole</Text></View><Text style={[styles.menuArrow, !sessionActive && styles.menuArrowPrimary]}>↗</Text>
@@ -1891,9 +2015,13 @@ export default function App() {
               </MapView>
               <View pointerEvents="none" style={styles.boardCaption}><Text style={styles.boardCaptionText}>{(selectedCourse?.name ?? 'PRACTICE AREA').toUpperCase()}</Text><Text style={styles.boardScale}>SATELLITE</Text></View>
             </View> : <View style={[styles.roundMapFrame, styles.mapUnavailable]}><Text style={styles.mapUnavailableTitle}>Hole not mapped yet</Text><Text style={styles.mapUnavailableText}>Map this hole in Course builder to see it on the satellite map. You can still log throws.</Text></View>}
-            {(selectedHoleDistance !== null || lieToBasket) && <View style={[styles.holeDistance, styles.roundHoleDistance, styles.basketDistances]}>
+            {(selectedHoleDistance !== null || lieToBasket || caddie.length > 0) && <View style={[styles.holeDistance, styles.roundHoleDistance, styles.basketDistances]}>
               {selectedHoleDistance !== null && <View style={styles.basketDistanceRow}><Text style={styles.holeDistanceLabel}>TEE TO BASKET</Text><Text style={styles.holeDistanceValue}>{selectedHoleDistance} ft{holeElevationFeet(selectedHoleLayout) === null ? '' : `  ${formatElevation(holeElevationFeet(selectedHoleLayout)!)}`}</Text></View>}
               {lieToBasket && <View style={styles.basketDistanceRow}><Text style={styles.holeDistanceLabel}>YOUR LIE TO BASKET</Text><Text style={styles.holeDistanceValue}>{lieToBasket.feet} ft{lieToBasket.elevation === null ? '' : `  ${formatElevation(lieToBasket.elevation)}`}</Text></View>}
+              {caddie.length > 0 && <View style={styles.caddieRow}>
+                <Text style={styles.holeDistanceLabel}>CADDIE · {caddieType.toUpperCase()} · {caddieTargetFeet} FT</Text>
+                {caddie.map((item) => <Text key={`${item.disc}-${item.style ?? ''}`} style={styles.caddieText}>{item.disc}{item.style ? ` ${item.style.toLowerCase()}` : ''}  <Text style={styles.caddieMeta}>{caddieType === 'Putt' ? `${item.count} ${item.count === 1 ? 'putt' : 'putts'}` : `avg ${item.averageFeet} ft · ${item.count} ${item.count === 1 ? 'throw' : 'throws'}`}</Text></Text>)}
+              </View>}
             </View>}
 
             <HoldPressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then press and hold</Text></HoldPressable>
@@ -2079,6 +2207,7 @@ export default function App() {
               </View>
               {viewedScore && viewedScore.holesWithPar < viewedScore.holesCompleted && <Text style={styles.mapInstruction}>{viewedScore.holesWithPar ? `To par counts only the ${viewedScore.holesWithPar} holes with a par set.` : 'Set pars for this course in Course builder to see your score to par.'}</Text>}
               {viewedSession.mode === 'Practice' && <Text style={styles.mapInstruction}>Practice session</Text>}
+              <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedCourse?.layouts ?? [] }]} scope="this round" />
               <Text style={[styles.sectionTitle, styles.throwByThrowTitle]}>Throw by throw</Text>
               <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it.</Text>
               {viewedHoles.map((item) => <View key={item.hole} style={styles.roundHole} onLayout={(event) => { holeSectionOffsets.current[item.hole] = event.nativeEvent.layout.y; }}>
@@ -2098,23 +2227,48 @@ export default function App() {
           </ScrollView>
         ) : screen === 'Insights' ? (
           <ScrollView contentContainerStyle={styles.content}>
-            <View style={styles.insightHero}>
-              <Text style={styles.insightEyebrow}>{history.length ? 'SESSION HISTORY' : 'THIS SESSION'}</Text>
-              <Text style={styles.insightNumber}>{averageFeet}<Text style={styles.insightUnit}> ft</Text></Text>
-              <Text style={styles.insightCaption}>average throw distance</Text>
-              <View style={styles.sparkline}>
-                {recentShots.map((shot, index) => (
-                  <View key={`${shot.hole}-${index}`} style={[styles.sparkBar, { height: Math.max(12, Math.round((shot.feet / longestRecentThrow) * 85)) }]} />
-                ))}
-              </View>
-              <View style={styles.sparkLabels}>
-                <Text style={styles.insightCaption}>{recentShots.length ? `THROW ${String(shots.length - recentShots.length + 1).padStart(2, '0')}` : 'NO THROWS YET'}</Text>
-                <Text style={styles.insightCaption}>{recentShots.length ? `THROW ${String(shots.length).padStart(2, '0')}` : 'LOG A THROW TO BEGIN'}</Text>
-              </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              {[{ key: 'all', name: 'All courses', count: statsSessions.length }, ...statsCourses.map((group) => ({ key: group.key, name: group.name, count: group.sessions.length }))].map((option) => (
+                <Pressable key={option.key} onPress={() => setStatsCourse(option.key)} style={[styles.chip, activeStatsCourse === option.key && styles.chipSelected]} accessibilityRole="button" accessibilityState={{ selected: activeStatsCourse === option.key }}>
+                  <Text style={[styles.chipText, activeStatsCourse === option.key && styles.chipTextSelected]}>{option.name} ({option.count})</Text>
+                </Pressable>))}
+            </ScrollView>
+            <View style={[styles.toggleRow, styles.statsToggle]}>
+              <Text style={[styles.courseItemName, styles.toggleCopy]}>Include practice sessions</Text>
+              <Switch value={statsPractice} onValueChange={setStatsPractice} trackColor={{ true: GREEN }} accessibilityLabel="Include practice sessions" />
             </View>
-            <View style={styles.statsGrid}><View style={styles.statBlock}><Text style={styles.statLabel}>LOGGED THROWS</Text><Text style={styles.statValue}>{allShots.length}</Text></View><View style={styles.statBlock}><Text style={styles.statLabel}>TOTAL DISTANCE</Text><Text style={styles.statValue}>{totalFeet} ft</Text></View></View>
-            <Text style={styles.sectionTitle}>By disc</Text>
-            {bag.map((item, index) => { const used = allShots.filter((shot) => shot.disc === item); const avg = used.length ? Math.round(used.reduce((sum, shot) => sum + shot.feet, 0) / used.length) : 0; return <View key={`${item}-${index}`} style={styles.discStat}><Text style={styles.discStatName}>{item}</Text><View style={styles.discStatTrack}><View style={[styles.discStatFill, { width: `${Math.min(100, avg / 3)}%` }]} /></View><Text style={styles.discStatValue}>{used.length ? `${avg} ft` : '—'}</Text></View>; })}
+            {!statsSelected.length ? <Text style={styles.mapInstruction}>No finished {statsPractice ? 'sessions' : 'rounds'} yet. Stats include rounds once you end them.</Text> : <>
+              {statsScores.length > 0 && <View style={styles.courseStatsGrid}>
+                <StatTile label="ROUNDS" value={statsScores.length} note={statsSelected.length > statsScores.length ? `+ ${statsSelected.length - statsScores.length} practice` : null} />
+                <StatTile label="AVG SCORE" value={averageOf(statsScores.map((item) => item.score.strokes)).toFixed(1)} note={activeStatsCourse === 'all' && statsCourses.length > 1 ? 'Across different courses' : null} />
+                <StatTile label="AVG TO PAR" value={statsWithPar.length ? formatScoreToPar(Math.round(averageOf(statsWithPar.map((item) => item.score.toPar!)) * 10) / 10) : '—'} note={statsWithPar.length < statsScores.length ? `${statsWithPar.length} of ${statsScores.length} rounds have pars` : null} />
+                <Pressable onPress={() => { if (!statsBest) return; setViewedSessionId(statsBest.session.id); setExpandedHole(null); setShowingRoundSummary(false); setScreen('RoundDetail'); }} style={styles.courseStat} accessibilityRole="button" accessibilityLabel="Open best round">
+                  <Text style={styles.statLabel}>BEST ROUND</Text>
+                  <Text style={styles.courseStatValue}>{statsBest ? formatScoreToPar(statsBest.score.toPar!) : '—'}</Text>
+                  {statsBest && <Text style={styles.courseStatNote}>{statsBest.session.courseName} · {formatSessionDate(statsBest.session)} ›</Text>}
+                </Pressable>
+              </View>}
+              {activeStatsCourse === 'all' && statsCourses.length > 1 && <>
+                <Text style={styles.statsHeading}>By course</Text>
+                {statsCourses.map((group) => {
+                  const scores = group.sessions.filter((session) => session.mode === 'Round').map((session) => statsRoundScore(session.shots, sessionLayouts(session)));
+                  const withPar = scores.filter((score) => score.toPar !== null);
+                  return <Pressable key={group.key} onPress={() => setStatsCourse(group.key)} style={styles.courseItem} accessibilityRole="button">
+                    <View style={styles.courseItemCopy}>
+                      <Text style={styles.courseItemName}>{group.name}</Text>
+                      <Text style={styles.courseItemMeta}>{[
+                        `${group.sessions.length} ${group.sessions.length === 1 ? 'session' : 'sessions'}`,
+                        scores.length ? `avg ${averageOf(scores.map((score) => score.strokes)).toFixed(1)}` : null,
+                        withPar.length ? `avg ${formatScoreToPar(Math.round(averageOf(withPar.map((score) => score.toPar!)) * 10) / 10)}` : null,
+                        withPar.length ? `best ${formatScoreToPar(Math.min(...withPar.map((score) => score.toPar!)))}` : null,
+                      ].filter(Boolean).join(' · ')}</Text>
+                    </View>
+                    <Text style={styles.menuArrow}>›</Text>
+                  </Pressable>;
+                })}
+              </>}
+              <StatsSummary title="Throw stats" rounds={statsSelected.map((session) => ({ shots: session.shots, layouts: sessionLayouts(session) }))} scope="these rounds" />
+            </>}
           </ScrollView>
         ) : (
           <ScrollView contentContainerStyle={styles.content}>
@@ -2236,6 +2390,19 @@ const styles = StyleSheet.create({
   stepDotMarkDone: { backgroundColor: GREEN },
   stepDotLabel: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6, marginTop: 5 },
   stepDotLabelCurrent: { color: INK },
+  statsSection: { marginTop: 8, marginBottom: 18 },
+  statsHeading: { color: INK, fontFamily: 'Georgia', fontSize: 15, marginTop: 14, marginBottom: 6 },
+  statsChips: { color: MUTED, fontSize: 11, lineHeight: 17 },
+  statsToggle: { marginTop: 4 },
+  statTable: { borderRadius: 8, borderWidth: 1, borderColor: '#26302b', overflow: 'hidden', marginBottom: 4 },
+  statTableRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, paddingHorizontal: 8, borderTopWidth: 1, borderTopColor: '#1b2420' },
+  statTableHead: { backgroundColor: '#141816', borderTopWidth: 0 },
+  statHeadText: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 },
+  statCellName: { flex: 1.6, color: INK, fontSize: 11, fontWeight: '700' },
+  statCell: { flex: 1, color: INK, fontSize: 11, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  caddieRow: { borderTopWidth: 1, borderTopColor: '#26302b', marginTop: 6, paddingTop: 6 },
+  caddieText: { color: INK, fontSize: 13, fontWeight: '700', marginTop: 3 },
+  caddieMeta: { color: MUTED, fontSize: 11, fontWeight: '400' },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },

@@ -1,7 +1,7 @@
 // Tests the app's round helpers (lib/rounds.ts).
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole } from '../../lib/rounds.ts';
+import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole, suggestDiscs } from '../../lib/rounds.ts';
 import type { HoleLayout, Shot } from '../../lib/types.ts';
 
 const point = (latitude: number, longitude: number) => ({ latitude, longitude, accuracy: 3, timestamp: 1 });
@@ -92,5 +92,43 @@ describe('guessDisc', () => {
     assert.equal(guessDisc('Approach', [], bag, {}, 'Buzzz'), 'Buzzz');
     assert.equal(guessDisc('Approach', [], bag, {}, 'Gone'), 'Wraith');
     assert.equal(guessDisc('Drive', [], [], {}, ''), '');
+  });
+});
+
+describe('suggestDiscs (the caddie)', () => {
+  const thrown = (disc: string, type: 'Drive' | 'Approach' | 'Putt', feet: number, style: Shot['style'] = 'Backhand'): Shot =>
+    ({ x: 0.5, y: 0.5, hole: 1, disc, type, feet, style });
+  const history = [
+    thrown('Wraith', 'Drive', 360), thrown('Wraith', 'Drive', 340), // avg 350
+    thrown('Buzzz', 'Drive', 280), thrown('Buzzz', 'Drive', 290), thrown('Buzzz', 'Drive', 270), // avg 280
+    thrown('Buzzz', 'Drive', 250, 'Forehand'), // forehand counted separately
+    thrown('Leopard', 'Drive', 300),
+    thrown('Old Disc', 'Drive', 285), // not in the bag any more
+    thrown('Buzzz', 'Drive', 0), // no measured distance
+    thrown('Aviar', 'Putt', 20), thrown('Aviar', 'Putt', 15), thrown('Envy', 'Putt', 25),
+    thrown('Buzzz', 'Approach', 150),
+  ];
+  const bag = ['Wraith', 'Buzzz', 'Leopard', 'Aviar', 'Envy'];
+
+  test('picks the discs whose average is closest to the distance, by disc and style', () => {
+    const suggestions = suggestDiscs(285, 'Drive', history, bag);
+    assert.deepEqual(suggestions.map((item) => [item.disc, item.style, item.averageFeet, item.count]), [
+      ['Buzzz', 'Backhand', 280, 3],
+      ['Leopard', 'Backhand', 300, 1],
+      ['Buzzz', 'Forehand', 250, 1],
+    ]);
+  });
+
+  test('approaches use approach history, falling back to any non-putt', () => {
+    assert.deepEqual(suggestDiscs(160, 'Approach', history, bag).map((item) => item.disc), ['Buzzz']);
+    assert.equal(suggestDiscs(160, 'Approach', history, ['Wraith'])[0].disc, 'Wraith', 'no approaches with Wraith yet: falls back to drives');
+  });
+
+  test('putts suggest the most-used putter, regardless of distance', () => {
+    assert.deepEqual(suggestDiscs(30, 'Putt', history, bag).map((item) => [item.disc, item.count]), [['Aviar', 2], ['Envy', 1]]);
+  });
+
+  test('nothing to suggest without history', () => {
+    assert.deepEqual(suggestDiscs(300, 'Drive', [], bag), []);
   });
 });

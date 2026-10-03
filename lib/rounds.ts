@@ -1,5 +1,5 @@
 // Round data helpers shared by the app and its tests. Pure functions only.
-import type { Disc, DiscInfo, GpsPoint, HoleLayout, Shot, ThrowType } from './types';
+import type { Disc, DiscInfo, GpsPoint, HoleLayout, Shot, ThrowStyle, ThrowType } from './types';
 
 type Point = Pick<GpsPoint, 'latitude' | 'longitude'>;
 
@@ -63,3 +63,30 @@ export const guessDisc = (type: ThrowType, recentShots: Shot[], bag: Disc[], det
   recentShots.find((shot) => shot.type === type && bag.includes(shot.disc))?.disc
   ?? bag.find((name) => CATEGORY_HINTS[type].some((hint) => details[name]?.category.toLowerCase().includes(hint)))
   ?? (bag.includes(current) ? current : bag[0] ?? '');
+
+export type DiscSuggestion = { disc: Disc; style?: ThrowStyle; averageFeet: number; count: number };
+
+// The caddie: discs (and the style they were thrown with) from the bag whose average distance for
+// this type of throw is closest to the distance needed. Approaches fall back to any non-putt when
+// there are none yet. For putts, distance doesn't pick the disc, so the most-used come first.
+// Throws with no measured distance are ignored.
+export const suggestDiscs = (targetFeet: number, type: ThrowType, history: Shot[], bag: Disc[], limit = 3): DiscSuggestion[] => {
+  const usable = (shot: Shot) => shot.feet > 0 && bag.includes(shot.disc);
+  let pool = history.filter((shot) => usable(shot) && shot.type === type);
+  if (!pool.length && type !== 'Putt') pool = history.filter((shot) => usable(shot) && shot.type !== 'Putt');
+  const groups = new Map<string, Shot[]>();
+  for (const shot of pool) {
+    const key = JSON.stringify([shot.disc, shot.style ?? null]);
+    groups.set(key, [...(groups.get(key) ?? []), shot]);
+  }
+  const suggestions = [...groups.values()].map((group) => ({
+    disc: group[0].disc,
+    style: group[0].style,
+    averageFeet: Math.round(group.reduce((sum, shot) => sum + shot.feet, 0) / group.length),
+    count: group.length,
+  }));
+  const ranked = type === 'Putt'
+    ? suggestions.sort((a, b) => b.count - a.count)
+    : suggestions.sort((a, b) => Math.abs(a.averageFeet - targetFeet) - Math.abs(b.averageFeet - targetFeet) || b.count - a.count);
+  return ranked.slice(0, limit);
+};
