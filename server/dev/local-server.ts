@@ -1,11 +1,13 @@
 import { networkInterfaces } from 'node:os';
 import { createApp } from '../src/app.ts';
+import { consoleMailer } from '../src/mailer.ts';
 import { createPgliteDb } from './pglite-db.ts';
 
 // Runs the API with an embedded database stored in server/.local-data, so the app can be
 // tested from a phone on the same Wi-Fi without Neon or Render.
 const db = await createPgliteDb('./.local-data');
-const app = createApp({ db, authSecret: 'local-development-secret-not-for-production', rateLimitAuth: false });
+// Reset codes are printed in this terminal instead of emailed.
+const app = createApp({ db, authSecret: 'local-development-secret-not-for-production', rateLimitAuth: false, mailer: consoleMailer });
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, '0.0.0.0', () => {

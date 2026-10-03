@@ -64,4 +64,17 @@ CREATE TABLE IF NOT EXISTS bags (
   version bigint NOT NULL DEFAULT nextval('sync_version')
 );
 ALTER TABLE bags ADD COLUMN IF NOT EXISTS weights jsonb NOT NULL DEFAULT '{}';
+
+-- Password reset codes, stored only as keyed hashes. A code works once, for 15 minutes,
+-- with a few guesses.
+CREATE TABLE IF NOT EXISTS password_resets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  attempts integer NOT NULL DEFAULT 0,
+  used boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS password_resets_user ON password_resets (user_id, created_at);
 `;

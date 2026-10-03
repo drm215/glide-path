@@ -21,19 +21,28 @@
     <h1>Sign in.</h1>
     <p class="lede">See the rounds and courses you've synced from the Glide Path app. Use the same email and password as in the app.</p>
     <form class="auth" id="auth-form">
-      <div class="tabs" role="group" aria-label="Sign in or create an account">
+      <div class="tabs" id="auth-tabs" role="group" aria-label="Sign in or create an account">
         <button type="button" data-mode="signIn" aria-pressed="true">Sign in</button>
         <button type="button" data-mode="register" aria-pressed="false">Create account</button>
       </div>
+      <p id="auth-back" hidden><a href="#" id="back-to-sign-in">‹ Back to sign in</a></p>
+      <p id="auth-intro" class="meta" hidden>Enter your account’s email and we’ll send a code to reset your password.</p>
       <div id="name-field" hidden>
         <label for="name">NAME</label>
         <input id="name" name="displayName" autocomplete="name" placeholder="Shown on courses you publish">
       </div>
       <label for="email">EMAIL</label>
       <input id="email" name="email" type="email" autocomplete="email" required>
-      <label for="password">PASSWORD</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required minlength="1">
+      <div id="code-field" hidden>
+        <label for="code">CODE FROM THE EMAIL</label>
+        <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 digits">
+      </div>
+      <div id="password-field">
+        <label for="password" id="password-label">PASSWORD</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required minlength="1">
+      </div>
       <button class="button" type="submit" id="auth-submit">Sign in</button>
+      <p class="auth-links"><a href="#" id="forgot-link">Forgot password?</a><a href="#" id="resend-link" hidden>Send a new code</a></p>
       <p class="status" id="auth-status" role="status" aria-live="polite"></p>
     </form>
   </section>

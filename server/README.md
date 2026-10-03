@@ -27,7 +27,7 @@ npm test          # runs the API against an in-process Postgres (PGlite); no dat
 npm run typecheck
 ```
 
-To try the app against a server on this PC, run `npm run dev:local`. It uses an embedded Postgres stored in `server/.local-data` and prints the `EXPO_PUBLIC_API_URL` to start Expo with; the phone must be on the same Wi-Fi.
+To try the app against a server on this PC, run `npm run dev:local`. It uses an embedded Postgres stored in `server/.local-data` and prints the `EXPO_PUBLIC_API_URL` to start Expo with (password reset codes are printed in its terminal); the phone must be on the same Wi-Fi.
 
 To run it against a real database, set `DATABASE_URL` and `AUTH_SECRET`, then `npm run dev`. The schema is created or updated automatically on startup.
 
@@ -36,6 +36,8 @@ To run it against a real database, set `DATABASE_URL` and `AUTH_SECRET`, then `n
 | `DATABASE_URL` | Postgres connection string |
 | `AUTH_SECRET` | Secret for signing sign-in tokens (long random string) |
 | `CORS_ORIGIN` | Allowed browser origin; defaults to `*` |
+| `RESEND_API_KEY` | Resend API key for password reset emails; without it, password reset reports that it isn't set up |
+| `EMAIL_FROM` | Sender for those emails; defaults to `Glide Path <no-reply@glidepathdiscgolf.com>` (its domain must be verified in Resend) |
 | `TILE_URL` | Optional satellite tile URL template for the website's maps |
 | `TILE_ATTRIBUTION` | Optional attribution text for those tiles |
 | `PORT` | Set by Render |
@@ -58,6 +60,8 @@ Authenticated endpoints take `Authorization: Bearer <token>`.
 | GET | `/healthz` | | Health check |
 | POST | `/api/auth/register` | | `{ email, password (8+), displayName }` → `{ token, user }` |
 | POST | `/api/auth/login` | | `{ email, password }` → `{ token, user }` |
+| POST | `/api/auth/forgot` | | `{ email }` → emails a 6-digit reset code; same answer whether or not the account exists |
+| POST | `/api/auth/reset` | | `{ email, code, password }` → `{ token, user }`; codes last 15 minutes, work once, allow 5 guesses |
 | GET | `/api/me` | ✓ | Current user |
 | DELETE | `/api/me` | ✓ | Delete the account and all its data |
 | POST | `/api/sync` | ✓ | Two-way sync (below) |

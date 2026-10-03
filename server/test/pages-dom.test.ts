@@ -84,6 +84,43 @@ describe('website pages in a browser', () => {
     assert.equal(document.getElementById('signed-in')!.hidden, true);
   });
 
+  test('My rounds: forgot password emails a code, then the code resets and signs in', async () => {
+    const calls: { path: string; body: unknown }[] = [];
+    const api: FetchHandler = (path, init) => {
+      calls.push({ path, body: init?.body ? JSON.parse(init.body) : undefined });
+      if (path === '/api/auth/forgot') return { ok: true, message: 'sent' };
+      if (path === '/api/auth/reset') return { token: 'new-token', user: { id: 'x', email: 'pat@example.com', displayName: 'Pat' } };
+      return accountApi(path, init);
+    };
+    const { document } = await loadPage(accountHtml, 'account.js', { api });
+    const Event = (globalThis as unknown as { window: { Event: typeof globalThis.Event } }).window.Event;
+    const input = (id: string) => document.getElementById(id) as unknown as { value: string };
+    const submit = async () => {
+      document.getElementById('auth-form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+      await settle();
+    };
+
+    document.getElementById('forgot-link')!.dispatchEvent(new Event('click', { cancelable: true }));
+    assert.equal(document.getElementById('password-field')!.hidden, true, 'no password needed to request a code');
+    assert.equal(document.getElementById('auth-submit')!.textContent, 'Send reset code');
+    input('email').value = 'pat@example.com';
+    await submit();
+    assert.deepEqual(calls.at(-1), { path: '/api/auth/forgot', body: { email: 'pat@example.com' } });
+    assert.equal(document.getElementById('code-field')!.hidden, false);
+    assert.equal(document.getElementById('password-label')!.textContent, 'NEW PASSWORD');
+
+    input('code').value = '12345';
+    input('password').value = 'brand new password';
+    await submit();
+    assert.match(document.getElementById('auth-status')!.textContent ?? '', /6-digit code/, 'checks the code before sending');
+
+    input('code').value = '123456';
+    await submit();
+    assert.deepEqual(calls.find((call) => call.path === '/api/auth/reset')?.body, { email: 'pat@example.com', code: '123456', password: 'brand new password' });
+    assert.equal(document.getElementById('signed-in')!.hidden, false, 'signed in after resetting');
+    assert.match(document.getElementById('signed-in')!.textContent ?? '', /Pat/);
+  });
+
   test('My rounds: overview lists rounds and courses', async () => {
     const { document } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
     const text = document.getElementById('signed-in')!.textContent ?? '';

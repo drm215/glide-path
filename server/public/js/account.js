@@ -294,17 +294,90 @@ async function deleteAccount() {
   }
 }
 
+// signIn and register, plus 'forgot' (email a reset code) and 'reset' (code and new password).
 let mode = 'signIn';
-document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
-  mode = button.dataset.mode;
-  document.querySelectorAll('[data-mode]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+const SUBMIT_LABELS = { signIn: 'Sign in', register: 'Create account', forgot: 'Send reset code', reset: 'Reset password & sign in' };
+
+const setMode = (next) => {
+  mode = next;
+  const choosing = mode === 'signIn' || mode === 'register';
+  $('#auth-tabs').hidden = !choosing;
+  document.querySelectorAll('[data-mode]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.mode === mode)));
+  $('#auth-back').hidden = choosing;
+  $('#auth-intro').hidden = mode !== 'forgot';
   $('#name-field').hidden = mode !== 'register';
-  $('#password').autocomplete = mode === 'register' ? 'new-password' : 'current-password';
-  $('#auth-submit').textContent = mode === 'register' ? 'Create account' : 'Sign in';
+  $('#code-field').hidden = mode !== 'reset';
+  $('#password-field').hidden = mode === 'forgot';
+  $('#password').required = mode !== 'forgot';
+  $('#password-label').textContent = mode === 'reset' ? 'NEW PASSWORD' : 'PASSWORD';
+  $('#password').autocomplete = mode === 'signIn' ? 'current-password' : 'new-password';
+  $('#auth-submit').textContent = SUBMIT_LABELS[mode];
+  $('#forgot-link').hidden = mode !== 'signIn';
+  $('#resend-link').hidden = mode !== 'reset';
+};
+
+document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
+  setMode(button.dataset.mode);
+  $('#auth-status').textContent = '';
 }));
+const linkTo = (selector, action) => $(selector).addEventListener('click', (event) => {
+  event.preventDefault();
+  action();
+});
+linkTo('#forgot-link', () => { setMode('forgot'); $('#auth-status').textContent = ''; });
+linkTo('#back-to-sign-in', () => { setMode('signIn'); $('#auth-status').textContent = ''; });
+linkTo('#resend-link', () => sendResetCode());
+
+async function sendResetCode() {
+  const email = $('#email').value.trim();
+  const statusEl = $('#auth-status');
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    statusEl.textContent = 'Enter the email address for your account.';
+    return;
+  }
+  statusEl.textContent = 'Sending… The server can take up to a minute to wake.';
+  try {
+    await api('/api/auth/forgot', { method: 'POST', body: { email } });
+    setMode('reset');
+    $('#code').value = '';
+    $('#password').value = '';
+    statusEl.textContent = `If ${email} has an account, a 6-digit code is on its way. It expires in 15 minutes; check your spam folder if it doesn’t arrive.`;
+  } catch (error) {
+    statusEl.textContent = error.message;
+  }
+}
+
+async function submitPasswordReset() {
+  const email = $('#email').value.trim();
+  const code = $('#code').value.trim();
+  const password = $('#password').value;
+  const statusEl = $('#auth-status');
+  if (!/^\d{6}$/.test(code)) {
+    statusEl.textContent = 'Enter the 6-digit code from the email.';
+    return;
+  }
+  if (password.length < 8) {
+    statusEl.textContent = 'Use a new password of at least 8 characters.';
+    return;
+  }
+  statusEl.textContent = 'Resetting…';
+  try {
+    const result = await api('/api/auth/reset', { method: 'POST', body: { email, code, password } });
+    saveToken(result.token);
+    $('#password').value = '';
+    $('#code').value = '';
+    setMode('signIn');
+    statusEl.textContent = '';
+    await load();
+  } catch (error) {
+    statusEl.textContent = error.message;
+  }
+}
 
 $('#auth-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (mode === 'forgot') return sendResetCode();
+  if (mode === 'reset') return submitPasswordReset();
   const email = $('#email').value.trim();
   const password = $('#password').value;
   const displayName = $('#name').value.trim();

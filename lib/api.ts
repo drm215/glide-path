@@ -48,6 +48,13 @@ export const register = (email: string, password: string, displayName: string) =
 
 export const signIn = (email: string, password: string) => request<AuthResponse>('POST', '/api/auth/login', { body: { email, password } });
 
+// Emails a 6-digit code; answers the same whether or not the email has an account.
+export const requestPasswordReset = (email: string) => request<{ ok: true; message: string }>('POST', '/api/auth/forgot', { body: { email } });
+
+// Sets a new password with the emailed code and signs in.
+export const resetPassword = (email: string, code: string, password: string) =>
+  request<AuthResponse>('POST', '/api/auth/reset', { body: { email, code, password } });
+
 export const deleteAccount = (token: string) => request<null>('DELETE', '/api/me', { token });
 
 export const syncWithServer = (token: string, body: SyncRequest) => request<SyncResponse>('POST', '/api/sync', { token, body });

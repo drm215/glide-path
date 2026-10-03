@@ -1,3 +1,4 @@
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,8 +8,9 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { checkPassword, createAuth, hashPassword, type AuthedRequest } from './auth.ts';
-import { loginRequest, registerRequest, syncRequest } from './contract.ts';
+import { forgotPasswordRequest, loginRequest, registerRequest, resetPasswordRequest, syncRequest } from './contract.ts';
 import type { Db } from './db.ts';
+import type { Mailer } from './mailer.ts';
 import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.ts';
 import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
 import { runSync } from './sync.ts';
@@ -17,7 +19,14 @@ type AppOptions = {
   db: Db; authSecret: string; corsOrigin?: string; rateLimitAuth?: boolean;
   // Satellite imagery for the website's maps; set TILE_URL to use a keyed or different provider.
   tileUrl?: string; tileAttribution?: string;
+  // Sends password reset codes; without one, password reset reports that it isn't set up.
+  mailer?: Mailer | null;
 };
+
+const RESET_CODE_MINUTES = 15;
+const RESET_MAX_ATTEMPTS = 5;
+// Codes emailed to one account per window, so the endpoint can't be used to flood an inbox.
+const RESET_MAX_PER_WINDOW = 3;
 
 const DEFAULT_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const DEFAULT_TILE_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community';
@@ -42,8 +51,10 @@ const courseSearchQuery = z.object({
 });
 
 export const createApp = ({
-  db, authSecret, corsOrigin = '*', rateLimitAuth = true, tileUrl = DEFAULT_TILE_URL, tileAttribution = DEFAULT_TILE_ATTRIBUTION,
+  db, authSecret, corsOrigin = '*', rateLimitAuth = true, tileUrl = DEFAULT_TILE_URL, tileAttribution = DEFAULT_TILE_ATTRIBUTION, mailer = null,
 }: AppOptions) => {
+  // Reset codes are stored as keyed hashes, so a database leak doesn't reveal live codes.
+  const hashResetCode = (code: string) => createHmac('sha256', authSecret).update(`password-reset:${code}`).digest();
   const app = express();
   const { issueToken, requireUser } = createAuth(authSecret);
   const tileOrigin = new URL(tileUrl.replace(/[{}]/g, '')).origin;
@@ -102,6 +113,76 @@ export const createApp = ({
       res.status(401).json({ error: 'Email or password is incorrect.' });
       return;
     }
+    res.json({ token: await issueToken(user.id), user: publicUser(user) });
+  });
+
+  // Emails a 6-digit reset code. Always answers the same way whether or not the email has an
+  // account, so it can't be used to find out who has signed up.
+  app.post('/api/auth/forgot', limitAuth, async (req, res) => {
+    if (!mailer) {
+      res.status(503).json({ error: 'Password reset isn’t set up yet. Please contact support.' });
+      return;
+    }
+    const email = forgotPasswordRequest.parse(req.body).email.toLowerCase();
+    const sent = { ok: true, message: 'If that email has an account, a reset code is on its way.' };
+    const { rows } = await db.query<UserRow>('SELECT * FROM users WHERE email = $1', [email]);
+    const user = rows[0];
+    if (!user) {
+      res.json(sent);
+      return;
+    }
+    const recent = await db.query<{ count: string }>(
+      `SELECT count(*) AS count FROM password_resets WHERE user_id = $1 AND created_at > now() - interval '${RESET_CODE_MINUTES} minutes'`,
+      [user.id],
+    );
+    if (Number(recent.rows[0].count) >= RESET_MAX_PER_WINDOW) {
+      res.json(sent);
+      return;
+    }
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    // Only the newest code works.
+    await db.query('UPDATE password_resets SET used = true WHERE user_id = $1 AND NOT used', [user.id]);
+    await db.query(
+      `INSERT INTO password_resets (user_id, code_hash, expires_at) VALUES ($1, $2, now() + interval '${RESET_CODE_MINUTES} minutes')`,
+      [user.id, hashResetCode(code).toString('hex')],
+    );
+    try {
+      await mailer.sendPasswordResetCode(user.email, code);
+    } catch (error) {
+      console.error('Could not send password reset email:', error);
+      res.status(502).json({ error: 'The reset email couldn’t be sent. Try again in a few minutes.' });
+      return;
+    }
+    res.json(sent);
+  });
+
+  // Checks the code, sets the new password, and signs the user in.
+  app.post('/api/auth/reset', limitAuth, async (req, res) => {
+    const body = resetPasswordRequest.parse(req.body);
+    const invalid = () => res.status(400).json({ error: 'That code is incorrect or has expired. Request a new one.' });
+    const { rows: users } = await db.query<UserRow>('SELECT * FROM users WHERE email = $1', [body.email.toLowerCase()]);
+    const user = users[0];
+    if (!user) {
+      invalid();
+      return;
+    }
+    const { rows: resets } = await db.query<{ id: string; code_hash: string; attempts: number }>(
+      'SELECT id, code_hash, attempts FROM password_resets WHERE user_id = $1 AND NOT used AND expires_at > now() ORDER BY created_at DESC LIMIT 1',
+      [user.id],
+    );
+    const reset = resets[0];
+    if (!reset || reset.attempts >= RESET_MAX_ATTEMPTS) {
+      invalid();
+      return;
+    }
+    const matches = timingSafeEqual(hashResetCode(body.code), Buffer.from(reset.code_hash, 'hex'));
+    if (!matches) {
+      await db.query('UPDATE password_resets SET attempts = attempts + 1 WHERE id = $1', [reset.id]);
+      invalid();
+      return;
+    }
+    await db.query('UPDATE password_resets SET used = true WHERE user_id = $1', [user.id]);
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await hashPassword(body.password), user.id]);
     res.json({ token: await issueToken(user.id), user: publicUser(user) });
   });
 

@@ -30,6 +30,8 @@ import {
   deleteAccount as deleteAccountRequest,
   getPublicCourse,
   register as registerRequest,
+  requestPasswordReset,
+  resetPassword,
   roundShareUrl,
   searchCourses,
   signIn as signInRequest,
@@ -442,7 +444,10 @@ export default function App() {
   const [deletedRounds, setDeletedRounds] = useState<Tombstone[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
-  const [authMode, setAuthMode] = useState<'signIn' | 'register'>('signIn');
+  // 'forgot' asks for the email to send a reset code to; 'reset' takes the code and a new password.
+  const [authMode, setAuthMode] = useState<'signIn' | 'register' | 'forgot' | 'reset'>('signIn');
+  const [resetCode, setResetCode] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
@@ -1425,7 +1430,65 @@ export default function App() {
     Share.share({ message: `${message} ${url}` }).catch(() => undefined);
   };
 
+  const switchAuthMode = (next: typeof authMode) => {
+    setAuthMode(next);
+    setAuthError('');
+    setAuthNotice('');
+  };
+
+  const sendResetCode = async () => {
+    const email = authEmail.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      setAuthError('Enter the email address for your account.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      await requestPasswordReset(email);
+      setResetCode('');
+      setAuthPassword('');
+      setAuthMode('reset');
+      setAuthNotice(`If ${email} has an account, a 6-digit code is on its way. It expires in 15 minutes; check your spam folder if it doesn’t arrive.`);
+    } catch (error) {
+      setAuthError(errorMessage(error, 'Could not send a reset code.'));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const submitPasswordReset = async () => {
+    const email = authEmail.trim();
+    const code = resetCode.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setAuthError('Enter the 6-digit code from the email.');
+      return;
+    }
+    if (authPassword.length < 8) {
+      setAuthError('Use a new password of at least 8 characters.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      const result = await resetPassword(email, code, authPassword);
+      await SecureStore.setItemAsync(TOKEN_KEY, result.token);
+      setAccount({ token: result.token, user: result.user, cursor: 0, pushedThrough: 0 });
+      setAuthPassword('');
+      setResetCode('');
+      setAuthNotice('');
+      setAuthMode('signIn');
+      setSyncError('');
+    } catch (error) {
+      setAuthError(errorMessage(error, 'Could not reset the password.'));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const submitAuth = async () => {
+    if (authMode === 'forgot') return sendResetCode();
+    if (authMode === 'reset') return submitPasswordReset();
     const email = authEmail.trim();
     const name = authName.trim();
     if (!email || !authPassword || (authMode === 'register' && !name)) {
@@ -2076,21 +2139,31 @@ export default function App() {
                 <Text style={styles.menuIntroCopy}>Sign in to back up your courses, rounds and bag, keep them in sync across devices, publish courses to the directory, and share rounds. Glide Path keeps working offline and syncs when you’re back online.</Text>
               </View>
               {syncError ? <Text style={styles.authError}>{syncError}</Text> : null}
-              <View style={[styles.typeRow, styles.authTabs]}>
-                {(['signIn', 'register'] as const).map((item) => <Pressable key={item} onPress={() => { setAuthMode(item); setAuthError(''); }} style={[styles.typeButton, styles.sheetTypeButton, authMode === item && styles.typeButtonSelected]}><Text style={[styles.typeText, authMode === item && styles.typeTextSelected]}>{item === 'signIn' ? 'Sign in' : 'Create account'}</Text></Pressable>)}
-              </View>
+              {authMode === 'signIn' || authMode === 'register' ? <View style={[styles.typeRow, styles.authTabs]}>
+                {(['signIn', 'register'] as const).map((item) => <Pressable key={item} onPress={() => switchAuthMode(item)} style={[styles.typeButton, styles.sheetTypeButton, authMode === item && styles.typeButtonSelected]}><Text style={[styles.typeText, authMode === item && styles.typeTextSelected]}>{item === 'signIn' ? 'Sign in' : 'Create account'}</Text></Pressable>)}
+              </View> : <Pressable onPress={() => switchAuthMode('signIn')} style={styles.backLink}><Text style={styles.homeButtonText}>‹ BACK TO SIGN IN</Text></Pressable>}
               <View style={styles.builderPanel}>
+                {authMode === 'forgot' && <Text style={styles.authIntro}>Enter your account’s email and we’ll send a code to reset your password.</Text>}
+                {authNotice ? <Text style={styles.authNotice}>{authNotice}</Text> : null}
                 {authMode === 'register' && <>
                   <Text style={styles.builderLabel}>NAME</Text>
                   <TextInput value={authName} onChangeText={setAuthName} placeholder="Shown on courses you publish" placeholderTextColor="#5f6a63" style={styles.builderInput} textContentType="name" autoComplete="name" />
                 </>}
                 <Text style={[styles.builderLabel, authMode === 'register' && styles.detailLabel]}>EMAIL</Text>
                 <TextInput value={authEmail} onChangeText={setAuthEmail} placeholder="you@example.com" placeholderTextColor="#5f6a63" style={styles.builderInput} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" autoComplete="email" />
-                <Text style={[styles.builderLabel, styles.detailLabel]}>PASSWORD</Text>
-                <TextInput value={authPassword} onChangeText={setAuthPassword} onSubmitEditing={submitAuth} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Password'} placeholderTextColor="#5f6a63" style={styles.builderInput} secureTextEntry textContentType={authMode === 'register' ? 'newPassword' : 'password'} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} returnKeyType="go" />
+                {authMode === 'reset' && <>
+                  <Text style={[styles.builderLabel, styles.detailLabel]}>CODE FROM THE EMAIL</Text>
+                  <TextInput value={resetCode} onChangeText={(text) => setResetCode(text.replace(/[^0-9]/g, '').slice(0, 6))} placeholder="6 digits" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.codeInput]} keyboardType="number-pad" textContentType="oneTimeCode" autoComplete="one-time-code" maxLength={6} />
+                </>}
+                {authMode !== 'forgot' && <>
+                  <Text style={[styles.builderLabel, styles.detailLabel]}>{authMode === 'reset' ? 'NEW PASSWORD' : 'PASSWORD'}</Text>
+                  <TextInput value={authPassword} onChangeText={setAuthPassword} onSubmitEditing={submitAuth} placeholder={authMode === 'signIn' ? 'Password' : 'At least 8 characters'} placeholderTextColor="#5f6a63" style={styles.builderInput} secureTextEntry textContentType={authMode === 'signIn' ? 'password' : 'newPassword'} autoComplete={authMode === 'signIn' ? 'current-password' : 'new-password'} returnKeyType="go" />
+                </>}
                 {authError ? <Text style={styles.authError}>{authError}</Text> : null}
-                <Pressable onPress={submitAuth} disabled={authBusy} style={[styles.primaryButton, authBusy && styles.disabledButton]}><Text style={styles.primaryButtonText}>{authBusy ? 'PLEASE WAIT…' : authMode === 'register' ? 'CREATE ACCOUNT' : 'SIGN IN'}</Text></Pressable>
+                <Pressable onPress={submitAuth} disabled={authBusy} style={[styles.primaryButton, authBusy && styles.disabledButton]}><Text style={styles.primaryButtonText}>{authBusy ? 'PLEASE WAIT…' : { signIn: 'SIGN IN', register: 'CREATE ACCOUNT', forgot: 'SEND RESET CODE', reset: 'RESET PASSWORD & SIGN IN' }[authMode]}</Text></Pressable>
                 {authBusy && <Text style={styles.builderHint}>The server can take up to a minute to wake if it hasn’t been used recently.</Text>}
+                {authMode === 'signIn' && <Pressable onPress={() => switchAuthMode('forgot')} style={styles.textLink}><Text style={styles.textLinkText}>Forgot password?</Text></Pressable>}
+                {authMode === 'reset' && <Pressable onPress={sendResetCode} disabled={authBusy} style={styles.textLink}><Text style={styles.textLinkText}>Send a new code</Text></Pressable>}
               </View>
               <Text style={styles.builderFootnote}>Your existing courses, rounds and bag upload the first time you sign in.</Text>
             </>}
@@ -2403,6 +2476,11 @@ const styles = StyleSheet.create({
   caddieRow: { borderTopWidth: 1, borderTopColor: '#26302b', marginTop: 6, paddingTop: 6 },
   caddieText: { color: INK, fontSize: 13, fontWeight: '700', marginTop: 3 },
   caddieMeta: { color: MUTED, fontSize: 11, fontWeight: '400' },
+  authIntro: { color: MUTED, fontSize: 11, lineHeight: 16, marginBottom: 8 },
+  authNotice: { color: GREEN, fontSize: 11, lineHeight: 16, marginBottom: 8 },
+  codeInput: { fontSize: 20, letterSpacing: 6, fontVariant: ['tabular-nums'] },
+  textLink: { alignSelf: 'center', paddingVertical: 10, marginTop: 4 },
+  textLinkText: { color: GREEN, fontSize: 12, fontWeight: '700' },
   resumeButton: { marginTop: 0, marginBottom: 12 },
   throwRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
   throwRowText: { flex: 1 },

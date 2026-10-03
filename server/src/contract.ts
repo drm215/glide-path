@@ -94,6 +94,16 @@ export const registerRequest = z.object({
   displayName: z.string().trim().min(1).max(60),
 });
 
+export const forgotPasswordRequest = z.object({
+  email: z.string().trim().max(254),
+});
+
+export const resetPasswordRequest = z.object({
+  email: z.string().trim().max(254),
+  code: z.string().trim().regex(/^\d{6}$/),
+  password: z.string().min(8).max(200),
+});
+
 export const loginRequest = z.object({
   email: z.string().max(254),
   password: z.string().max(200),

@@ -1,10 +1,14 @@
 import type { AddressInfo } from 'node:net';
 import { createPgliteDb } from '../dev/pglite-db.ts';
 import { createApp } from '../src/app.ts';
+import type { Mailer } from '../src/mailer.ts';
 
-export const startTestServer = async () => {
+// `mailer: null` simulates a server without email set up; by default, sent codes are collected.
+export const startTestServer = async ({ mailer }: { mailer?: Mailer | null } = {}) => {
   const db = await createPgliteDb();
-  const app = createApp({ db, authSecret: 'test-secret-with-enough-length-for-hs256', rateLimitAuth: false });
+  const sentCodes: { to: string; code: string }[] = [];
+  const collectingMailer: Mailer = { sendPasswordResetCode: async (to, code) => { sentCodes.push({ to, code }); } };
+  const app = createApp({ db, authSecret: 'test-secret-with-enough-length-for-hs256', rateLimitAuth: false, mailer: mailer === undefined ? collectingMailer : mailer });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -33,5 +37,5 @@ export const startTestServer = async () => {
     await db.close();
   };
 
-  return { baseUrl, request, register, stop };
+  return { baseUrl, db, request, register, sentCodes, stop };
 };
