@@ -12,6 +12,7 @@ import {
   AppState,
   Linking,
   Modal,
+  Image,
   Pressable,
   type PressableProps,
   ScrollView,
@@ -1845,7 +1846,7 @@ export default function App() {
       <View style={[styles.appFrame, compact && styles.appFrameCompact]}>
         <View style={styles.topline}>
           <RoundButton onPress={() => setScreen('Home')} style={styles.brand} accessibilityRole="button" accessibilityLabel="Glide Path home">
-            <View style={styles.brandMark}><Text style={styles.brandGlyph}>G</Text></View>
+            <Image source={require('./assets/logo-mark.png')} style={styles.brandLogo} accessibilityIgnoresInvertColors />
             <View style={styles.brandCopy}>
               <Text style={styles.brandName}>GLIDE PATH</Text>
               <Text style={styles.brandSub}>FIELD LOG · EST. 2025</Text>
@@ -2441,8 +2442,7 @@ const styles = StyleSheet.create({
   appFrame: { flex: 1, width: '100%', maxWidth: 560, backgroundColor: PAPER, paddingTop: 48 },
   appFrameCompact: { paddingTop: 38 },
   topline: { height: 46, marginHorizontal: 23, flexDirection: 'row', alignItems: 'center' },
-  brandMark: { width: 34, height: 34, borderRadius: 11, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },
-  brandGlyph: { color: '#e6ece8', fontFamily: 'Georgia', fontSize: 22, fontWeight: '700' },
+  brandLogo: { width: 34, height: 34, borderRadius: 8 },
   brand: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   brandCopy: { marginLeft: 10, flex: 1 },
   brandName: { color: INK, fontSize: 12, fontWeight: '800', letterSpacing: 1.25 },

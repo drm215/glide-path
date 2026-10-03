@@ -54,12 +54,15 @@ export const renderShell = ({ title, description, body, nav, script, data, maps 
 <meta property="og:site_name" content="Glide Path">
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:image" content="https://glidepathdiscgolf.com/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 ${maps ? '<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">\n' : ''}<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <header class="site-header"><div class="wrap">
-  <a class="brand" href="/"><span class="brand-mark">G</span><span class="brand-name">GLIDE PATH</span></a>
+  <a class="brand" href="/"><img class="brand-logo" src="/logo-mark.webp" alt="" width="30" height="30"><span class="brand-name">GLIDE PATH</span></a>
   <nav class="site-nav"><a href="/"${nav === 'courses' ? ' aria-current="page"' : ''}>Courses</a><a href="/account"${nav === 'account' ? ' aria-current="page"' : ''}>My rounds</a></nav>
 </div></header>
 <main class="wrap">${body}</main>
