@@ -2,7 +2,7 @@ import type { SyncRequest, SyncResponse } from './sync';
 import type { AccountUser, CourseDetails, CourseLayout, HoleLayout } from './types';
 
 // Set EXPO_PUBLIC_API_URL to test against a local server, e.g. http://192.168.1.20:3000.
-export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'https://glide-path.onrender.com').replace(/\/$/, '');
+export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'https://glidepathdiscgolf.com').replace(/\/$/, '');
 
 // The free server sleeps when idle and can take up to a minute to wake.
 const REQUEST_TIMEOUT_MS = 75_000;
