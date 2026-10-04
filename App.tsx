@@ -5,7 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Brightness from 'expo-brightness';
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Circle, Marker, Polyline } from 'react-native-maps';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -49,6 +49,7 @@ import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, Hol
 // A past round reopened as the round in progress keeps its id, so ending it again updates it.
 type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null };
 type SavedRound = {
+  // history is only read, from devices that saved it here before HISTORY_KEY existed.
   shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
   layoutId?: string; resumedFrom?: ResumedFrom | null;
 };
@@ -56,7 +57,10 @@ type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
 
 // Keys keep the app's original name (Flight Notes) so existing on-device data still loads.
+// The round in progress. Past sessions were once stored here too (SavedRound.history).
 const STORAGE_KEY = 'flight-notes-round-v1';
+// Past sessions, kept apart from the round in progress so logging a throw doesn't rewrite them all.
+const HISTORY_KEY = 'flight-notes-history-v1';
 const COURSES_KEY = 'flight-notes-courses-v1';
 const BAG_KEY = 'flight-notes-bag-v1';
 const BAG_DETAILS_KEY = 'flight-notes-bag-details-v1';
@@ -68,6 +72,21 @@ const SYNC_KEY = 'flight-notes-sync-v1';
 const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
 // The sign-in token lives in the iOS Keychain rather than plain app storage.
 const TOKEN_KEY = 'glide-path-token';
+
+// Keys whose stored value couldn't be read or backed up at launch. Saving to them would
+// overwrite the only copy, so they're left alone until the next launch.
+const unsaveableKeys = new Set<string>();
+let saveFailureShown = false;
+
+// Writes a value to app storage, telling the user (once per launch) if storage is failing.
+const saveToStorage = (key: string, value: unknown) => {
+  if (unsaveableKeys.has(key)) return;
+  AsyncStorage.setItem(key, JSON.stringify(value)).catch(() => {
+    if (saveFailureShown) return;
+    saveFailureShown = true;
+    Alert.alert('Could not save', 'Your latest changes couldn’t be saved on this phone. Free up some storage space, then reopen Glide Path.');
+  });
+};
 // Wait this long after the last edit before syncing, so a burst of edits uploads once.
 const SYNC_DEBOUNCE_MS = 4_000;
 const DISCIT_API_URL = 'https://discit-api.fly.dev/disc';
@@ -247,6 +266,14 @@ const regionAtPoint = (point: Pick<GpsPoint, 'latitude' | 'longitude'>): MapRegi
   latitudeDelta: (MAP_VIEW_WIDTH_FEET * 0.3048) / METERS_PER_DEGREE,
   longitudeDelta: (MAP_VIEW_WIDTH_FEET * 0.3048) / (METERS_PER_DEGREE * Math.max(0.01, Math.cos((point.latitude * Math.PI) / 180))),
 });
+
+// C1 (10 m) and C2 (20 m) putting circles drawn around a basket.
+const BasketCircles = ({ basket }: { basket: Pick<GpsPoint, 'latitude' | 'longitude'> }) => (
+  <>
+    <Circle center={basket} radius={20} strokeColor="rgba(255,255,255,0.7)" strokeWidth={1.5} fillColor="rgba(255,255,255,0.06)" />
+    <Circle center={basket} radius={10} strokeColor="rgba(255,255,255,0.9)" strokeWidth={1.5} fillColor="rgba(255,255,255,0.1)" />
+  </>
+);
 
 // Frames the tee and basket together with some padding; falls back to max zoom on a single point.
 // Frames every given point with some padding; a single point gets the max-zoom region.
@@ -463,6 +490,9 @@ export default function App() {
   const [publicCourseLoading, setPublicCourseLoading] = useState<string | null>(null);
   const syncInFlight = useRef(false);
   const [selectedLayoutId, setSelectedLayoutId] = useState(MAIN_LAYOUT_ID);
+  const [roundPickerOpen, setRoundPickerOpen] = useState(false);
+  // The course whose layouts the round picker is showing; null while choosing the course.
+  const [roundPickerCourseId, setRoundPickerCourseId] = useState<string | null>(null);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [newLayoutName, setNewLayoutName] = useState('');
   // Stats screen filters: a course key ('all', a course id, or name:<course name>) and practice.
@@ -477,104 +507,134 @@ export default function App() {
   const [throwDraft, setThrowDraft] = useState<{ disc: Disc; type: ThrowType; style?: ThrowStyle; lie: Lie; quality: number | null }>({ disc: '', type: 'Drive', lie: 'Fairway', quality: null });
 
   useEffect(() => {
-    Promise.all([
-      AsyncStorage.getItem(STORAGE_KEY),
-      AsyncStorage.getItem(COURSES_KEY),
-      AsyncStorage.getItem(BAG_KEY),
-      AsyncStorage.getItem(BAG_DETAILS_KEY),
-      AsyncStorage.getItem(BAG_WEIGHTS_KEY),
-      AsyncStorage.getItem(SYNC_KEY),
-      AsyncStorage.getItem(SYNC_META_KEY),
-      SecureStore.getItemAsync(TOKEN_KEY).catch(() => null),
-      AsyncStorage.getItem(MIGRATIONS_KEY),
-    ])
-      .then(([roundValue, coursesValue, bagValue, bagDetailsValue, bagWeightsValue, syncValue, syncMetaValue, token, migrationsValue]) => {
-        // One-time fix: throws that went in were once recorded where the player stood; move them
-        // to the basket. Fixed past rounds get a fresh edit time so the fix syncs everywhere.
-        const migrations = migrationsValue ? JSON.parse(migrationsValue) as Record<string, boolean> : {};
-        const fixMadeThrows = !migrations.madeThrowsAtBasket;
-        const storedCourses = coursesValue ? JSON.parse(coursesValue) as Course[] : [];
-        const layoutsFor = (courseId: string | undefined, layoutId: string | undefined) => {
-          const course = storedCourses.find((item) => item.id === courseId);
-          return course ? withExistingLayout(course, layoutId)?.layouts : undefined;
-        };
-        const fixSession = (session: SessionArchive): SessionArchive => {
-          const fixed = placeMadeThrowsAtBasket(session.shots, layoutsFor(session.courseId, session.layoutId));
-          return fixed === session.shots ? session : { ...session, shots: fixed, updatedAt: nowMs() };
-        };
-        if (roundValue) {
-          const saved = JSON.parse(roundValue) as SavedRound;
-          const activeShots = saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId }));
-          setShots(fixMadeThrows ? placeMadeThrowsAtBasket(activeShots, layoutsFor(saved.courseId, saved.layoutId)) : activeShots);
-          setHole(saved.hole);
-          setMode(saved.mode);
-          setSelectedLayoutId(saved.layoutId ?? MAIN_LAYOUT_ID);
-          setResumedFrom(saved.resumedFrom ?? null);
-          setHistory(fixMadeThrows ? (saved.history ?? []).map(fixSession) : saved.history ?? []);
-          // Rounds saved before `active` existed count as in progress if they have throws.
-          setSessionActive(saved.active ?? saved.shots.length > 0);
-          if (saved.practiceFocus) setPracticeFocus(saved.practiceFocus);
+    // Each stored value is read on its own, so one that can't be read doesn't stop the rest from
+    // loading. The app will save over it, so its raw text is first copied to a backup key.
+    const load = async () => {
+      const keys = [STORAGE_KEY, HISTORY_KEY, COURSES_KEY, BAG_KEY, BAG_DETAILS_KEY, BAG_WEIGHTS_KEY, SYNC_KEY, SYNC_META_KEY, MIGRATIONS_KEY];
+      const stored: Record<string, string | null> = Object.fromEntries(await AsyncStorage.multiGet(keys));
+      const token = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
+      const backups: Promise<void>[] = [];
+      const read = <T,>(key: string, apply: (value: T) => void) => {
+        const raw = stored[key];
+        if (raw == null) return;
+        try {
+          apply(JSON.parse(raw) as T);
+        } catch {
+          backups.push(AsyncStorage.setItem(`${key}-unreadable-${nowMs()}`, raw).catch(() => {
+            unsaveableKeys.add(key);
+          }));
         }
-        if (coursesValue) {
-          const savedCourses = JSON.parse(coursesValue) as Course[];
-          const normalizedCourses = savedCourses.map((course) => {
-            const previousLayouts = course.layouts as { tee?: unknown; basket?: unknown; par?: unknown }[] | undefined;
-            return {
-              ...course,
-              layouts: Array.from({ length: course.holes }, (_, index) => {
-                const previous = previousLayouts?.[index];
-                return { tee: isGpsPoint(previous?.tee) ? previous.tee : null, basket: isGpsPoint(previous?.basket) ? previous.basket : null, par: typeof previous?.par === 'number' ? previous.par : undefined };
-              }),
-            };
-          });
-          setCourses(normalizedCourses);
-          const savedCourseId = roundValue ? (JSON.parse(roundValue) as SavedRound).courseId : undefined;
-          const courseToSelect = normalizedCourses.find((course) => course.id === savedCourseId) ?? normalizedCourses[0];
-          if (courseToSelect) setSelectedCourseId(courseToSelect.id);
-        }
-        if (bagValue) {
-          const savedBag = (JSON.parse(bagValue) as Disc[]).filter((item) => !LEGACY_DEFAULT_DISCS.includes(item));
-          setBag(savedBag);
-          if (savedBag.length) setDisc(savedBag[0]);
-        }
-        if (bagDetailsValue) setBagDetails(JSON.parse(bagDetailsValue) as Record<Disc, DiscInfo>);
-        if (bagWeightsValue) setBagWeights(JSON.parse(bagWeightsValue) as Record<Disc, number>);
-        if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
-        if (syncValue && token) setAccount({ ...(JSON.parse(syncValue) as Omit<SyncAccount, 'token'>), token });
-        const meta = syncMetaValue ? JSON.parse(syncMetaValue) as { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } : {};
-        setDeletedCourses(meta.deletedCourses ?? []);
-        setDeletedRounds(meta.deletedRounds ?? []);
-        const savedBagCount = bagValue ? (JSON.parse(bagValue) as Disc[]).filter((item) => !LEGACY_DEFAULT_DISCS.includes(item)).length : 0;
-        setBagUpdatedAt(initialBagUpdatedAt(meta.bagUpdatedAt, savedBagCount, nowMs()));
-      })
-      .catch(() => undefined)
-      .finally(() => setLoaded(true));
+      };
+
+      // One-time fix: throws that went in were once recorded where the player stood; move them
+      // to the basket. Fixed past rounds get a fresh edit time so the fix syncs everywhere.
+      let migrations: Record<string, boolean> = {};
+      read<Record<string, boolean>>(MIGRATIONS_KEY, (value) => { migrations = value; });
+      const fixMadeThrows = !migrations.madeThrowsAtBasket;
+
+      let storedCourses: Course[] = [];
+      read<Course[]>(COURSES_KEY, (value) => {
+        storedCourses = value.map((course) => {
+          const previousLayouts = course.layouts as { tee?: unknown; basket?: unknown; par?: unknown }[] | undefined;
+          return {
+            ...course,
+            layouts: Array.from({ length: course.holes }, (_, index) => {
+              const previous = previousLayouts?.[index];
+              return { tee: isGpsPoint(previous?.tee) ? previous.tee : null, basket: isGpsPoint(previous?.basket) ? previous.basket : null, par: typeof previous?.par === 'number' ? previous.par : undefined };
+            }),
+          };
+        });
+        setCourses(storedCourses);
+      });
+      const layoutsFor = (courseId: string | undefined, layoutId: string | undefined) => {
+        const course = storedCourses.find((item) => item.id === courseId);
+        return course ? withExistingLayout(course, layoutId)?.layouts : undefined;
+      };
+      const fixSession = (session: SessionArchive): SessionArchive => {
+        const fixed = placeMadeThrowsAtBasket(session.shots, layoutsFor(session.courseId, session.layoutId));
+        return fixed === session.shots ? session : { ...session, shots: fixed, updatedAt: nowMs() };
+      };
+
+      let savedRound = undefined as SavedRound | undefined;
+      read<SavedRound>(STORAGE_KEY, (saved) => {
+        const activeShots = saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId }));
+        setShots(fixMadeThrows ? placeMadeThrowsAtBasket(activeShots, layoutsFor(saved.courseId, saved.layoutId)) : activeShots);
+        setHole(saved.hole);
+        setMode(saved.mode);
+        setSelectedLayoutId(saved.layoutId ?? MAIN_LAYOUT_ID);
+        setResumedFrom(saved.resumedFrom ?? null);
+        // Rounds saved before `active` existed count as in progress if they have throws.
+        setSessionActive(saved.active ?? saved.shots.length > 0);
+        if (saved.practiceFocus) setPracticeFocus(saved.practiceFocus);
+        savedRound = saved;
+      });
+      const courseToSelect = storedCourses.find((course) => course.id === savedRound?.courseId) ?? storedCourses[0];
+      if (courseToSelect) setSelectedCourseId(courseToSelect.id);
+
+      // Past sessions used to be saved with the round in progress. Moving them to their own key
+      // has to succeed before the round in progress is saved without them.
+      let storedHistory = savedRound?.history ?? [];
+      if (stored[HISTORY_KEY] == null && storedHistory.length) {
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(storedHistory));
+      }
+      read<SessionArchive[]>(HISTORY_KEY, (value) => { storedHistory = value; });
+      setHistory(fixMadeThrows ? storedHistory.map(fixSession) : storedHistory);
+
+      let savedBagCount = 0;
+      read<Disc[]>(BAG_KEY, (value) => {
+        const savedBag = value.filter((item) => !LEGACY_DEFAULT_DISCS.includes(item));
+        setBag(savedBag);
+        if (savedBag.length) setDisc(savedBag[0]);
+        savedBagCount = savedBag.length;
+      });
+      read<Record<Disc, DiscInfo>>(BAG_DETAILS_KEY, setBagDetails);
+      read<Record<Disc, number>>(BAG_WEIGHTS_KEY, setBagWeights);
+      if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
+      if (token) read<Omit<SyncAccount, 'token'>>(SYNC_KEY, (value) => setAccount({ ...value, token }));
+      let meta: { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } = {};
+      read<typeof meta>(SYNC_META_KEY, (value) => { meta = value; });
+      setDeletedCourses(meta.deletedCourses ?? []);
+      setDeletedRounds(meta.deletedRounds ?? []);
+      setBagUpdatedAt(initialBagUpdatedAt(meta.bagUpdatedAt, savedBagCount, nowMs()));
+      await Promise.all(backups);
+    };
+    // If storage can't be read at all, nothing is saved: saving would replace the user's data
+    // with an empty app.
+    load().then(
+      () => setLoaded(true),
+      () => Alert.alert('Could not load your data', 'Glide Path couldn’t read its storage on this phone. Close and reopen the app. Nothing will be saved until your data loads.'),
+    );
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
-    const saved: SavedRound = { shots, hole, mode, history, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom };
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(saved)).catch(() => undefined);
-  }, [history, hole, loaded, mode, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
+    const saved: SavedRound = { shots, hole, mode, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom };
+    saveToStorage(STORAGE_KEY, saved);
+  }, [hole, loaded, mode, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(COURSES_KEY, JSON.stringify(courses)).catch(() => undefined);
+    saveToStorage(HISTORY_KEY, history);
+  }, [history, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    saveToStorage(COURSES_KEY, courses);
   }, [courses, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(BAG_KEY, JSON.stringify(bag)).catch(() => undefined);
+    saveToStorage(BAG_KEY, bag);
   }, [bag, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(BAG_DETAILS_KEY, JSON.stringify(bagDetails)).catch(() => undefined);
+    saveToStorage(BAG_DETAILS_KEY, bagDetails);
   }, [bagDetails, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(BAG_WEIGHTS_KEY, JSON.stringify(bagWeights)).catch(() => undefined);
+    saveToStorage(BAG_WEIGHTS_KEY, bagWeights);
   }, [bagWeights, loaded]);
 
   useEffect(() => {
@@ -584,12 +644,12 @@ export default function App() {
       return;
     }
     const { token: _token, ...stored } = account;
-    AsyncStorage.setItem(SYNC_KEY, JSON.stringify(stored)).catch(() => undefined);
+    saveToStorage(SYNC_KEY, stored);
   }, [account, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify({ bagUpdatedAt, deletedCourses, deletedRounds })).catch(() => undefined);
+    saveToStorage(SYNC_META_KEY, { bagUpdatedAt, deletedCourses, deletedRounds });
   }, [bagUpdatedAt, deletedCourses, deletedRounds, loaded]);
 
   // Sync runs from timers and app-state events, so it reads the latest values from here.
@@ -1205,8 +1265,9 @@ export default function App() {
     completeHole();
   };
 
-  const beginSession = (nextMode: 'Round' | 'Practice', layoutId?: string) => {
+  const beginSession = (nextMode: 'Round' | 'Practice', layoutId?: string, courseId?: string) => {
     archiveSession();
+    if (courseId) setSelectedCourseId(courseId);
     if (layoutId) setSelectedLayoutId(layoutId);
     setMode(nextMode);
     setHole(1);
@@ -1218,9 +1279,9 @@ export default function App() {
   };
 
   // Starting over while a session is in progress needs confirmation; the old session goes to history.
-  const confirmNewSession = (nextMode: 'Round' | 'Practice', layoutId?: string) => {
+  const confirmNewSession = (nextMode: 'Round' | 'Practice', layoutId?: string, courseId?: string) => {
     if (!sessionActive) {
-      beginSession(nextMode, layoutId);
+      beginSession(nextMode, layoutId, courseId);
       return;
     }
     Alert.alert(
@@ -1228,27 +1289,34 @@ export default function App() {
       `Your ${mode === 'Round' ? 'round' : 'practice session'} in progress (${shots.length} ${shots.length === 1 ? 'throw' : 'throws'}) will be ended and saved to your session history.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Start new', style: 'destructive', onPress: () => beginSession(nextMode, layoutId) },
+        { text: 'Start new', style: 'destructive', onPress: () => beginSession(nextMode, layoutId, courseId) },
       ],
     );
   };
 
+  // Starting a round asks for the course, then the layout when the course has more than one.
   const startRound = () => {
-    if (!selectedBaseCourse) {
+    if (!courses.length) {
       Alert.alert('Create a course first', 'Add a course in Course Builder before starting a round.');
       return;
     }
-    if (!hasMultipleLayouts) {
-      confirmNewSession('Round', MAIN_LAYOUT_ID);
+    setRoundPickerCourseId(null);
+    setRoundPickerOpen(true);
+  };
+
+  const pickRoundCourse = (course: Course) => {
+    if (courseLayouts(course).length > 1) {
+      setRoundPickerCourseId(course.id);
       return;
     }
-    Alert.alert('Which layout?', `Choose the layout to play at ${selectedBaseCourse.name}.`, [
-      ...selectedCourseLayouts.map((layout) => ({
-        text: `${layoutDisplayName(layout)} · ${layout.holes} ${layout.holes === 1 ? 'hole' : 'holes'}`,
-        onPress: () => confirmNewSession('Round', layout.id),
-      })),
-      { text: 'Cancel', style: 'cancel' as const },
-    ]);
+    pickRoundLayout(course, MAIN_LAYOUT_ID);
+  };
+
+  const pickRoundLayout = (course: Course, layoutId: string) => {
+    setRoundPickerOpen(false);
+    setRoundPickerCourseId(null);
+    if (course.id !== selectedCourseId) setBuilderHole(1);
+    confirmNewSession('Round', layoutId, course.id);
   };
 
   const selectLayout = (layoutId: string) => {
@@ -1632,6 +1700,7 @@ export default function App() {
         {layout?.tee && layout.basket && <Polyline coordinates={[layout.tee, layout.basket]} strokeColor="#ffffff" strokeWidth={2} lineDashPattern={[6, 4]} />}
         {path.length > 1 && <Polyline coordinates={path} strokeColor="#df8547" strokeWidth={3} />}
         {layout?.tee && <Marker coordinate={layout.tee} title={`Hole ${holeNumber} tee box`} pinColor="#1d684c" />}
+        {layout?.basket && <BasketCircles basket={layout.basket} />}
         {layout?.basket && <Marker coordinate={layout.basket} title={`Hole ${holeNumber} basket`} pinColor="#d77d42" />}
         {throws.map((item) => <Marker key={`${item.index}-${item.coordinate.latitude}`} coordinate={item.coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} title={`Throw ${item.index + 1}`} description={formatThrowDetail(item.shot)}><View style={[styles.shotMarker, item.shot.lie === 'OB' && styles.obMarker]}><Text style={styles.shotPinText}>{item.index + 1}</Text></View></Marker>)}
       </MapView>
@@ -1997,6 +2066,7 @@ export default function App() {
             <View style={styles.satelliteFrame} onLayout={(event) => setMapViewportWidth(event.nativeEvent.layout.width)}>
               {mapRegion ? <MapView style={styles.satelliteMap} mapType="satellite" region={mapRegion} onRegionChangeComplete={setMapRegion} showsUserLocation={locationAllowed} showsMyLocationButton={false}>
                 {editorHoleLayout?.tee && <Marker coordinate={editorHoleLayout.tee} title={`Hole ${builderHole} tee box`} description={`GPS accuracy ${editorHoleLayout.tee.accuracy ?? 'unknown'} meters`} pinColor="#1d684c" />}
+                {editorHoleLayout?.basket && <BasketCircles basket={editorHoleLayout.basket} />}
                 {editorHoleLayout?.basket && <Marker coordinate={editorHoleLayout.basket} title={`Hole ${builderHole} basket`} description={`GPS accuracy ${editorHoleLayout.basket.accuracy ?? 'unknown'} meters`} pinColor="#d77d42" />}
                 {editorHoleLayout?.tee && editorHoleLayout.basket && <Polyline coordinates={[editorHoleLayout.tee, editorHoleLayout.basket]} strokeColor="#ffffff" strokeWidth={2} lineDashPattern={[6, 4]} />}
               </MapView> : <View style={styles.mapUnavailable}><Text style={styles.mapUnavailableTitle}>{mapLoading ? 'Finding your location…' : 'Map location unavailable'}</Text><Text style={styles.mapUnavailableText}>{gpsMessage || 'Enable location access to open the satellite map.'}</Text><Pressable onPress={recenterSatelliteMap} style={styles.recenterButton}><Text style={styles.recenterButtonText}>TRY AGAIN</Text></Pressable></View>}
@@ -2074,6 +2144,7 @@ export default function App() {
                 {selectedHoleLayout?.tee && selectedHoleLayout.basket && <Polyline coordinates={[selectedHoleLayout.tee, selectedHoleLayout.basket]} strokeColor="#ffffff" strokeWidth={2} lineDashPattern={[6, 4]} />}
                 {throwPath.length > 1 && <Polyline coordinates={throwPath} strokeColor="#df8547" strokeWidth={3} />}
                 {selectedHoleLayout?.tee && <Marker coordinate={selectedHoleLayout.tee} title={`Hole ${hole} tee box`} pinColor="#1d684c" />}
+                {selectedHoleLayout?.basket && <BasketCircles basket={selectedHoleLayout.basket} />}
                 {selectedHoleLayout?.basket && <Marker coordinate={selectedHoleLayout.basket} title={`Hole ${hole} basket`} pinColor="#d77d42" />}
                 {mappedShots.map((shot) => <Marker key={`${shot.index}-${shot.coordinate.latitude}`} coordinate={shot.coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}><View style={styles.shotMarker}><Text style={styles.shotPinText}>{shot.index + 1}</Text></View></Marker>)}
               </MapView>
@@ -2394,6 +2465,36 @@ export default function App() {
           </View>
         </Modal>
 
+        <Modal visible={roundPickerOpen} transparent animationType="slide" onRequestClose={() => setRoundPickerOpen(false)}>
+          <View style={styles.sheetBackdrop}>
+            <View style={[styles.sheet, styles.pickerSheet]}>
+              {(() => {
+                const pickerCourse = courses.find((course) => course.id === roundPickerCourseId);
+                return <>
+                  <View style={styles.controlHeading}><Text style={styles.controlTitle}>{pickerCourse ? 'Which layout?' : 'Which course?'}</Text><Text style={styles.controlStep}>{pickerCourse ? '02 / 02' : '01 / 02'}</Text></View>
+                  {pickerCourse && <Text style={styles.sheetDistance}>{pickerCourse.name}</Text>}
+                  <ScrollView style={styles.pickerList}>
+                    {pickerCourse
+                      ? courseLayouts(pickerCourse).map((layout) => {
+                        const current = pickerCourse.id === selectedCourseId && layout.id === selectedLayoutId;
+                        return <Pressable key={layout.id} onPress={() => pickRoundLayout(pickerCourse, layout.id)} style={[styles.courseItem, current && styles.courseItemSelected]} accessibilityRole="button"><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{layoutDisplayName(layout)}</Text><Text style={styles.courseItemMeta}>{layout.holes} {layout.holes === 1 ? 'hole' : 'holes'}</Text></View><Text style={styles.courseSelectedMark}>{current ? '✓' : '›'}</Text></Pressable>;
+                      })
+                      : courses.map((course) => {
+                        const layoutCount = courseLayouts(course).length;
+                        const current = course.id === selectedCourseId;
+                        return <Pressable key={course.id} onPress={() => pickRoundCourse(course)} style={[styles.courseItem, current && styles.courseItemSelected]} accessibilityRole="button"><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{layoutCount > 1 ? `${layoutCount} layouts` : `${course.holes} ${course.holes === 1 ? 'hole' : 'holes'}`}</Text></View><Text style={styles.courseSelectedMark}>{current ? '✓' : '›'}</Text></Pressable>;
+                      })}
+                  </ScrollView>
+                  <View style={styles.editFooter}>
+                    {pickerCourse ? <Pressable onPress={() => setRoundPickerCourseId(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable> : <View />}
+                    <Pressable onPress={() => setRoundPickerOpen(false)} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
+                  </View>
+                </>;
+              })()}
+            </View>
+          </View>
+        </Modal>
+
         <Modal visible={editingThrow !== null} transparent animationType="slide" onRequestClose={() => setEditingThrow(null)}>
           <View style={styles.sheetBackdrop}>
             <View style={styles.sheet}>
@@ -2699,6 +2800,8 @@ const styles = StyleSheet.create({
   qualityValue: { color: INK, fontFamily: 'Georgia', fontSize: 19 },
   qualityLabel: { color: MUTED, fontSize: 8, fontWeight: '700', marginTop: 2 },
   sheetFooter: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginTop: 18 },
+  pickerSheet: { maxHeight: '80%' },
+  pickerList: { flexGrow: 0 },
   sheetFooterButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 14, paddingVertical: 10 },
   controlHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   controlTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17 },
