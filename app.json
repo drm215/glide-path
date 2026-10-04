@@ -2,6 +2,7 @@
   "expo": {
     "name": "Glide Path",
     "slug": "disc-golf-tracker",
+    "scheme": "glidepath",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -13,7 +14,8 @@
           "locationWhenInUsePermission": "Allow Glide Path to use your location when you map a tee box or basket, or log where a throw landed."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-router"
     ],
     "ios": {
       "supportsTablet": true,

@@ -7,10 +7,11 @@ import { GREEN, styles } from '../theme';
 import { formatScoreToPar, formatSessionDate } from '../format';
 import { StatsSummary, StatTile } from '../components/StatsSummary';
 import { ScreenHeading } from '../components/ScreenHeading';
+import { openRound } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const StatsScreen = () => {
-  const { courses, history, openRound } = useApp();
+  const { courses, history } = useApp();
   // Filters: a course key ('all', a course id, or name:<course name>) and practice.
   const [statsCourse, setStatsCourse] = useState('all');
   const [statsPractice, setStatsPractice] = useState(false);

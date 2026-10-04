@@ -1,6 +1,6 @@
-// The app's shared state: what's stored on the phone, the round in progress, the account and
-// sync, and which screen is showing. Screens read it with useApp(); state only one screen needs
-// lives in that screen.
+// The app's shared state: what's stored on the phone, the round in progress, and the account and
+// sync. Screens read it with useApp(); state only one screen needs lives in that screen, and which
+// screen is showing (and its parameters) lives in the route.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -13,17 +13,16 @@ import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, HoleLayout, S
 import { ACTIVE_SESSION_ID, LEGACY_DEFAULT_DISCS, SYNC_DEBOUNCE_MS } from '../constants';
 import { errorMessage, formatSessionDate } from '../format';
 import { isGpsPoint } from '../geo';
+import { backTo, go, openHoleMapping, openRound } from '../navigation';
 import {
   BAG_DETAILS_KEY, BAG_KEY, BAG_WEIGHTS_KEY, COURSES_KEY, HISTORY_KEY, LAST_ACCOUNT_KEY, MIGRATIONS_KEY, SETTINGS_KEY, STORAGE_KEY,
   SYNC_KEY, SYNC_META_KEY, TOKEN_KEY, saveToStorage, unsaveableKeys, type LastAccount, type ResumedFrom, type SavedRound, type Settings,
 } from '../storage';
 import { newSessionId, nowMs } from '../time';
 
-export type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses' | 'NewCourse';
 export type SessionMode = 'Round' | 'Practice';
 
 const useAppState = () => {
-  const [screen, setScreen] = useState<Screen>('Home');
   const [mode, setMode] = useState<SessionMode>('Round');
   const [hole, setHole] = useState(4);
   const [shots, setShots] = useState<Shot[]>([]);
@@ -46,16 +45,11 @@ const useAppState = () => {
   const [throwStyle, setThrowStyle] = useState<ThrowStyle>('Backhand');
   // Whether the round screen lowers brightness to save battery; players turn it off in bright sun.
   const [dimRound, setDimRound] = useState(true);
-  // The round the summary screen shows, and whether it was just finished (the summary of a new round).
-  const [viewedSessionId, setViewedSessionId] = useState<string | null>(null);
-  const [showingRoundSummary, setShowingRoundSummary] = useState(false);
   // New-course flow: 1 name, 2 details, 3 layouts, 4 map holes. The course is created after step 1.
   // It lives here because the flow hands off to hole mapping and picks up where it left off.
   const [newCourseStep, setNewCourseStep] = useState<1 | 2 | 3 | 4>(1);
   const [newCourseId, setNewCourseId] = useState<string | null>(null);
   const [courseName, setCourseName] = useState('');
-  // Where the hole-mapping screen returns to.
-  const [wizardReturn, setWizardReturn] = useState<'CourseBuilder' | 'NewCourse'>('CourseBuilder');
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const lastAccount = useRef<LastAccount | null>(null);
@@ -331,7 +325,8 @@ const useAppState = () => {
     return id;
   };
 
-  const deleteRound = (session: SessionArchive) => {
+  // `onDeleted` runs once the user confirms, e.g. to leave the deleted round's summary.
+  const deleteRound = (session: SessionArchive, onDeleted?: () => void) => {
     const kind = session.mode === 'Round' ? 'round' : 'practice session';
     Alert.alert(
       `Delete this ${kind}?`,
@@ -344,10 +339,7 @@ const useAppState = () => {
           onPress: () => {
             setHistory((current) => current.filter((item) => item.id !== session.id));
             setDeletedRounds((current) => [...current, { clientId: session.id, updatedAt: nowMs() }]);
-            if (viewedSessionId === session.id) {
-              setViewedSessionId(null);
-              setScreen('Rounds');
-            }
+            onDeleted?.();
           },
         },
       ],
@@ -371,9 +363,8 @@ const useAppState = () => {
       setHole(nextHole);
       setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken });
       setSessionActive(true);
-      setShowingRoundSummary(false);
       setRoundMessage(`Resumed on hole ${nextHole}.`);
-      setScreen('Round');
+      go('Round');
     };
     if (sessionActive && shots.length) {
       Alert.alert(
@@ -386,13 +377,6 @@ const useAppState = () => {
     start();
   };
 
-  // Opens a past round; `summary` marks one that was just finished.
-  const openRound = (id: string, summary = false) => {
-    setViewedSessionId(id);
-    setShowingRoundSummary(summary);
-    setScreen('RoundDetail');
-  };
-
   // Ends the session; a finished round opens its summary, anything else returns home.
   const finishSession = () => {
     const id = archiveSession();
@@ -400,7 +384,7 @@ const useAppState = () => {
       openRound(id, true);
       return;
     }
-    setScreen('Home');
+    backTo('Home');
   };
 
   const beginSession = (nextMode: 'Round' | 'Practice', layoutId?: string, courseId?: string) => {
@@ -411,7 +395,7 @@ const useAppState = () => {
     setHole(1);
     setRoundMessage('');
     setSessionActive(true);
-    setScreen('Round');
+    go('Round');
   };
 
   // Starting over while a session is in progress needs confirmation; the old session goes to history.
@@ -475,7 +459,7 @@ const useAppState = () => {
     setCourseName('');
     setNewCourseId(null);
     setNewCourseStep(1);
-    setScreen('NewCourse');
+    go('NewCourse');
   };
 
   // Step 1 of the new-course flow. New courses start with one hole on a Main layout; holes are
@@ -499,8 +483,7 @@ const useAppState = () => {
   const mapLayout = (course: Course, layoutId: string, from: 'CourseBuilder' | 'NewCourse') => {
     setSelectedLayoutId(layoutId);
     setSelectedCourseId(course.id);
-    setWizardReturn(from);
-    setScreen('HoleWizard');
+    openHoleMapping(from);
   };
 
   const updateCourseDetails = (courseId: string, details: CourseDetails) => {
@@ -532,7 +515,6 @@ const useAppState = () => {
     setSessionActive(false);
     setResumedFrom(null);
     setSelectedLayoutId(MAIN_LAYOUT_ID);
-    setViewedSessionId(null);
   };
 
   // Signing in uploads this phone's data to the account, which can't be undone. If the data was
@@ -717,16 +699,15 @@ const useAppState = () => {
 
 
   return {
-    screen, navigate: setScreen, loaded,
+    loaded,
     courses, setCourses, updateCourses, updateCourseLayout, fullHoleLayouts, history, setHistory,
     bag, bagDetails, bagWeights, disc, setDisc, addDisc, deleteDisc, setDiscWeight, addCatalogDisc,
     selectedCourseId, setSelectedCourseId, selectedLayoutId, setSelectedLayoutId, selectedBaseCourse, selectedCourse, selectedCourseLayouts, hasMultipleLayouts,
     locationAllowed, setLocationAllowed, dimRound, setDimRound,
     mode, hole, setHole, shots, setShots, sessionActive, practiceFocus, setPracticeFocus, resumedFrom, roundMessage, setRoundMessage, throwStyle, setThrowStyle,
     archiveSession, beginSession, confirmNewSession, finishSession, resumeSession, deleteRound, updateSessionShots, setRoundShared,
-    viewedSessionId, showingRoundSummary, openRound,
     selectLayout, deleteLayout, setHolePar, addHoleToCourse, deleteHole, deleteCourse, updateCourseDetails, setCoursePublished, addPublicCourse,
-    newCourseStep, setNewCourseStep, newCourseId, courseName, setCourseName, startNewCourse, saveNewCourseName, wizardReturn, mapLayout,
+    newCourseStep, setNewCourseStep, newCourseId, courseName, setCourseName, startNewCourse, saveNewCourseName, mapLayout,
     account, syncing, syncError, setSyncError, pendingChanges, runSync, signOutLocally, finishSignIn,
   };
 };

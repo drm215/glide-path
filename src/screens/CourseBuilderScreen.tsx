@@ -9,10 +9,11 @@ import { ScreenHeading } from '../components/ScreenHeading';
 import { CourseDetailsFields } from '../components/CourseDetailsFields';
 import { LayoutsEditor } from '../components/LayoutsEditor';
 import { shareLink } from '../links';
+import { go } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const CourseBuilderScreen = () => {
-  const { account, addHoleToCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, pendingChanges, selectedBaseCourse, selectedCourse, selectedCourseId, setCoursePublished, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse, navigate } = useApp();
+  const { account, addHoleToCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, pendingChanges, selectedBaseCourse, selectedCourse, selectedCourseId, setCoursePublished, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse } = useApp();
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
 
   const mappedHoleCount = selectedCourse?.layouts?.filter((layout) => layout.tee && layout.basket).length ?? 0;
@@ -36,7 +37,7 @@ export const CourseBuilderScreen = () => {
           </View>
           {account
             ? <Switch value={Boolean(selectedCourse.published)} onValueChange={(published) => setCoursePublished(selectedCourse.id, published)} trackColor={{ true: GREEN }} accessibilityLabel="Publish to course directory" />
-            : <Pressable onPress={() => navigate('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
+            : <Pressable onPress={() => go('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
         </View>
         {account && selectedCourse.published && selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
         {hasMultipleLayouts && <Text style={styles.courseItemMeta}>Stats for the {selectedCourse.layoutLabel} layout</Text>}

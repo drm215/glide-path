@@ -5,10 +5,11 @@ import { courseStats } from '../geo';
 import { COURSES_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { CourseDetailsFields } from '../components/CourseDetailsFields';
 import { LayoutsEditor } from '../components/LayoutsEditor';
+import { backTo } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const NewCourseScreen = () => {
-  const { courseName, mapLayout, newCourseId, newCourseStep, saveNewCourseName, selectedBaseCourse, selectedCourse, setCourseName, setNewCourseStep, navigate } = useApp();
+  const { courseName, mapLayout, newCourseId, newCourseStep, saveNewCourseName, selectedBaseCourse, selectedCourse, setCourseName, setNewCourseStep } = useApp();
 
 
   return <>
@@ -48,12 +49,12 @@ export const NewCourseScreen = () => {
       <View style={styles.wizardNavigation}>
         {newCourseStep > 1
           ? <Pressable onPress={() => setNewCourseStep((newCourseStep - 1) as 1 | 2 | 3)} style={styles.wizardNavButton}><Text style={styles.wizardNavText}>‹ BACK</Text></Pressable>
-          : <Pressable onPress={() => navigate('CourseBuilder')} style={styles.wizardNavButton}><Text style={styles.wizardNavText}>CANCEL</Text></Pressable>}
+          : <Pressable onPress={() => backTo('CourseBuilder')} style={styles.wizardNavButton}><Text style={styles.wizardNavText}>CANCEL</Text></Pressable>}
         {newCourseStep === 1
           ? <Pressable onPress={saveNewCourseName} disabled={!courseName.trim()} style={[styles.wizardNavButton, styles.wizardNavNext, !courseName.trim() && styles.disabledButton]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>NEXT: DETAILS ›</Text></Pressable>
           : newCourseStep < 4
             ? <Pressable onPress={() => setNewCourseStep((newCourseStep + 1) as 3 | 4)} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>{newCourseStep === 2 ? 'NEXT: LAYOUTS ›' : 'NEXT: MAP HOLES ›'}</Text></Pressable>
-            : <Pressable onPress={() => navigate('CourseBuilder')} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>DONE ✓</Text></Pressable>}
+            : <Pressable onPress={() => backTo('CourseBuilder')} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>DONE ✓</Text></Pressable>}
       </View>
     </ScrollView>
   </>;

@@ -5,10 +5,11 @@ import { styles } from '../theme';
 import { formatScoreToPar, formatSessionDate } from '../format';
 import { scoreSummary } from '../scoring';
 import { ScreenHeading } from '../components/ScreenHeading';
+import { openRound } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const RoundsScreen = () => {
-  const { courses, deleteRound, history, openRound } = useApp();
+  const { courses, deleteRound, history } = useApp();
   const pastSessions = [...history].sort((a, b) => Number(b.id) - Number(a.id));
 
   const sessionSummary = (session: SessionArchive) => {

@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { GpsPoint } from '../../lib/types';
@@ -9,10 +10,14 @@ import { formatElevation, formatSavedPoint } from '../format';
 import { holeDistanceFeet, holeElevationFeet, MAP_SCALE_BAR_OPTIONS_FEET, MAP_VIEW_WIDTH_FEET, type MapRegion, METERS_PER_DEGREE, regionAtPoint } from '../geo';
 import { BasketCircles } from '../components/BasketCircles';
 import { COURSES_BACK, NEW_COURSE_BACK, ScreenHeading } from '../components/ScreenHeading';
+import { backTo } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const HoleWizardScreen = () => {
-  const { addHoleToCourse, deleteHole, fullHoleLayouts, hasMultipleLayouts, locationAllowed, selectedCourse, setHolePar, setLocationAllowed, updateCourseLayout, wizardReturn, navigate } = useApp();
+  const { addHoleToCourse, deleteHole, fullHoleLayouts, hasMultipleLayouts, locationAllowed, selectedCourse, setHolePar, setLocationAllowed, updateCourseLayout } = useApp();
+  // Opened from the new-course flow (?from=new) or Course builder; FINISH goes back there.
+  const { from } = useLocalSearchParams<{ from?: string }>();
+  const returnTo = from === 'new' ? 'NewCourse' : 'CourseBuilder';
   const [builderHole, setBuilderHole] = useState(1);
   const [savingGpsTarget, setSavingGpsTarget] = useState<'tee' | 'basket' | null>(null);
   // The screen opens by finding the player (see the effect below).
@@ -156,7 +161,7 @@ export const HoleWizardScreen = () => {
   }, []);
 
   return <>
-    <ScreenHeading eyebrow={`${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP`} title={`Hole ${String(builderHole).padStart(2, '0')}.`} back={wizardReturn === 'NewCourse' ? NEW_COURSE_BACK : COURSES_BACK} />
+    <ScreenHeading eyebrow={`${selectedCourse?.name ?? 'COURSE'}${hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''} · SATELLITE MAP`} title={`Hole ${String(builderHole).padStart(2, '0')}.`} back={returnTo === 'NewCourse' ? NEW_COURSE_BACK : COURSES_BACK} />
     <View style={styles.holeWizard}>
       <View style={styles.wizardProgress}><View><Text style={styles.editorHoleName}>HOLE {String(builderHole).padStart(2, '0')} OF {String(selectedCourse?.holes ?? 0).padStart(2, '0')}</Text><Text style={[styles.mapProgress, styles.wizardMappedCount]}>{mappedHoleCount}/{selectedCourse?.holes ?? 0} MAPPED</Text></View>{selectedCourse && <Pressable onPress={() => deleteHole(selectedCourse, builderHole, () => setBuilderHole(Math.max(1, builderHole - 1)))} accessibilityRole="button" accessibilityLabel={`Delete hole ${builderHole}`} style={styles.deleteHoleButton}><Text style={styles.deleteButtonText}>DELETE HOLE</Text></Pressable>}</View>
       <View style={styles.satelliteFrame} onLayout={(event) => setMapViewportWidth(event.nativeEvent.layout.width)}>
@@ -183,7 +188,7 @@ export const HoleWizardScreen = () => {
       {gpsMessage ? <Text style={styles.gpsMessage}>{gpsMessage}</Text> : null}
       <View style={styles.wizardNavigation}>
         <Pressable onPress={() => moveWizardHole(builderHole - 1)} disabled={builderHole === 1} style={[styles.wizardNavButton, builderHole === 1 && styles.holeNavDisabled]}><Text style={styles.wizardNavText}>‹ PREVIOUS</Text></Pressable>
-        <Pressable onPress={() => navigate(wizardReturn)} style={[styles.wizardNavButton, styles.wizardNavFinish]}><Text style={styles.wizardNavFinishText}>FINISH ✓</Text></Pressable>
+        <Pressable onPress={() => backTo(returnTo)} style={[styles.wizardNavButton, styles.wizardNavFinish]}><Text style={styles.wizardNavFinishText}>FINISH ✓</Text></Pressable>
         <Pressable onPress={() => builderHole < (selectedCourse?.holes ?? 1) ? moveWizardHole(builderHole + 1) : addWizardHole()} style={[styles.wizardNavButton, styles.wizardNavNext]}><Text style={[styles.wizardNavText, styles.wizardNavNextText]}>{builderHole < (selectedCourse?.holes ?? 1) ? 'NEXT HOLE ›' : '+ ADD HOLE'}</Text></Pressable>
       </View>
     </View>

@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
-import { useApp, type Screen } from '../state/AppState';
+import { backTo, type Screen } from '../navigation';
 import { styles } from '../theme';
 import { HoldPressable } from './HoldPressable';
 
@@ -15,7 +15,6 @@ export const ROUNDS_BACK: Back = { to: 'Rounds', label: '‹ ROUNDS', name: 'rou
 export const ScreenHeading = ({ eyebrow, title, back = HOME_BACK, compact = false, hold = false }: {
   eyebrow?: string; title?: string; back?: Back | null; compact?: boolean; hold?: boolean;
 }) => {
-  const { navigate } = useApp();
   const Button = hold ? HoldPressable : Pressable;
   return (
     <View style={[styles.pageHeading, compact && styles.pageHeadingCompact]}>
@@ -23,7 +22,7 @@ export const ScreenHeading = ({ eyebrow, title, back = HOME_BACK, compact = fals
         <Text style={styles.eyebrow}>{eyebrow}</Text>
         <Text style={styles.title}>{title}</Text>
       </View>}
-      {back && <Button onPress={() => navigate(back.to)} style={styles.homeButton} accessibilityRole="button" accessibilityLabel={`Back to ${back.name}`}>
+      {back && <Button onPress={() => backTo(back.to)} style={styles.homeButton} accessibilityRole="button" accessibilityLabel={`Back to ${back.name}`}>
         <Text style={styles.homeButtonText}>{back.label}</Text>
       </Button>}
     </View>

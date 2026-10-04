@@ -1,4 +1,5 @@
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import { useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { roundShareUrl } from '../../lib/api';
@@ -14,16 +15,20 @@ import { StatsSummary } from '../components/StatsSummary';
 import { ROUNDS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { ThrowEditorSheet, type ThrowTarget } from '../components/ThrowEditorSheet';
 import { shareLink } from '../links';
+import { backTo, go } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const RoundDetailScreen = () => {
-  const { account, courses, deleteRound, history, resumeSession, setRoundShared, showingRoundSummary, viewedSessionId, navigate } = useApp();
+  const { account, courses, deleteRound, history, resumeSession, setRoundShared } = useApp();
   const [expandedHole, setExpandedHole] = useState<number | null>(null);
   const [editingThrow, setEditingThrow] = useState<ThrowTarget | null>(null);
   const roundDetailScrollRef = useRef<ScrollView>(null);
   const holeSectionOffsets = useRef<Record<number, number>>({});
 
-  const viewedSession = history.find((session) => session.id === viewedSessionId);
+  // The round in the route (/rounds/<id>); ?summary=1 marks one that was just finished.
+  const { id, summary } = useLocalSearchParams<{ id: string; summary?: string }>();
+  const showingRoundSummary = summary === '1';
+  const viewedSession = history.find((session) => session.id === id);
   const viewedBaseCourse = courses.find((course) => course.id === viewedSession?.courseId);
   // The layout the round was played on; undefined if the course or that layout was deleted.
   const viewedCourse = viewedBaseCourse && viewedSession ? withExistingLayout(viewedBaseCourse, viewedSession.layoutId) : undefined;
@@ -94,7 +99,7 @@ export const RoundDetailScreen = () => {
           </View>
           {account
             ? <Switch value={Boolean(viewedSession.shared)} onValueChange={(shared) => setRoundShared(viewedSession.id, shared)} trackColor={{ true: GREEN }} accessibilityLabel="Share this round" />
-            : <Pressable onPress={() => navigate('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
+            : <Pressable onPress={() => go('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
         </View>
         {account && viewedSession.shared && viewedSession.shareToken ? <Pressable onPress={() => shareLink(`My round at ${viewedSession.courseName}:`, roundShareUrl(viewedSession.shareToken!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SEND LINK</Text></Pressable> : null}
         <Text style={styles.sectionTitle}>Scorecard</Text>
@@ -132,8 +137,8 @@ export const RoundDetailScreen = () => {
             <Text style={styles.throwEditHint}>EDIT</Text>
           </Pressable>)}
         </View>)}
-        {showingRoundSummary && <Pressable onPress={() => navigate('Home')} style={styles.finishButton}><Text style={styles.finishButtonText}>DONE</Text></Pressable>}
-        <Pressable onPress={() => deleteRound(viewedSession)} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>DELETE {viewedSession.mode === 'Round' ? 'ROUND' : 'SESSION'}</Text></Pressable>
+        {showingRoundSummary && <Pressable onPress={() => backTo('Home')} style={styles.finishButton}><Text style={styles.finishButtonText}>DONE</Text></Pressable>}
+        <Pressable onPress={() => deleteRound(viewedSession, () => backTo('Rounds'))} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>DELETE {viewedSession.mode === 'Round' ? 'ROUND' : 'SESSION'}</Text></Pressable>
       </>}
     </ScrollView>
     {editingThrow && <ThrowEditorSheet target={editingThrow} layouts={viewedCourse?.layouts} onClose={() => setEditingThrow(null)} />}

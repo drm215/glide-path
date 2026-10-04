@@ -36,6 +36,15 @@ npx eas-cli@latest build -p ios --profile preview
 - **Publish and share**: publish a course to the public directory from Course builder, or share a finished round's scorecard by link from its round detail.
 - **Find courses**: search published courses by name, city, or state, or find courses near you, and add them to your courses.
 
+## App code
+
+- `src/app/`: routes (Expo Router). Each file is a screen's URL; `_layout.tsx` holds the brand bar and the navigation stack.
+- `src/screens/`: the screens themselves. `src/components/` has pieces several screens share.
+- `src/state/AppState.tsx`: shared state, on-phone storage, sync, and the actions screens use (`useApp()`).
+- `lib/`: pure logic shared with the server's tests (sync, rounds, layouts, stats).
+
+`npm test` drives the whole app through its main flows with the phone's native features mocked (`test/`).
+
 ## Sync server
 
 The `server/` folder holds the API that syncs app data and the website: a public course directory with satellite maps, shared round pages, a signed-in view of your rounds and courses, and the privacy policy. See [server/README.md](server/README.md). It runs at https://glidepathdiscgolf.com (also reachable at glide-path.onrender.com) with its database on a free Neon Postgres project.

@@ -8,6 +8,8 @@ export const PAPER = '#000000';
 
 export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#000000', alignItems: 'center' },
+  // Holds the current screen between the brand bar and the bottom bar.
+  stack: { flex: 1 },
   appFrame: { flex: 1, width: '100%', maxWidth: 560, backgroundColor: PAPER, paddingTop: 48 },
   appFrameCompact: { paddingTop: 38 },
   topline: { height: 46, marginHorizontal: 23, flexDirection: 'row', alignItems: 'center' },

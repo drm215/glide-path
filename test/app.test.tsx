@@ -1,12 +1,11 @@
 /// <reference types="jest" />
 // Drives the whole app through its main flows with native modules mocked (see setup.ts).
 // These pin down behavior so the screens can be reorganized without changing what they do.
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import * as Brightness from 'expo-brightness';
-import * as SecureStore from 'expo-secure-store';
-import { Alert, type AlertButton } from 'react-native';
-import App from '../App';
+import type AsyncStorageModule from '@react-native-async-storage/async-storage';
+import type * as RouterTesting from 'expo-router/testing-library';
+import type * as BrightnessModule from 'expo-brightness';
+import type * as SecureStoreModule from 'expo-secure-store';
+import type { AlertButton, AlertStatic } from 'react-native';
 import type { Course, SessionArchive } from '../lib/types';
 
 const KEYS = {
@@ -34,6 +33,47 @@ const pastRound: SessionArchive = {
   ],
 };
 
+// Each test loads a fresh copy of the app, the router and the mocked native modules, so navigation
+// and storage can't carry over from one test to the next (Expo Router keeps module-level state).
+let renderRouter: typeof RouterTesting.renderRouter;
+let testing: typeof RouterTesting;
+// The testing library swaps in a new `screen` on every render, so always read the current one.
+const screen = new Proxy({} as typeof RouterTesting.screen, { get: (_, key) => testing.screen[key as keyof typeof testing.screen] });
+let fireEvent: typeof RouterTesting.fireEvent;
+let waitFor: typeof RouterTesting.waitFor;
+let cleanup: typeof RouterTesting.cleanup;
+let AsyncStorage: typeof AsyncStorageModule;
+let Brightness: typeof BrightnessModule;
+let SecureStore: typeof SecureStoreModule;
+let alertSpy: jest.SpyInstance<void, Parameters<AlertStatic['alert']>>;
+
+beforeEach(() => {
+  jest.resetModules();
+  testing = require('expo-router/testing-library');
+  testing.configure({ asyncUtilTimeout: 5_000 });
+  ({ renderRouter, fireEvent, waitFor, cleanup } = testing);
+  const storage = require('@react-native-async-storage/async-storage');
+  AsyncStorage = storage.default ?? storage;
+  Brightness = require('expo-brightness');
+  SecureStore = require('expo-secure-store');
+  alertSpy = jest.spyOn((require('react-native') as { Alert: AlertStatic }).Alert, 'alert');
+});
+
+beforeEach(async () => {
+  // The storage mock is shared across reloads (setup.ts), so empty it.
+  await AsyncStorage.clear();
+});
+
+afterEach(async () => {
+  await cleanup();
+  jest.useRealTimers();
+});
+
+// Starts the app from its routes (src/app), on the home screen unless `url` says otherwise.
+const renderApp = async (url = '/') => {
+  await renderRouter('src/app', { initialUrl: url });
+};
+
 const seed = (values: Record<string, unknown>) =>
   AsyncStorage.multiSet(Object.entries(values).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
 
@@ -47,11 +87,10 @@ const hold = (text: string | RegExp) => fireEvent(screen.getByText(text), 'longP
 const press = (text: string | RegExp) => fireEvent.press(screen.getByText(text));
 
 // Presses a button in the most recent alert that has it.
-const alertSpy = jest.spyOn(Alert, 'alert');
 const pressAlertButton = async (text: string) => {
   const call = [...alertSpy.mock.calls].reverse().find(([, , buttons]) => buttons?.some((button: AlertButton) => button.text === text));
   if (!call) throw new Error(`No alert with a "${text}" button`);
-  await waitFor(async () => { await (call[2] as AlertButton[]).find((button) => button.text === text)!.onPress?.(); });
+  await testing.act(async () => { await (call[2] as AlertButton[]).find((button) => button.text === text)!.onPress?.(); });
 };
 
 type Route = (body: unknown) => unknown;
@@ -69,21 +108,14 @@ const mockServer = (routes: Record<string, Route>) => {
   return requests;
 };
 
-beforeEach(async () => {
-  await AsyncStorage.clear();
-  (SecureStore as unknown as { __store: Map<string, string> }).__store.clear();
-  alertSpy.mockClear();
-  jest.mocked(Brightness.setBrightnessAsync).mockClear();
-});
-
 test('opens on the home screen', async () => {
-  await render(<App />);
+  await renderApp();
   expect(await screen.findByText('Ready when you are.')).toBeTruthy();
 });
 
 test('loads saved data, and backs up a value it cannot read instead of overwriting it', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound], [KEYS.bag]: '{not json' });
-  await render(<App />);
+  await renderApp();
   await press('Rounds');
   expect(await screen.findByText('Cedar Grove')).toBeTruthy();
   const keys = await AsyncStorage.getAllKeys();
@@ -94,7 +126,7 @@ test('loads saved data, and backs up a value it cannot read instead of overwriti
 
 test('moves past sessions saved with the round in progress to their own key', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.round]: { shots: [], hole: 1, mode: 'Round', history: [pastRound] } });
-  await render(<App />);
+  await renderApp();
   await screen.findByText('Ready when you are.');
   await waitFor(async () => expect(await stored<SessionArchive[]>(KEYS.history)).toHaveLength(1));
   await waitFor(async () => expect(await stored<{ history?: unknown }>(KEYS.round)).not.toHaveProperty('history'));
@@ -102,7 +134,7 @@ test('moves past sessions saved with the round in progress to their own key', as
 
 test('plays a round: pick the course, log a throw into the basket, end, and see the summary', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Start a round').then(() => 'Start a round'));
   await press('Cedar Grove');
   expect(await screen.findByText('LOG THROW 1')).toBeTruthy();
@@ -126,11 +158,13 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
     expect(history).toHaveLength(1);
     expect(history?.[0]).toMatchObject({ courseId: 'course-1', mode: 'Round' });
   });
+  await press('DONE');
+  expect(await screen.findByText('Ready when you are.')).toBeTruthy();
 });
 
 test('the round screen dims, and the dimming switch is saved and restores brightness', async () => {
   await seed({ [KEYS.courses]: [cedarGrove] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Start a round').then(() => 'Start a round'));
   await press('Cedar Grove');
   await waitFor(() => expect(Brightness.setBrightnessAsync).toHaveBeenCalledWith(0.3));
@@ -142,11 +176,11 @@ test('the round screen dims, and the dimming switch is saved and restores bright
 
 test('maps a hole: save the tee and basket where the player stands, set par, add a hole, finish', async () => {
   await seed({ [KEYS.courses]: [{ ...cedarGrove, holes: 1, layouts: [{ tee: null, basket: null }] }] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Course builder').then(() => 'Course builder'));
   await press('MAP SELECTED COURSE ↗');
   expect(await screen.findByText('Hole 01.')).toBeTruthy();
-  const location = jest.requireMock<{ __state: { position: { latitude: number; longitude: number } } }>('expo-location').__state;
+  const location = (require('expo-location') as { __state: { position: { latitude: number; longitude: number } } }).__state;
   location.position = { latitude: 41, longitude: -76 };
   await fireEvent.press(screen.getAllByText('SAVE LOCATION')[0]);
   location.position = { latitude: 41.001, longitude: -76 };
@@ -166,7 +200,7 @@ test('maps a hole: save the tee and basket where the player stands, set par, add
 test('edits a throw in a past round: marking it made moves it to the basket and remeasures', async () => {
   const round: SessionArchive = { ...pastRound, shots: [pastRound.shots[0], { ...pastRound.shots[1], lie: 'Missed', latitude: 40.0009 }] };
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [round] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Rounds').then(() => 'Rounds'));
   await press('Cedar Grove');
   await fireEvent.press(await screen.findByLabelText('Edit throw 2 on hole 1'));
@@ -181,7 +215,7 @@ test('edits a throw in a past round: marking it made moves it to the basket and 
 
 test('practice sessions start from the practice screen and end back home', async () => {
   await seed({ [KEYS.courses]: [cedarGrove] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Practice').then(() => 'Practice'));
   await press('Putting');
   await press('START PUTTING PRACTICE ↗');
@@ -193,7 +227,7 @@ test('practice sessions start from the practice screen and end back home', async
 
 test('resumes a past round from its summary at the next unfinished hole', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Rounds').then(() => 'Rounds'));
   await press('Cedar Grove');
   await press(await screen.findByText('RESUME ROUND ▶').then(() => 'RESUME ROUND ▶'));
@@ -202,8 +236,16 @@ test('resumes a past round from its summary at the next unfinished hole', async 
   await waitFor(async () => expect(await stored<{ shots: unknown[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 2, shots: pastRound.shots }));
 });
 
+test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Back to rounds'));
+  expect(await screen.findByText('Rounds.')).toBeTruthy();
+});
+
 test('creates a course from the new-course flow', async () => {
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Course builder').then(() => 'Course builder'));
   await press('+ NEW COURSE');
   await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove'), 'Maple Hill');
@@ -214,7 +256,7 @@ test('creates a course from the new-course flow', async () => {
 
 test('adds a disc to the bag by name', async () => {
   mockServer({ '/disc': () => [] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Bag builder').then(() => 'Bag builder'));
   await fireEvent.changeText(screen.getByPlaceholderText('Disc name or mold'), 'Destroyer');
   await press('ADD');
@@ -223,7 +265,7 @@ test('adds a disc to the bag by name', async () => {
 
 test('stats summarize finished rounds', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Stats').then(() => 'Stats'));
   expect(await screen.findByText('Throw stats')).toBeTruthy();
   expect(screen.getByText('BEST ROUND')).toBeTruthy();
@@ -231,7 +273,7 @@ test('stats summarize finished rounds', async () => {
 
 test('deleting a past round removes it from history', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Rounds').then(() => 'Rounds'));
   await fireEvent.press(screen.getByLabelText(/^Delete Cedar Grove round/));
   await pressAlertButton('Delete round');
@@ -244,7 +286,7 @@ test('signing in uploads this phone’s data and keeps the token in the keychain
     '/api/auth/login': () => ({ token: 'token-1', user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' } }),
     '/api/sync': () => ({ cursor: 3, more: false, courses: [], rounds: [], bag: null }),
   });
-  await render(<App />);
+  await renderApp();
   await fireEvent.press(await screen.findByLabelText('Sign in'));
   await fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'pat@example.com');
   await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'long enough');
@@ -263,7 +305,7 @@ test('signing in to a different account asks first, and cancelling stays signed 
   const requests = mockServer({
     '/api/auth/login': () => ({ token: 'token-2', user: { id: 'u2', email: 'new@example.com', displayName: 'New' } }),
   });
-  await render(<App />);
+  await renderApp();
   await fireEvent.press(await screen.findByLabelText('Sign in'));
   await fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'new@example.com');
   await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'long enough');
@@ -282,7 +324,7 @@ test('finds a published course and adds it to my courses', async () => {
     '/api/public/courses': () => ({ courses: [{ uid: 'pub-1', name: 'Oak Run', holes: 1, city: 'Media', state: 'PA', mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, layoutCount: 1 }] }),
     '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: { city: 'Media' }, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300 } }),
   });
-  await render(<App />);
+  await renderApp();
   await press(await screen.findByText('Find courses').then(() => 'Find courses'));
   await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove or PA'), 'Oak');
   await press('SEARCH');

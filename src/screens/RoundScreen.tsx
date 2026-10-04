@@ -3,7 +3,8 @@ import * as Location from 'expo-location';
 import * as Brightness from 'expo-brightness';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import MapView, { Marker, Polyline } from 'react-native-maps';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Modal, ScrollView, Text, View } from 'react-native';
 import { guessDisc, guessThrowType, suggestDiscs } from '../../lib/rounds';
 import type { Disc, Lie, Shot, ThrowStyle, ThrowType } from '../../lib/types';
@@ -21,7 +22,7 @@ import { ThrowEditorSheet, type ThrowTarget } from '../components/ThrowEditorShe
 import { useApp } from '../state/AppState';
 
 export const RoundScreen = () => {
-  const { bag, bagDetails, dimRound, disc, finishSession, hasMultipleLayouts, history, hole, locationAllowed, mode, practiceFocus, roundMessage, selectedCourse, setDimRound, setDisc, setHole, setLocationAllowed, setRoundMessage, setShots, setThrowStyle, shots, throwStyle, navigate } = useApp();
+  const { bag, bagDetails, dimRound, disc, finishSession, hasMultipleLayouts, history, hole, locationAllowed, mode, practiceFocus, roundMessage, selectedCourse, setDimRound, setDisc, setHole, setLocationAllowed, setRoundMessage, setShots, setThrowStyle, shots, throwStyle } = useApp();
   const [throwType, setThrowType] = useState<ThrowType>('Drive');
   const [loggingThrow, setLoggingThrow] = useState(false);
   const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number } | null>(null);
@@ -40,18 +41,20 @@ export const RoundScreen = () => {
     roundScrollRef.current?.scrollTo({ y: 0, animated: true });
   }, [hole]);
 
-  // While a round is open, keep the screen on. Keep-awake is a nicety; the round works without it.
-  useEffect(() => {
+  // These run while the round screen is the one showing, and stop when another screen opens on top.
+
+  // Keep the screen on. Keep-awake is a nicety; the round works without it.
+  useFocusEffect(useCallback(() => {
     activateKeepAwakeAsync(ROUND_KEEP_AWAKE_TAG).catch(() => undefined);
     return () => {
       Promise.resolve(deactivateKeepAwake(ROUND_KEEP_AWAKE_TAG)).catch(() => undefined);
     };
-  }, []);
+  }, []));
 
   // With dimming on, the round screen saves battery by lowering brightness (never raising it), and
   // restores it on the way out. iOS restores brightness itself when the phone locks, so dim again on
   // return. Players turn dimming off when the screen is too dark to read in the sun.
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (!dimRound) return;
     let left = false;
     const dim = async () => {
@@ -70,11 +73,11 @@ export const RoundScreen = () => {
       if (savedBrightness.current !== null) Brightness.setBrightnessAsync(savedBrightness.current).catch(() => undefined);
       savedBrightness.current = null;
     };
-  }, [dimRound]);
+  }, [dimRound]));
 
-  // While the round screen is open, keep a GPS fix warm so logging a throw is instant and as
-  // accurate as the phone can manage, rather than waiting on a single cold reading.
-  useEffect(() => {
+  // Keep a GPS fix warm so logging a throw is instant and as accurate as the phone can manage,
+  // rather than waiting on a single cold reading.
+  useFocusEffect(useCallback(() => {
     let subscription: Location.LocationSubscription | null = null;
     let left = false;
     (async () => {
@@ -93,8 +96,9 @@ export const RoundScreen = () => {
       latestFix.current = null;
       setGpsAccuracy(null);
     };
-  }, [locationAllowed]);
-
+    // Not read here, but granting location access mid-round should start the watch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationAllowed]));
 
   const activeShots = shots.filter((shot) => shot.hole === hole);
   const score = activeShots.length;
@@ -250,7 +254,6 @@ export const RoundScreen = () => {
   const startNextHole = () => {
     setHole((current) => (current >= (selectedCourse?.holes ?? 18) ? 1 : current + 1));
     setThrowType('Drive');
-    navigate('Round');
   };
 
   const goToPreviousHole = () => {

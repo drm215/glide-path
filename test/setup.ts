@@ -4,6 +4,10 @@
 import mockAsyncStorage from '@react-native-async-storage/async-storage/jest/async-storage-mock';
 import { configure } from '@testing-library/react-native';
 
+// The app tests load a fresh testing library for each test (see app.test.tsx) and clean up
+// themselves; its automatic cleanup would register hooks from inside a test.
+process.env.RNTL_SKIP_AUTO_CLEANUP = 'true';
+
 // Whole-app renders are slow on a busy machine; generous limits keep the suite from flaking.
 jest.setTimeout(20_000);
 configure({ asyncUtilTimeout: 5_000 });
