@@ -1,4 +1,4 @@
-import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,9 @@ export const createApp = ({
   const hashResetCode = (code: string) => createHmac('sha256', authSecret).update(`password-reset:${code}`).digest();
   const app = express();
   const { issueToken, requireUser } = createAuth(authSecret, db);
+  // Hash of a password no account has, checked when logging in with an unknown email. Made on first use.
+  let unknownUserHashPromise: Promise<string> | null = null;
+  const unknownUserHash = () => (unknownUserHashPromise ??= hashPassword(randomBytes(16).toString('hex')));
   const tileOrigin = new URL(tileUrl.replace(/[{}]/g, '')).origin;
 
   app.set('trust proxy', 1);
@@ -109,7 +112,8 @@ export const createApp = ({
     const body = loginRequest.parse(req.body);
     const { rows } = await db.query<UserRow>('SELECT * FROM users WHERE email = $1', [body.email.trim().toLowerCase()]);
     const user = rows[0];
-    if (!user || !(await checkPassword(body.password, user.password_hash))) {
+    // An unknown email still checks a password, so the response time doesn't reveal who has an account.
+    if (!(await checkPassword(body.password, user?.password_hash ?? await unknownUserHash())) || !user) {
       res.status(401).json({ error: 'Email or password is incorrect.' });
       return;
     }
@@ -140,6 +144,8 @@ export const createApp = ({
       return;
     }
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    // Codes are useless once expired; a day's grace keeps them for troubleshooting.
+    await db.query(`DELETE FROM password_resets WHERE expires_at < now() - interval '1 day'`);
     // Only the newest code works.
     await db.query('UPDATE password_resets SET used = true WHERE user_id = $1 AND NOT used', [user.id]);
     await db.query(

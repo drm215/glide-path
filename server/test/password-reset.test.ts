@@ -84,6 +84,15 @@ describe('password reset', () => {
     assert.equal(server.sentCodes.filter((item) => item.to === 'flooded@example.com').length - before, 3);
   });
 
+  test('long-expired codes are cleared out when a new one is sent', async () => {
+    await server.register('tidy@example.com');
+    await forgot('tidy@example.com');
+    await server.db.query("UPDATE password_resets SET expires_at = now() - interval '2 days', created_at = now() - interval '2 days'");
+    await forgot('tidy@example.com');
+    const { rows } = await server.db.query<{ count: number }>("SELECT count(*)::int AS count FROM password_resets WHERE expires_at < now() - interval '1 day'");
+    assert.equal(rows[0].count, 0);
+  });
+
   test('rejects malformed codes and short passwords', async () => {
     assert.equal((await reset('forgetful@example.com', '12ab56')).status, 400);
     assert.equal((await reset('forgetful@example.com', '123456', 'short')).status, 400);
