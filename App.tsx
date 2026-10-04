@@ -53,6 +53,7 @@ type SavedRound = {
   shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
   layoutId?: string; resumedFrom?: ResumedFrom | null;
 };
+type LastAccount = { id: string; email: string; pushedThrough: number };
 type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses' | 'NewCourse';
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
 
@@ -70,6 +71,9 @@ const MIGRATIONS_KEY = 'flight-notes-migrations-v1';
 // Sync account (without its token) and pending sync bookkeeping.
 const SYNC_KEY = 'flight-notes-sync-v1';
 const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
+// The account this phone's data was last synced with. Kept after signing out, so signing in to
+// a different account can ask before uploading this data into it.
+const LAST_ACCOUNT_KEY = 'flight-notes-last-account-v1';
 // The sign-in token lives in the iOS Keychain rather than plain app storage.
 const TOKEN_KEY = 'glide-path-token';
 
@@ -467,6 +471,7 @@ export default function App() {
   const savedBrightness = useRef<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
+  const lastAccount = useRef<LastAccount | null>(null);
   const [bagUpdatedAt, setBagUpdatedAt] = useState(0);
   const [deletedCourses, setDeletedCourses] = useState<Tombstone[]>([]);
   const [deletedRounds, setDeletedRounds] = useState<Tombstone[]>([]);
@@ -510,7 +515,7 @@ export default function App() {
     // Each stored value is read on its own, so one that can't be read doesn't stop the rest from
     // loading. The app will save over it, so its raw text is first copied to a backup key.
     const load = async () => {
-      const keys = [STORAGE_KEY, HISTORY_KEY, COURSES_KEY, BAG_KEY, BAG_DETAILS_KEY, BAG_WEIGHTS_KEY, SYNC_KEY, SYNC_META_KEY, MIGRATIONS_KEY];
+      const keys = [STORAGE_KEY, HISTORY_KEY, COURSES_KEY, BAG_KEY, BAG_DETAILS_KEY, BAG_WEIGHTS_KEY, SYNC_KEY, SYNC_META_KEY, MIGRATIONS_KEY, LAST_ACCOUNT_KEY];
       const stored: Record<string, string | null> = Object.fromEntries(await AsyncStorage.multiGet(keys));
       const token = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
       const backups: Promise<void>[] = [];
@@ -591,6 +596,7 @@ export default function App() {
       read<Record<Disc, number>>(BAG_WEIGHTS_KEY, setBagWeights);
       if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
       if (token) read<Omit<SyncAccount, 'token'>>(SYNC_KEY, (value) => setAccount({ ...value, token }));
+      read<LastAccount>(LAST_ACCOUNT_KEY, (value) => { lastAccount.current = value; });
       let meta: { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } = {};
       read<typeof meta>(SYNC_META_KEY, (value) => { meta = value; });
       setDeletedCourses(meta.deletedCourses ?? []);
@@ -645,6 +651,8 @@ export default function App() {
     }
     const { token: _token, ...stored } = account;
     saveToStorage(SYNC_KEY, stored);
+    lastAccount.current = { id: account.user.id, email: account.user.email, pushedThrough: account.pushedThrough };
+    saveToStorage(LAST_ACCOUNT_KEY, lastAccount.current);
   }, [account, loaded]);
 
   useEffect(() => {
@@ -1528,6 +1536,56 @@ export default function App() {
     }
   };
 
+  // Empties this phone's courses, rounds, bag and round in progress, before downloading another account's.
+  const clearLocalData = () => {
+    setCourses([]);
+    setHistory([]);
+    setBag([]);
+    setBagDetails({});
+    setBagWeights({});
+    setBagUpdatedAt(0);
+    setDeletedCourses([]);
+    setDeletedRounds([]);
+    setShots([]);
+    setHole(1);
+    setDisc('');
+    setSessionActive(false);
+    setResumedFrom(null);
+    setSelectedLayoutId(MAIN_LAYOUT_ID);
+    setViewedSessionId(null);
+  };
+
+  // Signing in uploads this phone's data to the account, which can't be undone. If the data was
+  // last synced with a different account, ask first. Returns false if the user cancels.
+  const finishSignIn = async (result: { token: string; user: SyncAccount['user'] }) => {
+    const previous = lastAccount.current;
+    const hasLocalData = courses.length > 0 || history.length > 0 || bag.length > 0 || shots.length > 0;
+    if (previous && previous.id !== result.user.id && hasLocalData) {
+      const unsynced = countPendingChanges(syncData, previous.pushedThrough);
+      const losses = [
+        unsynced ? `${unsynced} ${unsynced === 1 ? 'change' : 'changes'} not yet synced to ${previous.email}` : '',
+        sessionActive ? `the ${mode === 'Round' ? 'round' : 'practice session'} in progress` : '',
+      ].filter(Boolean).join(' and ');
+      const choice = await new Promise<'add' | 'replace' | 'cancel'>((resolve) => {
+        Alert.alert(
+          'Data from another account',
+          `The courses, rounds and bag on this phone were last synced with ${previous.email}.\n\nAdd them to ${result.user.email}, or replace them with that account's data? Replacing leaves ${previous.email}'s synced data in its own account${losses ? `, but ${losses} will be lost` : ''}.`,
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve('cancel') },
+            { text: `Add to ${result.user.email}`, onPress: () => resolve('add') },
+            { text: 'Replace', style: 'destructive', onPress: () => resolve('replace') },
+          ],
+          { cancelable: true, onDismiss: () => resolve('cancel') },
+        );
+      });
+      if (choice === 'cancel') return false;
+      if (choice === 'replace') clearLocalData();
+    }
+    await SecureStore.setItemAsync(TOKEN_KEY, result.token);
+    setAccount({ token: result.token, user: result.user, cursor: 0, pushedThrough: 0 });
+    return true;
+  };
+
   const submitPasswordReset = async () => {
     const email = authEmail.trim();
     const code = resetCode.trim();
@@ -1543,8 +1601,7 @@ export default function App() {
     setAuthError('');
     try {
       const result = await resetPassword(email, code, authPassword);
-      await SecureStore.setItemAsync(TOKEN_KEY, result.token);
-      setAccount({ token: result.token, user: result.user, cursor: 0, pushedThrough: 0 });
+      if (!(await finishSignIn(result))) return;
       setAuthPassword('');
       setResetCode('');
       setAuthNotice('');
@@ -1578,8 +1635,7 @@ export default function App() {
     setAuthError('');
     try {
       const result = authMode === 'register' ? await registerRequest(email, authPassword, name) : await signInRequest(email, authPassword);
-      await SecureStore.setItemAsync(TOKEN_KEY, result.token);
-      setAccount({ token: result.token, user: result.user, cursor: 0, pushedThrough: 0 });
+      if (!(await finishSignIn(result))) return;
       setAuthPassword('');
       setSyncError('');
     } catch (error) {
