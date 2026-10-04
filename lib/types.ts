@@ -8,7 +8,8 @@ export type Lie = 'Fairway' | 'Woods' | 'Hazard' | 'OB' | 'Basket' | 'Other' | '
 export type Disc = string;
 export type DiscInfo = { id: string; name: string; brand: string; category: string; speed: string; glide: string; turn: string; fade: string; stability: string; color?: string; background_color?: string };
 // altitude (meters) is the GPS elevation where the throw was logged; throws before it was recorded lack it.
-export type Shot = { x: number; y: number; feet: number; disc: Disc; type: ThrowType; style?: ThrowStyle; hole: number; courseId?: string; latitude?: number; longitude?: number; altitude?: number | null; lie?: Lie; quality?: number; qualityMax?: number };
+// accuracy (meters) is the GPS position's uncertainty; throws logged before it was saved lack it.
+export type Shot = { x: number; y: number; feet: number; disc: Disc; type: ThrowType; style?: ThrowStyle; hole: number; courseId?: string; latitude?: number; longitude?: number; altitude?: number | null; accuracy?: number | null; lie?: Lie; quality?: number; qualityMax?: number };
 // altitude is in meters; points saved before elevation tracking don't have it.
 export type GpsPoint = { latitude: number; longitude: number; accuracy: number | null; timestamp: number; altitude?: number | null; altitudeAccuracy?: number | null };
 export type HoleLayout = { tee: GpsPoint | null; basket: GpsPoint | null; par?: number };

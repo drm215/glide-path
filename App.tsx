@@ -53,6 +53,7 @@ type SavedRound = {
   shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
   layoutId?: string; resumedFrom?: ResumedFrom | null;
 };
+type Settings = { dimRound?: boolean };
 type LastAccount = { id: string; email: string; pushedThrough: number };
 type Screen = 'Home' | 'CourseBuilder' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'RoundDetail' | 'Account' | 'FindCourses' | 'NewCourse';
 type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
@@ -74,6 +75,8 @@ const SYNC_META_KEY = 'flight-notes-sync-meta-v1';
 // The account this phone's data was last synced with. Kept after signing out, so signing in to
 // a different account can ask before uploading this data into it.
 const LAST_ACCOUNT_KEY = 'flight-notes-last-account-v1';
+// Display preferences, such as whether the round screen dims.
+const SETTINGS_KEY = 'flight-notes-settings-v1';
 // The sign-in token lives in the iOS Keychain rather than plain app storage.
 const TOKEN_KEY = 'glide-path-token';
 
@@ -121,6 +124,12 @@ const lieLabel = (lie: Lie, type: ThrowType) => (lie === 'Basket' && type === 'P
 // needs a deliberate hold, so the phone can stay out without unlocking or stray taps.
 // iOS restores the user's brightness when the phone locks.
 const ROUND_BRIGHTNESS = 0.3;
+// GPS accuracy (meters) good enough to log a throw without taking a fresh reading, and the point
+// past which the throw sheet warns that its distance is unreliable.
+const GPS_GOOD_ACCURACY_M = 8;
+const GPS_POOR_ACCURACY_M = 15;
+// How old the round screen's warm GPS fix can be and still be used for a throw.
+const WARM_FIX_MAX_AGE_MS = 5_000;
 const ROUND_KEEP_AWAKE_TAG = 'round-in-progress';
 const HOLD_DELAY_MS = 400;
 // The throw editor's id for the round in progress (past rounds use their own ids).
@@ -463,12 +472,17 @@ export default function App() {
   const [throwType, setThrowType] = useState<ThrowType>('Drive');
   const [loggingThrow, setLoggingThrow] = useState(false);
   const [roundMessage, setRoundMessage] = useState('');
-  const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; feet: number } | null>(null);
+  const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number } | null>(null);
   const [logStep, setLogStep] = useState<1 | 2 | 3 | 4>(1);
   const [throwLie, setThrowLie] = useState<Lie>('Fairway');
   // The last style used is the default for the next throw.
   const [throwStyle, setThrowStyle] = useState<ThrowStyle>('Backhand');
   const savedBrightness = useRef<number | null>(null);
+  // Whether the round screen lowers brightness to save battery; players turn it off in bright sun.
+  const [dimRound, setDimRound] = useState(true);
+  // The newest reading from the round screen's GPS watch, and its accuracy in whole meters for display.
+  const latestFix = useRef<Location.LocationObject | null>(null);
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const lastAccount = useRef<LastAccount | null>(null);
@@ -515,7 +529,7 @@ export default function App() {
     // Each stored value is read on its own, so one that can't be read doesn't stop the rest from
     // loading. The app will save over it, so its raw text is first copied to a backup key.
     const load = async () => {
-      const keys = [STORAGE_KEY, HISTORY_KEY, COURSES_KEY, BAG_KEY, BAG_DETAILS_KEY, BAG_WEIGHTS_KEY, SYNC_KEY, SYNC_META_KEY, MIGRATIONS_KEY, LAST_ACCOUNT_KEY];
+      const keys = [STORAGE_KEY, HISTORY_KEY, COURSES_KEY, BAG_KEY, BAG_DETAILS_KEY, BAG_WEIGHTS_KEY, SYNC_KEY, SYNC_META_KEY, MIGRATIONS_KEY, LAST_ACCOUNT_KEY, SETTINGS_KEY];
       const stored: Record<string, string | null> = Object.fromEntries(await AsyncStorage.multiGet(keys));
       const token = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
       const backups: Promise<void>[] = [];
@@ -597,6 +611,7 @@ export default function App() {
       if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
       if (token) read<Omit<SyncAccount, 'token'>>(SYNC_KEY, (value) => setAccount({ ...value, token }));
       read<LastAccount>(LAST_ACCOUNT_KEY, (value) => { lastAccount.current = value; });
+      read<Settings>(SETTINGS_KEY, (value) => { if (value.dimRound !== undefined) setDimRound(value.dimRound); });
       let meta: { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } = {};
       read<typeof meta>(SYNC_META_KEY, (value) => { meta = value; });
       setDeletedCourses(meta.deletedCourses ?? []);
@@ -622,6 +637,11 @@ export default function App() {
     if (!loaded) return;
     saveToStorage(HISTORY_KEY, history);
   }, [history, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    saveToStorage(SETTINGS_KEY, { dimRound } satisfies Settings);
+  }, [dimRound, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -719,33 +739,62 @@ export default function App() {
     if (loaded && account?.token) runSyncRef.current();
   }, [loaded, account?.token]);
 
-  // While the round screen is open: keep the screen on and dimmed, restoring brightness on the
-  // way out. iOS restores brightness itself when the phone locks, so dim again on return.
+  // While the round screen is open, keep the screen on. Keep-awake is a nicety; the round works without it.
   useEffect(() => {
     if (screen !== 'Round') return;
+    activateKeepAwakeAsync(ROUND_KEEP_AWAKE_TAG).catch(() => undefined);
+    return () => {
+      Promise.resolve(deactivateKeepAwake(ROUND_KEEP_AWAKE_TAG)).catch(() => undefined);
+    };
+  }, [screen]);
+
+  // With dimming on, the round screen saves battery by lowering brightness (never raising it), and
+  // restores it on the way out. iOS restores brightness itself when the phone locks, so dim again on
+  // return. Players turn dimming off when the screen is too dark to read in the sun.
+  useEffect(() => {
+    if (screen !== 'Round' || !dimRound) return;
     let left = false;
-    (async () => {
-      try {
-        await activateKeepAwakeAsync(ROUND_KEEP_AWAKE_TAG);
-        const current = await Brightness.getBrightnessAsync();
-        if (left) return;
-        savedBrightness.current = current;
-        await Brightness.setBrightnessAsync(ROUND_BRIGHTNESS);
-      } catch {
-        // Dimming and keep-awake are niceties; the round works without them.
-      }
-    })();
+    const dim = async () => {
+      const current = await Brightness.getBrightnessAsync();
+      if (left || current <= ROUND_BRIGHTNESS) return;
+      savedBrightness.current ??= current;
+      await Brightness.setBrightnessAsync(ROUND_BRIGHTNESS);
+    };
+    dim().catch(() => undefined);
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') Brightness.setBrightnessAsync(ROUND_BRIGHTNESS).catch(() => undefined);
+      if (state === 'active') dim().catch(() => undefined);
     });
     return () => {
       left = true;
       subscription.remove();
-      Promise.resolve(deactivateKeepAwake(ROUND_KEEP_AWAKE_TAG)).catch(() => undefined);
       if (savedBrightness.current !== null) Brightness.setBrightnessAsync(savedBrightness.current).catch(() => undefined);
       savedBrightness.current = null;
     };
-  }, [screen]);
+  }, [dimRound, screen]);
+
+  // While the round screen is open, keep a GPS fix warm so logging a throw is instant and as
+  // accurate as the phone can manage, rather than waiting on a single cold reading.
+  useEffect(() => {
+    if (screen !== 'Round') return;
+    let subscription: Location.LocationSubscription | null = null;
+    let left = false;
+    (async () => {
+      const permission = await Location.getForegroundPermissionsAsync();
+      if (left || permission.status !== 'granted') return;
+      const started = await Location.watchPositionAsync({ accuracy: Location.Accuracy.Highest, distanceInterval: 1, timeInterval: 1000 }, (fix) => {
+        latestFix.current = fix;
+        setGpsAccuracy(fix.coords.accuracy === null ? null : Math.round(fix.coords.accuracy));
+      });
+      if (left) started.remove();
+      else subscription = started;
+    })().catch(() => undefined);
+    return () => {
+      left = true;
+      subscription?.remove();
+      latestFix.current = null;
+      setGpsAccuracy(null);
+    };
+  }, [locationAllowed, screen]);
 
   // Sync whenever the app comes back to the foreground.
   useEffect(() => {
@@ -1032,10 +1081,18 @@ export default function App() {
         report('Turn on Location Services, then log the throw again.');
         return null;
       }
-      const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: true });
+      // The round screen's warm fix when it's recent and good; otherwise a fresh reading, keeping
+      // whichever of the two is more accurate.
+      const accuracyOf = (reading: Location.LocationObject | null) => reading?.coords.accuracy ?? Infinity;
+      const warm = latestFix.current && nowMs() - latestFix.current.timestamp <= WARM_FIX_MAX_AGE_MS ? latestFix.current : null;
+      let fix = warm;
+      if (!fix || accuracyOf(fix) > GPS_GOOD_ACCURACY_M) {
+        const fresh = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest, mayShowUserSettingsDialog: true });
+        fix = fix && accuracyOf(fix) < accuracyOf(fresh) ? fix : fresh;
+      }
       const lie = { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
       const previous = previousLiePoint();
-      return { ...lie, altitude: fix.coords.altitude, feet: previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0 };
+      return { ...lie, altitude: fix.coords.altitude, accuracy: fix.coords.accuracy, feet: previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0 };
     } catch {
       report('Could not get a GPS fix. Wait a moment and try again.');
       return null;
@@ -1057,8 +1114,8 @@ export default function App() {
   };
 
   // Adds a throw to the round in progress. Returns a short description for confirmations.
-  const recordThrow = (point: { latitude: number; longitude: number; altitude: number | null; feet: number }, details: { type: ThrowType; disc: Disc; style: ThrowStyle; lie: Lie; quality: number | null }) => {
-    let { latitude, longitude, altitude, feet } = point;
+  const recordThrow = (point: { latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number }, details: { type: ThrowType; disc: Disc; style: ThrowStyle; lie: Lie; quality: number | null }) => {
+    let { latitude, longitude, altitude, accuracy, feet } = point;
     // A throw that went in is recorded at the basket, measured from the previous lie (or the tee),
     // rather than wherever the player was standing when they logged it.
     const basket = selectedHoleLayout?.basket;
@@ -1067,10 +1124,11 @@ export default function App() {
       latitude = basket.latitude;
       longitude = basket.longitude;
       altitude = basket.altitude ?? null;
+      accuracy = basket.accuracy;
       feet = previous ? Math.max(1, Math.round(feetBetween(previous, basket))) : 0;
     }
     const shot: Shot = {
-      x: 0.5, y: 0.5, feet, disc: details.disc, type: details.type, hole, courseId: selectedCourse?.id, latitude, longitude, altitude,
+      x: 0.5, y: 0.5, feet, disc: details.disc, type: details.type, hole, courseId: selectedCourse?.id, latitude, longitude, altitude, accuracy,
       style: details.style, lie: details.lie, ...(details.quality === null ? {} : { quality: details.quality, qualityMax: QUALITY_MAX }),
     };
     setShots((current) => [...current, shot]);
@@ -2194,7 +2252,7 @@ export default function App() {
                   ['TO PAR', roundScore.toPar === null ? '—' : formatScoreToPar(roundScore.toPar)],
                   ['THRU', String(roundScore.holesCompleted)],
                 ] : []),
-              ].map(([label, value]) => <View key={label} style={styles.scoreStripItem}><Text style={styles.scoreStripLabel}>{label}</Text><Text style={styles.scoreStripValue}>{value}</Text></View>)}
+              ].map(([label, value]) => <View key={label} style={styles.scoreStripItem}><Text style={styles.scoreStripLabel} numberOfLines={1} adjustsFontSizeToFit>{label}</Text><Text style={styles.scoreStripValue}>{value}</Text></View>)}
             </View>
 
             {roundMapRegion ? <View style={styles.roundMapFrame}>
@@ -2217,7 +2275,7 @@ export default function App() {
               </View>}
             </View>}
 
-            <HoldPressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then press and hold</Text></HoldPressable>
+            <HoldPressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then press and hold{gpsAccuracy === null ? '' : `  ·  GPS ±${gpsAccuracy} m`}</Text></HoldPressable>
             {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
 
             <View style={styles.latestRow}>
@@ -2226,6 +2284,7 @@ export default function App() {
             </View>
             <HoldPressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></HoldPressable>
             <HoldPressable onPress={endSession} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></HoldPressable>
+            <HoldPressable onPress={() => setDimRound((current) => !current)} style={styles.endSessionButton} accessibilityRole="switch" accessibilityLabel="Dim the screen during rounds" accessibilityState={{ checked: dimRound }}><Text style={styles.dimToggleText}>SCREEN DIMMING: {dimRound ? 'ON' : 'OFF'}</Text></HoldPressable>
             {selectedCourse ? <View style={styles.roundCourseInfo}>
               <HoldPressable onPress={() => setShowCourseInfo((current) => !current)} style={styles.roundCourseInfoHeader} accessibilityRole="button" accessibilityState={{ expanded: showCourseInfo }}>
                 <Text style={styles.sectionTitle}>Course info</Text><Text style={styles.menuArrow}>{showCourseInfo ? '−' : '+'}</Text>
@@ -2484,7 +2543,8 @@ export default function App() {
           <View style={styles.sheetBackdrop}>
             <View style={styles.sheet}>
               <View style={styles.controlHeading}><Text style={styles.controlTitle}>Log throw {score + 1}</Text><Text style={styles.controlStep}>0{logStep} / 04</Text></View>
-              <Text style={styles.sheetDistance}>{pendingLie?.feet ? `${pendingLie.feet} ft from ${activeShots.some((shot) => shot.latitude !== undefined) ? 'your previous lie' : 'the tee'}` : 'Distance unavailable: this hole’s tee is not mapped'}</Text>
+              <Text style={styles.sheetDistance}>{pendingLie?.feet ? `${pendingLie.feet} ft from ${activeShots.some((shot) => shot.latitude !== undefined) ? 'your previous lie' : 'the tee'}` : 'Distance unavailable: this hole’s tee is not mapped'}{pendingLie?.accuracy == null ? '' : `  ·  GPS ±${Math.round(pendingLie.accuracy)} m`}</Text>
+              {pendingLie?.accuracy != null && pendingLie.accuracy > GPS_POOR_ACCURACY_M && <Text style={styles.gpsWarning}>GPS is only accurate to about {Math.round(pendingLie.accuracy)} m here, so this distance may be off. For a better reading, cancel and log the throw again in a few seconds, away from trees if you can.</Text>}
               {logStep === 1 ? <>
                 <Text style={styles.fieldLabel}>WHICH DISC?</Text>
                 <View style={styles.sheetOptions}>
@@ -2647,7 +2707,7 @@ const styles = StyleSheet.create({
   editFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 },
   editFooterActions: { flexDirection: 'row' },
   saveButton: { backgroundColor: GREEN, borderColor: GREEN, marginLeft: 8 },
-  saveButtonText: { color: '#e6ece8', fontSize: 8, fontWeight: '800' },
+  saveButtonText: { color: '#e6ece8', fontSize: 12, fontWeight: '800' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 10, padding: 12, borderRadius: 8, backgroundColor: '#101412', borderWidth: 1, borderColor: '#26302b' },
   toggleCopy: { flex: 1, marginRight: 12 },
   toggleAction: { alignSelf: 'flex-start', marginTop: 0, marginBottom: 16 },
@@ -2747,9 +2807,9 @@ const styles = StyleSheet.create({
   parOptionSelected: { backgroundColor: GREEN, borderColor: GREEN },
   parOptionText: { color: INK, fontFamily: 'Georgia', fontSize: 16 },
   parOptionTextSelected: { color: '#e6ece8' },
-  holeDistanceLabel: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
+  holeDistanceLabel: { color: GREEN, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
   holeDistanceValue: { color: INK, fontFamily: 'Georgia', fontSize: 20, fontVariant: ['tabular-nums'] },
-  gpsMessage: { color: GREEN, fontSize: 9, lineHeight: 14, marginTop: 10 },
+  gpsMessage: { color: GREEN, fontSize: 12, lineHeight: 17, marginTop: 10 },
   holeWizard: { flex: 1, paddingHorizontal: 23, paddingBottom: 14 },
   wizardProgress: { height: 38, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   wizardMappedCount: { marginTop: 4 },
@@ -2765,7 +2825,7 @@ const styles = StyleSheet.create({
   mapScaleWidth: { color: MUTED, fontSize: 7, fontWeight: '700', marginTop: 2 },
   mapUnavailable: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#0f1a14' },
   mapUnavailableTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17, textAlign: 'center' },
-  mapUnavailableText: { color: MUTED, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 8 },
+  mapUnavailableText: { color: MUTED, fontSize: 12, lineHeight: 17, textAlign: 'center', marginTop: 8 },
   captureButtons: { flexDirection: 'row', marginTop: 10 },
   captureButton: { flex: 1, minHeight: 78, paddingHorizontal: 9, paddingVertical: 10, borderRadius: 7, borderWidth: 1, borderColor: '#26302b', backgroundColor: '#101412', marginRight: 8 },
   captureButtonSaved: { borderColor: GREEN, backgroundColor: '#16231c' },
@@ -2820,27 +2880,27 @@ const styles = StyleSheet.create({
   holeSelector: { alignItems: 'center' },
   roundHoleNav: { flexDirection: 'row', alignItems: 'center' },
   roundHoleArrow: { width: 34, height: 40, borderWidth: 1, borderColor: '#26302b', borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
-  holeLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
+  holeLabel: { color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
   holeNumber: { color: INK, fontFamily: 'Georgia', fontSize: 20 },
   holeTotal: { color: MUTED, fontFamily: 'Arial', fontSize: 11 },
   chevron: { color: GREEN, fontFamily: 'Arial', fontSize: 12 },
   sectionTitle: { color: INK, fontFamily: 'Georgia', fontSize: 18 },
   scoreStrip: { flexDirection: 'row', backgroundColor: '#0f1a14', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 4, marginTop: 6, marginBottom: 10 },
   scoreStripItem: { flex: 1, alignItems: 'center' },
-  scoreStripLabel: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 },
+  scoreStripLabel: { color: MUTED, fontSize: 10, fontWeight: '800', letterSpacing: 0.2 },
   scoreStripValue: { color: INK, fontFamily: 'Georgia', fontSize: 16, marginTop: 2, fontVariant: ['tabular-nums'] },
   roundMapFrame: { height: 300, marginTop: 0, marginBottom: 17, borderRadius: 9, overflow: 'hidden', backgroundColor: '#0d1410', position: 'relative' },
   shotMarker: { width: 22, height: 22, borderRadius: 12, borderWidth: 2, borderColor: '#fff', backgroundColor: '#b8622c', alignItems: 'center', justifyContent: 'center' },
   shotPinText: { color: '#e6ece8', fontSize: 9, fontWeight: '900' },
   boardCaption: { position: 'absolute', bottom: 11, left: 12, right: 12, flexDirection: 'row', justifyContent: 'space-between' },
-  boardCaptionText: { color: '#7d8981', fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
-  boardScale: { color: '#6b766f', fontSize: 7, fontWeight: '700' },
+  boardCaptionText: { color: '#7d8981', fontSize: 9, fontWeight: '800', letterSpacing: 0.7 },
+  boardScale: { color: '#6b766f', fontSize: 9, fontWeight: '700' },
   basketDistances: { flexDirection: 'column', alignItems: 'stretch' },
   basketDistanceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingVertical: 2 },
   roundHoleDistance: { marginTop: -5, marginBottom: 15 },
   logThrowButton: { minHeight: 64, backgroundColor: '#b8622c', borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
   logThrowButtonText: { color: '#e6ece8', fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
-  logThrowButtonHint: { color: '#f3dccb', fontSize: 9, marginTop: 4 },
+  logThrowButtonHint: { color: '#f3dccb', fontSize: 12, marginTop: 4 },
   sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.65)' },
   sheet: { backgroundColor: PAPER, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, paddingBottom: 34, width: '100%', maxWidth: 560, alignSelf: 'center' },
   sheetDistance: { color: GREEN, fontSize: 11, fontWeight: '700', marginTop: -4, marginBottom: 16 },
@@ -2853,40 +2913,42 @@ const styles = StyleSheet.create({
   lieButton: { flex: 0, width: '31%', marginBottom: 7 },
   obButton: { borderColor: '#6e3b31' },
   obText: { color: '#d07a68' },
-  obPenaltyText: { color: '#d07a68', fontSize: 7, fontWeight: '800', marginTop: 2 },
+  obPenaltyText: { color: '#d07a68', fontSize: 11, fontWeight: '800', marginTop: 2 },
   qualityButton: { height: 58 },
   qualityValue: { color: INK, fontFamily: 'Georgia', fontSize: 19 },
-  qualityLabel: { color: MUTED, fontSize: 8, fontWeight: '700', marginTop: 2 },
+  qualityLabel: { color: MUTED, fontSize: 11, fontWeight: '700', marginTop: 2 },
   sheetFooter: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginTop: 18 },
   pickerSheet: { maxHeight: '80%' },
   pickerList: { flexGrow: 0 },
   sheetFooterButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 14, paddingVertical: 10 },
   controlHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   controlTitle: { color: INK, fontFamily: 'Georgia', fontSize: 17 },
-  controlStep: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 },
-  fieldLabel: { color: MUTED, fontSize: 8, fontWeight: '800', letterSpacing: 0.9 },
+  controlStep: { color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
+  fieldLabel: { color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 0.9 },
   chipRow: { flexDirection: 'row', paddingTop: 7, paddingBottom: 2 },
   chip: { paddingHorizontal: 12, height: 30, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', marginRight: 7, justifyContent: 'center' },
   chipSelected: { backgroundColor: GREEN, borderColor: GREEN },
-  chipText: { color: '#a9b4ad', fontSize: 10, fontWeight: '700' },
+  chipText: { color: '#a9b4ad', fontSize: 12, fontWeight: '700' },
   chipTextSelected: { color: '#e6ece8' },
   typeLabel: { marginTop: 9 },
   typeRow: { flexDirection: 'row', marginTop: 7 },
   typeButton: { flex: 1, height: 31, borderRadius: 6, borderWidth: 1, borderColor: '#26302b', alignItems: 'center', justifyContent: 'center', marginRight: 7 },
   typeButtonSelected: { backgroundColor: '#2a1d12', borderColor: '#7a5634' },
-  typeText: { color: '#a9b4ad', fontSize: 10, fontWeight: '700' },
+  typeText: { color: '#a9b4ad', fontSize: 12, fontWeight: '700' },
   typeTextSelected: { color: '#e0a070' },
   latestRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#26302b' },
-  latestEyebrow: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.8 },
+  latestEyebrow: { color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
   latestText: { color: INK, fontSize: 11, fontWeight: '600', marginTop: 4 },
   undoButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 10, paddingVertical: 7 },
-  undoText: { color: MUTED, fontSize: 8, fontWeight: '800' },
+  undoText: { color: MUTED, fontSize: 12, fontWeight: '800' },
   finishButton: { height: 46, backgroundColor: GREEN, borderRadius: 7, marginTop: 12, alignItems: 'center', justifyContent: 'center' },
+  dimToggleText: { color: MUTED, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  gpsWarning: { color: '#d07a68', fontSize: 12, lineHeight: 17, marginTop: -10, marginBottom: 14 },
   endSessionButton: { height: 42, borderRadius: 7, borderWidth: 1, borderColor: '#26302b', marginTop: 8, alignItems: 'center', justifyContent: 'center' },
-  endSessionText: { color: '#d07a68', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
-  finishButtonText: { color: '#e6ece8', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  endSessionText: { color: '#d07a68', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  finishButtonText: { color: '#e6ece8', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
   finishArrow: { fontSize: 14 },
-  footnote: { textAlign: 'center', color: '#6b766f', fontSize: 8, marginTop: 10, marginBottom: 2 },
+  footnote: { textAlign: 'center', color: MUTED, fontSize: 11, marginTop: 10, marginBottom: 2 },
   bottomBar: { height: 36, borderTopWidth: 1, borderTopColor: '#26302b', paddingHorizontal: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bottomStatus: { color: MUTED, fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
   statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#6f9a68', marginRight: 5 },
