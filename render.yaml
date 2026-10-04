@@ -12,6 +12,8 @@ services:
     region: virginia
     # Only changes under server/ trigger a deploy; docs and tests there don't change the running API.
     rootDir: server
+    # Deploy only after the GitHub Actions checks (.github/workflows/ci.yml) pass.
+    autoDeployTrigger: checksPass
     buildFilter:
       ignoredPaths:
         - "server/**/*.md"
