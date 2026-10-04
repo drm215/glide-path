@@ -66,6 +66,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await cleanup();
+  // renderRouter switches to fake timers; drop any still pending so none fire after the test.
+  jest.clearAllTimers();
   jest.useRealTimers();
 });
 
@@ -77,9 +79,11 @@ const renderApp = async (url = '/') => {
 const seed = (values: Record<string, unknown>) =>
   AsyncStorage.multiSet(Object.entries(values).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
 
-const stored = async <T,>(key: string): Promise<T | null> => {
-  const raw = await AsyncStorage.getItem(key);
-  return raw === null ? null : JSON.parse(raw) as T;
+// Reads the storage mock's memory directly, so checks can run inside a synchronous waitFor
+// (an async one can start a new check before the last one ends, overlapping React's act()).
+const stored = <T,>(key: string): T | null => {
+  const raw = (AsyncStorage as unknown as { __INTERNAL_MOCK_STORAGE__: Record<string, string | undefined> }).__INTERNAL_MOCK_STORAGE__[key];
+  return raw == null ? null : JSON.parse(raw) as T;
 };
 
 // Buttons during a round need a press-and-hold.
@@ -128,8 +132,8 @@ test('moves past sessions saved with the round in progress to their own key', as
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.round]: { shots: [], hole: 1, mode: 'Round', history: [pastRound] } });
   await renderApp();
   await screen.findByText('Ready when you are.');
-  await waitFor(async () => expect(await stored<SessionArchive[]>(KEYS.history)).toHaveLength(1));
-  await waitFor(async () => expect(await stored<{ history?: unknown }>(KEYS.round)).not.toHaveProperty('history'));
+  await waitFor(() => expect(stored<SessionArchive[]>(KEYS.history)).toHaveLength(1));
+  await waitFor(() => expect(stored<{ history?: unknown }>(KEYS.round)).not.toHaveProperty('history'));
 });
 
 test('plays a round: pick the course, log a throw into the basket, end, and see the summary', async () => {
@@ -144,8 +148,8 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
   await hold('Backhand');
   await hold('Basket');
   expect(await screen.findByText(/Hole 1 complete in 1 stroke/)).toBeTruthy();
-  await waitFor(async () => {
-    const round = await stored<{ shots: { lie: string; accuracy: number; disc: string; type: string; hole: number }[]; hole: number }>(KEYS.round);
+  await waitFor(() => {
+    const round = stored<{ shots: { lie: string; accuracy: number; disc: string; type: string; hole: number }[]; hole: number }>(KEYS.round);
     expect(round?.shots).toEqual([expect.objectContaining({ lie: 'Basket', disc: 'Buzzz', type: 'Drive', hole: 1, accuracy: 3 })]);
     expect(round?.hole).toBe(2);
   });
@@ -153,8 +157,8 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
   await hold('END ROUND');
   await pressAlertButton('End');
   expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
-  await waitFor(async () => {
-    const history = await stored<SessionArchive[]>(KEYS.history);
+  await waitFor(() => {
+    const history = stored<SessionArchive[]>(KEYS.history);
     expect(history).toHaveLength(1);
     expect(history?.[0]).toMatchObject({ courseId: 'course-1', mode: 'Round' });
   });
@@ -171,7 +175,7 @@ test('the round screen dims, and the dimming switch is saved and restores bright
   await hold('SCREEN DIMMING: ON');
   expect(await screen.findByText('SCREEN DIMMING: OFF')).toBeTruthy();
   await waitFor(() => expect(Brightness.setBrightnessAsync).toHaveBeenLastCalledWith(0.8));
-  await waitFor(async () => expect(await stored(KEYS.settings)).toEqual({ dimRound: false }));
+  await waitFor(() => expect(stored(KEYS.settings)).toEqual({ dimRound: false }));
 });
 
 test('maps a hole: save the tee and basket where the player stands, set par, add a hole, finish', async () => {
@@ -186,13 +190,13 @@ test('maps a hole: save the tee and basket where the player stands, set par, add
   location.position = { latitude: 41.001, longitude: -76 };
   await fireEvent.press(await screen.findByText('SAVE LOCATION'));
   await fireEvent.press(screen.getByLabelText('Par 3'));
-  await waitFor(async () => {
-    const [course] = (await stored<Course[]>(KEYS.courses))!;
+  await waitFor(() => {
+    const [course] = (stored<Course[]>(KEYS.courses))!;
     expect(course.layouts?.[0]).toMatchObject({ tee: { latitude: 41 }, basket: { latitude: 41.001 }, par: 3 });
   });
   await press('+ ADD HOLE');
   expect(await screen.findByText('Hole 02.')).toBeTruthy();
-  await waitFor(async () => expect((await stored<Course[]>(KEYS.courses))?.[0].holes).toBe(2));
+  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.[0].holes).toBe(2));
   await press('FINISH ✓');
   expect(await screen.findByText('Course builder.')).toBeTruthy();
 });
@@ -207,8 +211,8 @@ test('edits a throw in a past round: marking it made moves it to the basket and 
   expect(await screen.findByText('Edit throw')).toBeTruthy();
   await press('Made');
   await press('SAVE');
-  await waitFor(async () => {
-    const [saved] = (await stored<SessionArchive[]>(KEYS.history))!;
+  await waitFor(() => {
+    const [saved] = (stored<SessionArchive[]>(KEYS.history))!;
     expect(saved.shots[1]).toMatchObject({ lie: 'Basket', latitude: 40.001, accuracy: 3 });
   });
 });
@@ -232,8 +236,8 @@ test('resumes a past round from its summary at the next unfinished hole', async 
   await press('Cedar Grove');
   await press(await screen.findByText('RESUME ROUND ▶').then(() => 'RESUME ROUND ▶'));
   expect(await screen.findByText('Resumed on hole 2.')).toBeTruthy();
-  await waitFor(async () => expect(await stored(KEYS.history)).toEqual([]));
-  await waitFor(async () => expect(await stored<{ shots: unknown[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 2, shots: pastRound.shots }));
+  await waitFor(() => expect(stored(KEYS.history)).toEqual([]));
+  await waitFor(() => expect(stored<{ shots: unknown[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 2, shots: pastRound.shots }));
 });
 
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
@@ -251,7 +255,7 @@ test('creates a course from the new-course flow', async () => {
   await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove'), 'Maple Hill');
   await press('NEXT: DETAILS ›');
   expect(await screen.findByText('Details.')).toBeTruthy();
-  await waitFor(async () => expect((await stored<Course[]>(KEYS.courses))?.map((course) => course.name)).toContain('Maple Hill'));
+  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.map((course) => course.name)).toContain('Maple Hill'));
 });
 
 test('adds a disc to the bag by name', async () => {
@@ -260,7 +264,7 @@ test('adds a disc to the bag by name', async () => {
   await press(await screen.findByText('Bag builder').then(() => 'Bag builder'));
   await fireEvent.changeText(screen.getByPlaceholderText('Disc name or mold'), 'Destroyer');
   await press('ADD');
-  await waitFor(async () => expect(await stored(KEYS.bag)).toEqual(['Destroyer']));
+  await waitFor(() => expect(stored(KEYS.bag)).toEqual(['Destroyer']));
 });
 
 test('stats summarize finished rounds', async () => {
@@ -277,7 +281,7 @@ test('deleting a past round removes it from history', async () => {
   await press(await screen.findByText('Rounds').then(() => 'Rounds'));
   await fireEvent.press(screen.getByLabelText(/^Delete Cedar Grove round/));
   await pressAlertButton('Delete round');
-  await waitFor(async () => expect(await stored(KEYS.history)).toEqual([]));
+  await waitFor(() => expect(stored(KEYS.history)).toEqual([]));
 });
 
 test('signing in uploads this phone’s data and keeps the token in the keychain', async () => {
@@ -297,7 +301,7 @@ test('signing in uploads this phone’s data and keeps the token in the keychain
   expect(upload.courses.map((course) => course.clientId)).toEqual(['course-1']);
   expect(upload.rounds.map((round) => round.clientId)).toEqual([pastRound.id]);
   expect(await SecureStore.getItemAsync('glide-path-token')).toBe('token-1');
-  await waitFor(async () => expect(await stored(KEYS.lastAccount)).toMatchObject({ id: 'u1', email: 'pat@example.com' }));
+  await waitFor(() => expect(stored(KEYS.lastAccount)).toMatchObject({ id: 'u1', email: 'pat@example.com' }));
 });
 
 test('signing in to a different account asks first, and cancelling stays signed out', async () => {
@@ -309,11 +313,10 @@ test('signing in to a different account asks first, and cancelling stays signed 
   await fireEvent.press(await screen.findByLabelText('Sign in'));
   await fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'new@example.com');
   await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'long enough');
-  // Signing in waits on the question, so answer it before awaiting the press.
-  const signingIn = press('SIGN IN');
-  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Data from another account', expect.stringContaining('old@example.com'), expect.anything(), expect.anything()));
-  await pressAlertButton('Cancel');
-  await signingIn;
+  // Signing in waits on the question, so answer it as soon as it's asked.
+  alertSpy.mockImplementationOnce((_title, _message, buttons) => { buttons?.find((button) => button.text === 'Cancel')?.onPress?.(); });
+  await press('SIGN IN');
+  expect(alertSpy).toHaveBeenCalledWith('Data from another account', expect.stringContaining('old@example.com'), expect.anything(), expect.anything());
   expect(await screen.findByText('Sign in.')).toBeTruthy();
   expect(requests.some((request) => request.path === '/api/sync')).toBe(false);
   expect(await SecureStore.getItemAsync('glide-path-token')).toBeNull();
@@ -330,5 +333,5 @@ test('finds a published course and adds it to my courses', async () => {
   await press('SEARCH');
   await press(await screen.findByText('Oak Run').then(() => 'Oak Run'));
   await press(await screen.findByText('ADD TO MY COURSES').then(() => 'ADD TO MY COURSES'));
-  await waitFor(async () => expect((await stored<Course[]>(KEYS.courses))?.find((course) => course.name === 'Oak Run')).toMatchObject({ sourceUid: 'pub-1' }));
+  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.find((course) => course.name === 'Oak Run')).toMatchObject({ sourceUid: 'pub-1' }));
 });
