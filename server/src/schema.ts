@@ -55,6 +55,9 @@ CREATE INDEX IF NOT EXISTS rounds_owner_version ON rounds (owner_id, version);
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS layout_name text;
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS extra_layouts jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE rounds ADD COLUMN IF NOT EXISTS layout_id text;
+-- Sign-in tokens carry the version they were issued with; raising it (on password reset)
+-- signs out every existing session.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS bags (
   owner_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

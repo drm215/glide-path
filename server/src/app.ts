@@ -35,7 +35,7 @@ const DEFAULT_TILE_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics,
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const LEAFLET_DIR = dirname(createRequire(import.meta.url).resolve('leaflet/dist/leaflet.js'));
 
-type UserRow = { id: string; email: string; password_hash: string; display_name: string };
+type UserRow = { id: string; email: string; password_hash: string; display_name: string; token_version: number };
 
 const publicUser = (user: UserRow) => ({ id: user.id, email: user.email, displayName: user.display_name });
 
@@ -56,7 +56,7 @@ export const createApp = ({
   // Reset codes are stored as keyed hashes, so a database leak doesn't reveal live codes.
   const hashResetCode = (code: string) => createHmac('sha256', authSecret).update(`password-reset:${code}`).digest();
   const app = express();
-  const { issueToken, requireUser } = createAuth(authSecret);
+  const { issueToken, requireUser } = createAuth(authSecret, db);
   const tileOrigin = new URL(tileUrl.replace(/[{}]/g, '')).origin;
 
   app.set('trust proxy', 1);
@@ -102,7 +102,7 @@ export const createApp = ({
       'INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING *',
       [email, await hashPassword(body.password), body.displayName],
     );
-    res.status(201).json({ token: await issueToken(rows[0].id), user: publicUser(rows[0]) });
+    res.status(201).json({ token: await issueToken(rows[0].id, rows[0].token_version), user: publicUser(rows[0]) });
   });
 
   app.post('/api/auth/login', limitAuth, async (req, res) => {
@@ -113,7 +113,7 @@ export const createApp = ({
       res.status(401).json({ error: 'Email or password is incorrect.' });
       return;
     }
-    res.json({ token: await issueToken(user.id), user: publicUser(user) });
+    res.json({ token: await issueToken(user.id, user.token_version), user: publicUser(user) });
   });
 
   // Emails a 6-digit reset code. Always answers the same way whether or not the email has an
@@ -182,8 +182,12 @@ export const createApp = ({
       return;
     }
     await db.query('UPDATE password_resets SET used = true WHERE user_id = $1', [user.id]);
-    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await hashPassword(body.password), user.id]);
-    res.json({ token: await issueToken(user.id), user: publicUser(user) });
+    // Raising token_version signs out every other session, in case the old password was stolen.
+    const { rows: updated } = await db.query<{ token_version: number }>(
+      'UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2 RETURNING token_version',
+      [await hashPassword(body.password), user.id],
+    );
+    res.json({ token: await issueToken(user.id, updated[0].token_version), user: publicUser(user) });
   });
 
   app.get('/api/me', requireUser, async (req, res) => {

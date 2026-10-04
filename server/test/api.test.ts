@@ -81,6 +81,7 @@ describe('Glide Path API', () => {
       assert.equal((await server.request('GET', '/api/public/courses?q=Vanishing')).body.courses.length, 1);
       assert.equal((await server.request('DELETE', '/api/me', { token })).status, 204);
       assert.equal((await server.request('GET', '/api/public/courses?q=Vanishing')).body.courses.length, 0);
+      assert.equal((await server.request('POST', '/api/sync', { token, body: { courses: [] } })).status, 401, 'its token no longer works');
     });
   });
 

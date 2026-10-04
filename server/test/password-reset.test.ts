@@ -35,6 +35,18 @@ describe('password reset', () => {
     assert.equal((await reset('forgetful@example.com', code)).status, 400, 'a code works only once');
   });
 
+  test('resetting signs out every other session', async () => {
+    const oldToken = await server.register('stolen@example.com');
+    const me = (token: string) => server.request('GET', '/api/me', { token });
+    assert.equal((await me(oldToken)).status, 200);
+    await forgot('stolen@example.com');
+    const done = await reset('stolen@example.com', lastCode('stolen@example.com'));
+    assert.equal((await me(oldToken)).status, 401, 'the old token is refused');
+    assert.equal((await me(done.body.token)).status, 200, 'the new token works');
+    const relogin = await login('stolen@example.com', 'brand new password');
+    assert.equal((await me(relogin.body.token)).status, 200);
+  });
+
   test('answers the same for unknown emails and sends nothing', async () => {
     const before = server.sentCodes.length;
     const response = await forgot('nobody@example.com');

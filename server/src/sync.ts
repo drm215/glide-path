@@ -70,6 +70,10 @@ const upsertBag = (tx: Queryable, ownerId: string, bag: BagRecord) =>
 export type SyncInput = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag?: BagRecord };
 
 export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) => {
+  // One sync per user at a time. Versions are taken when rows are written but become visible at
+  // commit, so two overlapping syncs could commit out of order; a client that saw the later
+  // version would move its cursor past the earlier one and never receive it.
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ownerId]);
   for (const course of input.courses) await upsertCourse(tx, ownerId, course);
   for (const round of input.rounds) await upsertRound(tx, ownerId, round);
   if (input.bag) await upsertBag(tx, ownerId, input.bag);
