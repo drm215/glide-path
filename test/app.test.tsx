@@ -140,6 +140,68 @@ test('the round screen dims, and the dimming switch is saved and restores bright
   await waitFor(async () => expect(await stored(KEYS.settings)).toEqual({ dimRound: false }));
 });
 
+test('maps a hole: save the tee and basket where the player stands, set par, add a hole, finish', async () => {
+  await seed({ [KEYS.courses]: [{ ...cedarGrove, holes: 1, layouts: [{ tee: null, basket: null }] }] });
+  await render(<App />);
+  await press(await screen.findByText('Course builder').then(() => 'Course builder'));
+  await press('MAP SELECTED COURSE ↗');
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+  const location = jest.requireMock<{ __state: { position: { latitude: number; longitude: number } } }>('expo-location').__state;
+  location.position = { latitude: 41, longitude: -76 };
+  await fireEvent.press(screen.getAllByText('SAVE LOCATION')[0]);
+  location.position = { latitude: 41.001, longitude: -76 };
+  await fireEvent.press(await screen.findByText('SAVE LOCATION'));
+  await fireEvent.press(screen.getByLabelText('Par 3'));
+  await waitFor(async () => {
+    const [course] = (await stored<Course[]>(KEYS.courses))!;
+    expect(course.layouts?.[0]).toMatchObject({ tee: { latitude: 41 }, basket: { latitude: 41.001 }, par: 3 });
+  });
+  await press('+ ADD HOLE');
+  expect(await screen.findByText('Hole 02.')).toBeTruthy();
+  await waitFor(async () => expect((await stored<Course[]>(KEYS.courses))?.[0].holes).toBe(2));
+  await press('FINISH ✓');
+  expect(await screen.findByText('Course builder.')).toBeTruthy();
+});
+
+test('edits a throw in a past round: marking it made moves it to the basket and remeasures', async () => {
+  const round: SessionArchive = { ...pastRound, shots: [pastRound.shots[0], { ...pastRound.shots[1], lie: 'Missed', latitude: 40.0009 }] };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [round] });
+  await render(<App />);
+  await press(await screen.findByText('Rounds').then(() => 'Rounds'));
+  await press('Cedar Grove');
+  await fireEvent.press(await screen.findByLabelText('Edit throw 2 on hole 1'));
+  expect(await screen.findByText('Edit throw')).toBeTruthy();
+  await press('Made');
+  await press('SAVE');
+  await waitFor(async () => {
+    const [saved] = (await stored<SessionArchive[]>(KEYS.history))!;
+    expect(saved.shots[1]).toMatchObject({ lie: 'Basket', latitude: 40.001, accuracy: 3 });
+  });
+});
+
+test('practice sessions start from the practice screen and end back home', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove] });
+  await render(<App />);
+  await press(await screen.findByText('Practice').then(() => 'Practice'));
+  await press('Putting');
+  await press('START PUTTING PRACTICE ↗');
+  expect(await screen.findByText('PUTTING PRACTICE')).toBeTruthy();
+  await hold('END PRACTICE');
+  await pressAlertButton('End');
+  expect(await screen.findByText('Ready when you are.')).toBeTruthy();
+});
+
+test('resumes a past round from its summary at the next unfinished hole', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
+  await render(<App />);
+  await press(await screen.findByText('Rounds').then(() => 'Rounds'));
+  await press('Cedar Grove');
+  await press(await screen.findByText('RESUME ROUND ▶').then(() => 'RESUME ROUND ▶'));
+  expect(await screen.findByText('Resumed on hole 2.')).toBeTruthy();
+  await waitFor(async () => expect(await stored(KEYS.history)).toEqual([]));
+  await waitFor(async () => expect(await stored<{ shots: unknown[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 2, shots: pastRound.shots }));
+});
+
 test('creates a course from the new-course flow', async () => {
   await render(<App />);
   await press(await screen.findByText('Course builder').then(() => 'Course builder'));
