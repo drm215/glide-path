@@ -42,7 +42,7 @@ import {
 } from './lib/api';
 import { guessDisc, guessThrowType, placeMadeThrowsAtBasket, remeasureHole, suggestDiscs } from './lib/rounds';
 import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, roundScore as statsRoundScore, summarizeRounds, type GroupStats, type StatsRound } from './lib/round-stats';
-import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData } from './lib/sync';
+import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, sendInBatches, type SyncAccount, type SyncData } from './lib/sync';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from './lib/layouts';
 import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, GpsPoint, HoleLayout, Lie, SessionArchive, Shot, ThrowStyle, ThrowType, Tombstone } from './lib/types';
 
@@ -671,20 +671,22 @@ export default function App() {
     syncInFlight.current = true;
     setSyncing(true);
     const startedAt = nowMs();
-    const body = buildSyncRequest(data, current);
     try {
-      const result = await syncWithServer(current.token, body);
-      setCourses((local) => mergeCourses(local, result.courses));
-      setHistory((local) => mergeRounds(local, result.rounds));
-      setDeletedCourses((local) => clearSentTombstones(local, body.courses));
-      setDeletedRounds((local) => clearSentTombstones(local, body.rounds));
-      if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
-        setBag(result.bag.discs);
-        setBagDetails(result.bag.details);
-        setBagWeights(result.bag.weights ?? {});
-        setBagUpdatedAt(result.bag.updatedAt);
-      }
-      setAccount((acct) => (acct?.token === current.token ? { ...acct, cursor: result.cursor, pushedThrough: startedAt, lastSyncedAt: nowMs() } : acct));
+      // Each batch's changes are kept as it arrives; local edits count as uploaded only once every batch is in.
+      await sendInBatches(buildSyncRequest(data, current), (batch) => syncWithServer(current.token, batch), (batch, result) => {
+        setCourses((local) => mergeCourses(local, result.courses));
+        setHistory((local) => mergeRounds(local, result.rounds));
+        setDeletedCourses((local) => clearSentTombstones(local, batch.courses));
+        setDeletedRounds((local) => clearSentTombstones(local, batch.rounds));
+        if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
+          setBag(result.bag.discs);
+          setBagDetails(result.bag.details);
+          setBagWeights(result.bag.weights ?? {});
+          setBagUpdatedAt(result.bag.updatedAt);
+        }
+        setAccount((acct) => (acct?.token === current.token ? { ...acct, cursor: result.cursor } : acct));
+      });
+      setAccount((acct) => (acct?.token === current.token ? { ...acct, pushedThrough: startedAt, lastSyncedAt: nowMs() } : acct));
       setSyncError('');
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {

@@ -222,3 +222,52 @@ export const mergeRounds = (current: SessionArchive[], remote: RoundRecord[]): S
 // Deletions that were part of this upload no longer need remembering; later ones stay pending.
 export const clearSentTombstones = (current: Tombstone[], sent: { clientId: string; updatedAt: number; deleted?: boolean }[]) =>
   current.filter((tombstone) => !sent.some((record) => record.deleted && record.clientId === tombstone.clientId && record.updatedAt === tombstone.updatedAt));
+
+// The server accepts up to 5 MB, 500 courses and 2,000 rounds per request. Sending everything at
+// once would fail on every retry for a large history, so uploads go in batches well under that.
+const BATCH_MAX_BYTES = 1_000_000;
+const BATCH_MAX_RECORDS = 100;
+
+// Splits a request into batches by record count and size. The bag goes in the first batch. There's
+// always at least one batch, since an empty upload still downloads changes.
+export const splitSyncRequest = (request: SyncRequest): SyncRequest[] => {
+  const batches: SyncRequest[] = [];
+  let batch: SyncRequest = { cursor: request.cursor, courses: [], rounds: [], bag: request.bag };
+  let bytes = request.bag ? JSON.stringify(request.bag).length : 0;
+  const makeRoom = (size: number) => {
+    const count = batch.courses.length + batch.rounds.length;
+    if (count && (count >= BATCH_MAX_RECORDS || bytes + size > BATCH_MAX_BYTES)) {
+      batches.push(batch);
+      batch = { cursor: request.cursor, courses: [], rounds: [] };
+      bytes = 0;
+    }
+    bytes += size;
+  };
+  for (const course of request.courses) {
+    makeRoom(JSON.stringify(course).length);
+    batch.courses.push(course);
+  }
+  for (const round of request.rounds) {
+    makeRoom(JSON.stringify(round).length);
+    batch.rounds.push(round);
+  }
+  batches.push(batch);
+  return batches;
+};
+
+// Sends a request batch by batch, each with the cursor the previous one returned. `apply` merges
+// each response as it arrives, so if a later batch fails, the earlier ones' progress is kept and
+// they're simply sent again next time. Returns the final cursor.
+export const sendInBatches = async (
+  request: SyncRequest,
+  send: (batch: SyncRequest) => Promise<SyncResponse>,
+  apply: (batch: SyncRequest, result: SyncResponse) => void,
+) => {
+  let cursor = request.cursor;
+  for (const batch of splitSyncRequest(request)) {
+    const result = await send({ ...batch, cursor });
+    apply(batch, result);
+    cursor = result.cursor;
+  }
+  return cursor;
+};

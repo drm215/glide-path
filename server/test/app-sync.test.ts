@@ -1,7 +1,7 @@
 // Runs the iPhone app's own sync code (lib/sync.ts) against the real API, as two devices on one account.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, type SyncAccount, type SyncData, type SyncResponse } from '../../lib/sync.ts';
+import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, sendInBatches, splitSyncRequest, type SyncAccount, type SyncData, type SyncResponse } from '../../lib/sync.ts';
 import type { Course, SessionArchive } from '../../lib/types.ts';
 import { startTestServer } from './helpers.ts';
 
@@ -14,23 +14,30 @@ const emptyData = (): SyncData => ({ courses: [], history: [], bag: [], bagDetai
 let clock = 1_000;
 const tick = () => (clock += 1_000);
 
-// Mirrors App.tsx's runSync: upload, then merge the response.
+// Mirrors App.tsx's runSync: upload in batches, merging each response as it arrives.
+// Returns the whole upload and how many requests it took.
 const syncDevice = async (server: Server, device: Device) => {
   const startedAt = tick();
   const body = buildSyncRequest(device.data, device.account);
-  const response = await server.request('POST', '/api/sync', { token: device.account.token, body });
-  assert.equal(response.status, 200, JSON.stringify(response.body));
-  const result = response.body as SyncResponse;
-  device.data = {
-    ...device.data,
-    courses: mergeCourses(device.data.courses, result.courses),
-    history: mergeRounds(device.data.history, result.rounds),
-    deletedCourses: clearSentTombstones(device.data.deletedCourses, body.courses),
-    deletedRounds: clearSentTombstones(device.data.deletedRounds, body.rounds),
-    ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagWeights: result.bag.weights ?? {}, bagUpdatedAt: result.bag.updatedAt } : {}),
-  };
-  device.account = { ...device.account, cursor: result.cursor, pushedThrough: startedAt };
-  return body;
+  let requests = 0;
+  await sendInBatches(body, async (batch) => {
+    requests += 1;
+    const response = await server.request('POST', '/api/sync', { token: device.account.token, body: batch });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    return response.body as SyncResponse;
+  }, (batch, result) => {
+    device.data = {
+      ...device.data,
+      courses: mergeCourses(device.data.courses, result.courses),
+      history: mergeRounds(device.data.history, result.rounds),
+      deletedCourses: clearSentTombstones(device.data.deletedCourses, batch.courses),
+      deletedRounds: clearSentTombstones(device.data.deletedRounds, batch.rounds),
+      ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagWeights: result.bag.weights ?? {}, bagUpdatedAt: result.bag.updatedAt } : {}),
+    };
+    device.account = { ...device.account, cursor: result.cursor };
+  });
+  device.account = { ...device.account, pushedThrough: startedAt };
+  return Object.assign(body, { requests });
 };
 
 const newDevice = (token: string, data = emptyData()): Device => ({
@@ -260,6 +267,22 @@ describe('app sync against the API', () => {
     assert.equal(phone.data.courses[0].uid !== undefined, true);
   });
 
+  test('a history too large for one request uploads in batches and downloads in full', async () => {
+    const token = await server.register('prolific@example.com');
+    const throws = Array.from({ length: 150 }, (_, index) => ({ x: 0.5, y: 0.5, feet: 200 + index, disc: 'Destroyer', type: 'Drive' as const, hole: 1 + (index % 18), latitude: 40.0001 * index, longitude: -75.0001 * index, altitude: 120.25, lie: 'Fairway' as const, quality: 2, qualityMax: 3 }));
+    const history = Array.from({ length: 260 }, (_, index) => session(`big-${index}`, { shots: throws }));
+    const phone = newDevice(token, { ...emptyData(), history, bag: ['Destroyer'], bagUpdatedAt: tick() });
+    const upload = await syncDevice(server, phone);
+    assert.ok(JSON.stringify(upload).length > 5_000_000, 'more than the server takes in one request');
+    assert.ok(upload.requests > 1);
+    assert.equal(countPendingChanges(phone.data, phone.account.pushedThrough), 0);
+
+    const tablet = newDevice(token);
+    await syncDevice(server, tablet);
+    assert.equal(tablet.data.history.length, 260);
+    assert.deepEqual(tablet.data.bag, ['Destroyer']);
+  });
+
   test('share pages escape user text and 404 cleanly', async () => {
     const token = await server.register('xss@example.com', '<script>alert(1)</script>');
     const phone = newDevice(token, { ...emptyData(), history: [session('round-x', { courseName: '<img src=x onerror=alert(1)>', shared: true, updatedAt: tick() })] });
@@ -268,5 +291,23 @@ describe('app sync against the API', () => {
     assert.doesNotMatch(page.body, /<script>alert|<img src=x/);
     assert.equal((await server.request('GET', '/r/doesnotexist123')).status, 404);
     assert.equal((await server.request('GET', '/c/not-a-uuid')).status, 404);
+  });
+});
+
+describe('splitSyncRequest', () => {
+  test('keeps every record, puts the bag first, and keeps batches small', () => {
+    const history = Array.from({ length: 250 }, (_, index) => session(`round-${index}`, { updatedAt: 5 }));
+    const courses = Array.from({ length: 30 }, (_, index) => course(`course-${index}`, { updatedAt: 5 }));
+    const request = buildSyncRequest({ ...emptyData(), history, courses, bag: ['Buzzz'], bagUpdatedAt: 5 }, { cursor: 7, pushedThrough: 0 });
+    const batches = splitSyncRequest(request);
+    assert.equal(batches.length, 3);
+    assert.deepEqual(batches.map((batch) => batch.bag !== undefined), [true, false, false]);
+    assert.ok(batches.every((batch) => batch.cursor === 7 && batch.courses.length + batch.rounds.length <= 100));
+    assert.deepEqual(batches.flatMap((batch) => batch.courses), request.courses);
+    assert.deepEqual(batches.flatMap((batch) => batch.rounds), request.rounds);
+  });
+
+  test('an empty upload is still one request, to download changes', () => {
+    assert.equal(splitSyncRequest({ cursor: 3, courses: [], rounds: [] }).length, 1);
   });
 });
