@@ -119,7 +119,7 @@ ${address || phone || websiteUrl ? `<div class="links">
 ${address ? `<p class="meta">${escapeHtml(address)}</p>` : ''}
 ${layouts.length > 1 ? `<div class="tabs" role="group" aria-label="Layouts">${layouts.map((layout, index) => `<button type="button" data-layout="${index}" aria-pressed="${index === 0}">${escapeHtml(layout.name)}</button>`).join('')}</div>` : ''}
 <div id="map" class="map tall" role="img" aria-label="Satellite map of the course's tees and baskets"></div>
-<p class="map-note">Green dots are tees, orange dots are baskets. Tap a hole in the table to zoom to it.</p>
+<p class="map-note">Green dots are tees, orange dots are baskets, ringed by C1 (10 m) and C2 (20 m). Tap a hole in the table to zoom to it.</p>
 ${layouts.map((layout, index) => `<section data-layout-panel="${index}"${index ? ' hidden' : ''}>
   ${layouts.length > 1 ? `<h2>${escapeHtml(layout.name)} layout</h2><p class="meta">${escapeHtml(layoutStats(layout))}</p>` : ''}
   ${holeTable(layout.layouts)}

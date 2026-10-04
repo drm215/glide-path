@@ -110,6 +110,8 @@ export const drawHoles = (map, layouts, { only } = {}) => {
       bounds.push(latLng(layout.tee));
     }
     if (layout.basket) {
+      // C1 (10 m) and C2 (20 m) putting circles.
+      [20, 10].forEach((radius) => L.circle(latLng(layout.basket), { radius, color: '#fff', weight: 1.5, opacity: 0.8, fillColor: '#fff', fillOpacity: 0.08, interactive: false }).addTo(group));
       L.circleMarker(latLng(layout.basket), { radius: 6, color: '#fff', weight: 2, fillColor: '#d77d42', fillOpacity: 1 })
         .bindPopup(`Hole ${hole} basket`)
         .addTo(group);
