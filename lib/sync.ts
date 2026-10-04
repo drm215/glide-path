@@ -37,7 +37,8 @@ type RoundRecord = {
 type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo>; weights?: Record<Disc, number> };
 
 export type SyncRequest = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag?: BagRecord };
-export type SyncResponse = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag: BagRecord | null };
+// `more` means the server has further changes past `cursor`; ask again to get them.
+export type SyncResponse = { cursor: number; more?: boolean; courses: CourseRecord[]; rounds: RoundRecord[]; bag: BagRecord | null };
 
 // Records without an edit time predate sync; 1 makes them upload once and lose any conflict.
 const editTime = (record: { updatedAt?: number }) => record.updatedAt ?? 1;
@@ -255,19 +256,32 @@ export const splitSyncRequest = (request: SyncRequest): SyncRequest[] => {
   return batches;
 };
 
-// Sends a request batch by batch, each with the cursor the previous one returned. `apply` merges
-// each response as it arrives, so if a later batch fails, the earlier ones' progress is kept and
-// they're simply sent again next time. Returns the final cursor.
+// Most download pages fetched in one sync; the rest follow on the next sync.
+const MAX_DOWNLOAD_PAGES = 200;
+
+// Sends a request batch by batch, each with the cursor the previous one returned, then keeps
+// asking while the server has more changes to send back. `apply` merges each response as it
+// arrives, so if a later request fails, earlier progress is kept and the unsent batches simply
+// go again next time. Returns the final cursor.
 export const sendInBatches = async (
   request: SyncRequest,
   send: (batch: SyncRequest) => Promise<SyncResponse>,
   apply: (batch: SyncRequest, result: SyncResponse) => void,
 ) => {
   let cursor = request.cursor;
+  let more = false;
   for (const batch of splitSyncRequest(request)) {
     const result = await send({ ...batch, cursor });
     apply(batch, result);
     cursor = result.cursor;
+    more = Boolean(result.more);
+  }
+  for (let page = 0; more && page < MAX_DOWNLOAD_PAGES; page += 1) {
+    const batch: SyncRequest = { cursor, courses: [], rounds: [] };
+    const result = await send(batch);
+    apply(batch, result);
+    cursor = result.cursor;
+    more = Boolean(result.more);
   }
   return cursor;
 };

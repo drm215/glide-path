@@ -255,12 +255,28 @@ const showSignedOut = (message = '') => {
   $('#auth-status').textContent = message;
 };
 
+// Everything synced to the account. The server sends it a page at a time; each record is in
+// exactly one page.
+const downloadAll = async () => {
+  const all = { courses: [], rounds: [], bag: null };
+  let cursor = 0;
+  let more = true;
+  while (more) {
+    const page = await api('/api/sync', { method: 'POST', token, body: { cursor } });
+    all.courses.push(...page.courses);
+    all.rounds.push(...page.rounds);
+    all.bag = page.bag ?? all.bag;
+    ({ cursor, more } = page);
+  }
+  return all;
+};
+
 const load = async () => {
   signedOutEl.hidden = true;
   signedInEl.hidden = false;
   setChildren(signedInEl, el('p', { class: 'status' }, 'Loading your rounds… The server can take up to a minute to wake if it hasn’t been used recently.'));
   try {
-    const [me, synced] = await Promise.all([api('/api/me', { token }), api('/api/sync', { method: 'POST', token, body: { cursor: 0 } })]);
+    const [me, synced] = await Promise.all([api('/api/me', { token }), downloadAll()]);
     user = me.user;
     // A full download includes deletion markers; only live records are shown.
     data = { courses: synced.courses.filter((item) => !item.deleted), rounds: synced.rounds.filter((item) => !item.deleted), bag: synced.bag };

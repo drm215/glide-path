@@ -67,6 +67,10 @@ const upsertBag = (tx: Queryable, ownerId: string, bag: BagRecord) =>
     [ownerId, JSON.stringify(bag.discs), JSON.stringify(bag.details), JSON.stringify(bag.weights), bag.updatedAt],
   );
 
+// Most records sent back in one sync response; the client asks again while `more` is true.
+// Kept modest because a round can hold thousands of throws.
+export const SYNC_PAGE_SIZE = 200;
+
 export type SyncInput = { cursor: number; courses: CourseRecord[]; rounds: RoundRecord[]; bag?: BagRecord };
 
 export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) => {
@@ -78,16 +82,25 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
   for (const round of input.rounds) await upsertRound(tx, ownerId, round);
   if (input.bag) await upsertBag(tx, ownerId, input.bag);
 
-  const [courses, rounds, bags] = await Promise.all([
-    tx.query<CourseRow>('SELECT * FROM courses WHERE owner_id = $1 AND version > $2 ORDER BY version', [ownerId, input.cursor]),
-    tx.query<RoundRow>('SELECT * FROM rounds WHERE owner_id = $1 AND version > $2 ORDER BY version', [ownerId, input.cursor]),
+  // Changes go back a page at a time, oldest first: the first SYNC_PAGE_SIZE across all three
+  // tables. Each table is read one row past the page so `more` can tell whether anything is left.
+  const [allCourses, allRounds, bags] = await Promise.all([
+    tx.query<CourseRow>('SELECT * FROM courses WHERE owner_id = $1 AND version > $2 ORDER BY version LIMIT $3', [ownerId, input.cursor, SYNC_PAGE_SIZE + 1]),
+    tx.query<RoundRow>('SELECT * FROM rounds WHERE owner_id = $1 AND version > $2 ORDER BY version LIMIT $3', [ownerId, input.cursor, SYNC_PAGE_SIZE + 1]),
     tx.query<BagRow>('SELECT * FROM bags WHERE owner_id = $1 AND version > $2', [ownerId, input.cursor]),
   ]);
-  const versions = [...courses.rows, ...rounds.rows, ...bags.rows].map((row) => Number(row.version));
+  const versions = [...allCourses.rows, ...allRounds.rows, ...bags.rows].map((row) => Number(row.version)).sort((a, b) => a - b);
+  const more = versions.length > SYNC_PAGE_SIZE;
+  const cursor = more ? versions[SYNC_PAGE_SIZE - 1] : Math.max(input.cursor, ...versions);
+  const inPage = (row: { version: string }) => Number(row.version) <= cursor;
+  const courses = allCourses.rows.filter(inPage);
+  const rounds = allRounds.rows.filter(inPage);
+  const bag = bags.rows.find(inPage);
 
   return {
-    cursor: Math.max(input.cursor, ...versions),
-    courses: courses.rows.map((row) => ({
+    cursor,
+    more,
+    courses: courses.map((row) => ({
       uid: row.uid,
       clientId: row.client_id,
       updatedAt: Number(row.updated_at),
@@ -100,7 +113,7 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
       details: row.details,
       published: row.published,
     })),
-    rounds: rounds.rows.map((row) => ({
+    rounds: rounds.map((row) => ({
       uid: row.uid,
       clientId: row.client_id,
       updatedAt: Number(row.updated_at),
@@ -113,6 +126,6 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
       shareToken: row.share_token,
       layoutId: row.layout_id ?? undefined,
     })),
-    bag: bags.rows[0] ? { updatedAt: Number(bags.rows[0].updated_at), discs: bags.rows[0].discs, details: bags.rows[0].details, weights: bags.rows[0].weights } : null,
+    bag: bag ? { updatedAt: Number(bag.updated_at), discs: bag.discs, details: bag.details, weights: bag.weights } : null,
   };
 };

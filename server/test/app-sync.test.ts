@@ -278,7 +278,8 @@ describe('app sync against the API', () => {
     assert.equal(countPendingChanges(phone.data, phone.account.pushedThrough), 0);
 
     const tablet = newDevice(token);
-    await syncDevice(server, tablet);
+    const download = await syncDevice(server, tablet);
+    assert.ok(download.requests > 1, 'downloaded a page at a time');
     assert.equal(tablet.data.history.length, 260);
     assert.deepEqual(tablet.data.bag, ['Destroyer']);
   });

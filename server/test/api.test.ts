@@ -59,6 +59,9 @@ describe('Glide Path API', () => {
 
       const wrongPassword = await server.request('POST', '/api/auth/login', { body: { email: 'pat@example.com', password: 'nope nope' } });
       assert.equal(wrongPassword.status, 401);
+      const unknownEmail = await server.request('POST', '/api/auth/login', { body: { email: 'nobody@example.com', password: 'long enough' } });
+      assert.equal(unknownEmail.status, 401);
+      assert.deepEqual(unknownEmail.body, wrongPassword.body, 'same answer as a wrong password');
 
       const login = await server.request('POST', '/api/auth/login', { body: { email: 'PAT@example.com', password: 'long enough' } });
       assert.equal(login.status, 200);
@@ -86,6 +89,34 @@ describe('Glide Path API', () => {
   });
 
   describe('sync', () => {
+    test('sends changes back a page at a time, in order, with nothing skipped or repeated', async () => {
+      const token = await server.register('pages@example.com');
+      const rounds = Array.from({ length: 300 }, (_, index) => round({ clientId: `page-${index}` }));
+      const courses = Array.from({ length: 30 }, (_, index) => course({ clientId: `course-${index}` }));
+      const bag = { updatedAt: 500, discs: ['Buzzz'], details: {} };
+      // Two uploads, so the bag's version falls in the middle of the rounds'.
+      await server.request('POST', '/api/sync', { token, body: { rounds: rounds.slice(0, 150), courses } });
+      await server.request('POST', '/api/sync', { token, body: { rounds: rounds.slice(150), bag } });
+
+      const seen: string[] = [];
+      let bags = 0;
+      let cursor = 0;
+      let pages = 0;
+      for (let more = true; more; pages += 1) {
+        const page = await server.request('POST', '/api/sync', { token, body: { cursor } });
+        assert.equal(page.status, 200);
+        assert.ok(page.body.courses.length + page.body.rounds.length + (page.body.bag ? 1 : 0) <= 200);
+        seen.push(...page.body.courses.map((item: { clientId: string }) => item.clientId), ...page.body.rounds.map((item: { clientId: string }) => item.clientId));
+        if (page.body.bag) bags += 1;
+        assert.ok(page.body.cursor > cursor);
+        ({ cursor, more } = page.body);
+      }
+      assert.equal(pages, 2);
+      assert.equal(bags, 1);
+      assert.equal(seen.length, 330);
+      assert.equal(new Set(seen).size, 330);
+    });
+
     test('uploads records and downloads them on another device', async () => {
       const token = await server.register('sync@example.com');
       const bag = { updatedAt: 500, discs: ['Buzzz'], details: { Buzzz: { brand: 'Discraft' } } };
