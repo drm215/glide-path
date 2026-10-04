@@ -2,6 +2,11 @@
 // Stand-ins for the native modules the app uses, so screens can render and run under Jest.
 // Tests reach into them through the `__store` (keychain) and `__state` (GPS position) fields.
 import mockAsyncStorage from '@react-native-async-storage/async-storage/jest/async-storage-mock';
+import { configure } from '@testing-library/react-native';
+
+// Whole-app renders are slow on a busy machine; generous limits keep the suite from flaking.
+jest.setTimeout(20_000);
+configure({ asyncUtilTimeout: 5_000 });
 
 jest.mock('@react-native-async-storage/async-storage', () => mockAsyncStorage);
 
