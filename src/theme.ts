@@ -348,6 +348,9 @@ export const styles = StyleSheet.create({
   roundHoleMap: { height: 260, marginTop: 4, marginBottom: 10, borderRadius: 9, overflow: 'hidden', backgroundColor: '#0d1410' },
   scorecardRowActive: { backgroundColor: '#0f1a14' },
   obMarker: { backgroundColor: '#a55343' },
+  // A throw on the hole-history map, colored by type; there are too many to number.
+  throwDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, borderColor: '#000' },
+  mapLegend: { color: MUTED, fontSize: 12, marginTop: -4, marginBottom: 6 },
   roundHoleTitle: { color: INK, fontFamily: 'Georgia', fontSize: 16 },
   roundHoleMeta: { color: GREEN, fontSize: 8, fontWeight: '800', letterSpacing: 0.6 },
   roundThrow: { color: MUTED, fontSize: 10, lineHeight: 17 },

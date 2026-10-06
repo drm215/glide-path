@@ -400,6 +400,43 @@ test('stats leave out a distance measured from a poor GPS reading', async () => 
   expect(screen.queryByText('500 ft')).toBeNull();
 });
 
+test('stats open every throw recorded on a hole, across rounds', async () => {
+  const laterRound: SessionArchive = {
+    ...pastRound, id: '1727100000000',
+    shots: [
+      { x: 0.5, y: 0.5, feet: 250, disc: 'Destroyer', type: 'Drive', hole: 1, lie: 'Woods', latitude: 40.0007, longitude: -75 },
+      { x: 0.5, y: 0.5, feet: 80, disc: 'Buzzz', type: 'Approach', hole: 1, lie: 'Fairway', latitude: 40.00095, longitude: -75 },
+      { x: 0.5, y: 0.5, feet: 20, disc: 'Aviar', type: 'Putt', hole: 1, lie: 'Basket', latitude: 40.001, longitude: -75 },
+    ],
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound, laterRound] });
+  await renderApp();
+  await press(await screen.findByText('Stats').then(() => 'Stats'));
+  await press(await screen.findByText('Cedar Grove (2)').then(() => 'Cedar Grove (2)'));
+  expect(await screen.findByText('By hole')).toBeTruthy();
+  expect(screen.getByText('Par 3 · played 2 times · avg 2.5 (-0.5) · best 2')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Every throw on hole 1'));
+
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+  expect(screen.getByText('Every throw')).toBeTruthy();
+  expect(screen.getByText('Throws on this hole')).toBeTruthy();
+  expect(screen.getByText('3 strokes (E) · Destroyer › Buzzz › Aviar')).toBeTruthy();
+  expect(screen.getByText('2 strokes (-1) · Buzzz › Buzzz')).toBeTruthy();
+
+  // Back returns to where it was opened from.
+  await fireEvent.press(screen.getByLabelText('Back to the previous screen'));
+  expect(await screen.findByText('By hole')).toBeTruthy();
+});
+
+test('a past round links to every throw on each of its holes', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  await fireEvent.press(await screen.findByLabelText('Every throw on hole 1, across all rounds'));
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Back to the previous screen'));
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+});
+
 test('deleting a past round removes it from history', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp();

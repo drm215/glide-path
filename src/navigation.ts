@@ -23,6 +23,16 @@ export const go = (screen: Screen) => router.push(PATHS[screen]);
 
 export const backTo = (screen: Screen) => router.dismissTo(PATHS[screen]);
 
+// Back to whichever screen opened this one, for screens reached from more than one place.
+export const goBack = () => {
+  if (router.canGoBack()) router.back();
+  else router.replace(PATHS.Home);
+};
+
+// Every recorded throw on one hole of a course layout. `includePractice` adds practice sessions.
+export const openHoleHistory = (courseId: string, layoutId: string, hole: number, includePractice = false) =>
+  router.push({ pathname: '/hole', params: { course: courseId, layout: layoutId, hole: String(hole), ...(includePractice ? { practice: '1' } : {}) } });
+
 // Hole mapping for the selected course and layout; `from` is where FINISH returns to.
 export const openHoleMapping = (from: 'CourseBuilder' | 'NewCourse') =>
   router.push({ pathname: PATHS.HoleWizard, params: from === 'NewCourse' ? { from: 'new' } : {} });
