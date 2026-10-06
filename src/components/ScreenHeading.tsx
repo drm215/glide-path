@@ -20,7 +20,7 @@ export const ScreenHeading = ({ eyebrow, title, back = HOME_BACK, compact = fals
   const Button = hold ? HoldPressable : Pressable;
   return (
     <View style={[styles.pageHeading, compact && styles.pageHeadingCompact]}>
-      {!compact && <View>
+      {!compact && <View style={styles.headingCopy}>
         <Text style={styles.eyebrow}>{eyebrow}</Text>
         <Text style={styles.title}>{title}</Text>
       </View>}
