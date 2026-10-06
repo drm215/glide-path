@@ -143,10 +143,13 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
   await press('Cedar Grove');
   expect(await screen.findByText('LOG THROW 1')).toBeTruthy();
 
+  // One sheet for the details (taps, starting from the guesses); a throw in the basket saves at the
+  // mapped basket straight from the sheet and moves to the next hole.
   await hold('LOG THROW 1');
-  await hold(await screen.findByText('Buzzz').then(() => 'Buzzz'));
-  await hold('Backhand');
-  await hold('Basket');
+  await press(await screen.findByText('Buzzz').then(() => 'Buzzz'));
+  await press('Backhand');
+  await press('Basket');
+  await hold('SAVE · NEXT HOLE ›');
   expect(await screen.findByText(/Hole 1 complete in 1 stroke/)).toBeTruthy();
   await waitFor(() => {
     const round = stored<{ shots: { lie: string; accuracy: number; disc: string; type: string; hole: number }[]; hole: number }>(KEYS.round);
@@ -164,6 +167,115 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
   });
   await press('DONE');
   expect(await screen.findByText('Ready when you are.')).toBeTruthy();
+});
+
+test('logging a throw: enter the details, go back to the map, then save the location at the disc', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz', 'Destroyer'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  const location = (require('expo-location') as { __state: { position: { latitude: number; longitude: number }; accuracy: number | null } }).__state;
+  location.position = { latitude: 40.0008, longitude: -75 };
+
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('Destroyer').then(() => 'Destroyer'));
+  await press('Forehand');
+  await press('Woods');
+  await press('Good');
+  await press('NEXT ›');
+  // Back on the round screen, the throw waits below the map; EDIT reopens the details.
+  expect(await screen.findByText('THROW 1 · READY TO SAVE')).toBeTruthy();
+  expect(screen.queryByText('LOG THROW 1')).toBeNull();
+  await hold('EDIT');
+  await press(await screen.findByText('Backhand').then(() => 'Backhand'));
+  await press('Forehand');
+  await press('NEXT ›');
+  await hold(await screen.findByText('SAVE LOCATION ✓').then(() => 'SAVE LOCATION ✓'));
+  await waitFor(() => {
+    const round = stored<{ shots: Record<string, unknown>[] }>(KEYS.round);
+    expect(round?.shots).toEqual([expect.objectContaining({ disc: 'Destroyer', type: 'Drive', style: 'Forehand', lie: 'Woods', quality: 3, latitude: 40.0008, accuracy: 4 })]);
+  });
+  expect(await screen.findByText('LOG THROW 2')).toBeTruthy();
+
+  // A poor reading asks first; SAVE ANYWAY keeps it, without taking another.
+  location.position = { latitude: 40.0009, longitude: -75 };
+  location.accuracy = 30;
+  await hold('LOG THROW 2');
+  await press(await screen.findByText('NEXT ›').then(() => 'NEXT ›'));
+  await hold(await screen.findByText('SAVE LOCATION ✓').then(() => 'SAVE LOCATION ✓'));
+  expect(await screen.findByText(/only accurate to about 30 m/)).toBeTruthy();
+  expect(stored<{ shots: unknown[] }>(KEYS.round)?.shots).toHaveLength(1);
+  location.accuracy = 4;
+  await hold('SAVE ANYWAY');
+  await waitFor(() => expect(stored<{ shots: { accuracy: number }[] }>(KEYS.round)?.shots.map((shot) => shot.accuracy)).toEqual([4, 30]));
+
+  // Cancelling, in the sheet or below the map, records nothing.
+  await hold(await screen.findByText('LOG THROW 3').then(() => 'LOG THROW 3'));
+  await press(await screen.findByText('CANCEL').then(() => 'CANCEL'));
+  await hold('LOG THROW 3');
+  await press(await screen.findByText('NEXT ›').then(() => 'NEXT ›'));
+  await hold(await screen.findByText('CANCEL THROW').then(() => 'CANCEL THROW'));
+  expect(await screen.findByText('LOG THROW 3')).toBeTruthy();
+  expect(stored<{ shots: unknown[] }>(KEYS.round)?.shots).toHaveLength(2);
+});
+
+test('putts skip the throw-style question and are saved without a style', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Aviar'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  expect(await screen.findByText('HOW DID YOU THROW IT?')).toBeTruthy();
+  await press('Putt');
+  expect(screen.queryByText('HOW DID YOU THROW IT?')).toBeNull();
+  expect(screen.queryByText('Forehand')).toBeNull();
+  // Switching back brings the question back.
+  await press('Drive');
+  expect(await screen.findByText('HOW DID YOU THROW IT?')).toBeTruthy();
+  await press('Putt');
+  await press('Made');
+  await hold('SAVE · NEXT HOLE ›');
+  await waitFor(() => {
+    const [putt] = stored<{ shots: Record<string, unknown>[] }>(KEYS.round)!.shots;
+    expect(putt).toMatchObject({ type: 'Putt', lie: 'Basket' });
+    expect(putt).not.toHaveProperty('style');
+  });
+});
+
+test('a made putt on a hole with no mapped basket saves where the player stands and moves on', async () => {
+  const unmapped: Course = { ...cedarGrove, layouts: [{ tee: point(40, -75), basket: null, par: 3 }, { tee: null, basket: null, par: 4 }] };
+  await seed({ [KEYS.courses]: [unmapped], [KEYS.bag]: ['Aviar'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  const location = (require('expo-location') as { __state: { position: { latitude: number; longitude: number } } }).__state;
+  location.position = { latitude: 40.0011, longitude: -75 };
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('Putt').then(() => 'Putt'));
+  await press('Made');
+  await hold('SAVE · NEXT HOLE ›');
+  expect(await screen.findByText(/Hole 1 complete in 1 stroke/)).toBeTruthy();
+  await waitFor(() => {
+    const round = stored<{ shots: Record<string, unknown>[]; hole: number }>(KEYS.round)!;
+    expect(round.shots).toEqual([expect.objectContaining({ type: 'Putt', lie: 'Basket', latitude: 40.0011 })]);
+    expect(round.hole).toBe(2);
+  });
+});
+
+test('a GPS problem keeps the throw waiting, to try again', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  const Location = require('expo-location') as { getCurrentPositionAsync: jest.Mock };
+  Location.getCurrentPositionAsync.mockRejectedValueOnce(new Error('no fix'));
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press('Hazard');
+  await press('NEXT ›');
+  await hold(await screen.findByText('SAVE LOCATION ✓').then(() => 'SAVE LOCATION ✓'));
+  expect(await screen.findByText(/Could not get a GPS fix/)).toBeTruthy();
+  await hold('SAVE LOCATION ✓');
+  await waitFor(() => expect(stored<{ shots: { lie: string }[] }>(KEYS.round)?.shots.map((shot) => shot.lie)).toEqual(['Hazard']));
 });
 
 test('the round screen dims, and the dimming switch is saved and restores brightness', async () => {
@@ -273,6 +385,19 @@ test('stats summarize finished rounds', async () => {
   await press(await screen.findByText('Stats').then(() => 'Stats'));
   expect(await screen.findByText('Throw stats')).toBeTruthy();
   expect(screen.getByText('BEST ROUND')).toBeTruthy();
+});
+
+test('stats leave out a distance measured from a poor GPS reading', async () => {
+  const poorFix: SessionArchive = {
+    ...pastRound, id: '1727000100000',
+    shots: [{ x: 0.5, y: 0.5, feet: 500, disc: 'Destroyer', type: 'Drive', hole: 1, lie: 'Fairway', latitude: 40.0009, longitude: -75, accuracy: 30 }],
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound, poorFix] });
+  await renderApp();
+  await press(await screen.findByText('Stats').then(() => 'Stats'));
+  expect(await screen.findByText('Throw stats')).toBeTruthy();
+  expect(screen.getAllByText('300 ft').length).toBeGreaterThan(0);
+  expect(screen.queryByText('500 ft')).toBeNull();
 });
 
 test('deleting a past round removes it from history', async () => {

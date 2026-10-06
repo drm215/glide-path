@@ -5,29 +5,40 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, Modal, ScrollView, Text, View } from 'react-native';
+import { Alert, AppState, ScrollView, Text, View } from 'react-native';
+import { reliableDistances } from '../../lib/round-stats';
 import { guessDisc, guessThrowType, suggestDiscs } from '../../lib/rounds';
-import type { Disc, Lie, Shot, ThrowStyle, ThrowType } from '../../lib/types';
+import type { Disc, Shot, ThrowStyle, ThrowType } from '../../lib/types';
 import { styles } from '../theme';
-import { ACTIVE_SESSION_ID, GPS_GOOD_ACCURACY_M, GPS_POOR_ACCURACY_M, lieLabel, lieOptionsFor, QUALITY_MAX, QUALITY_OPTIONS, ROUND_BRIGHTNESS, ROUND_KEEP_AWAKE_TAG, STYLE_OPTIONS, TYPE_OPTIONS, WARM_FIX_MAX_AGE_MS } from '../constants';
+import { ACTIVE_SESSION_ID, GPS_GOOD_ACCURACY_M, GPS_POOR_ACCURACY_M, QUALITY_MAX, ROUND_BRIGHTNESS, ROUND_KEEP_AWAKE_TAG, WARM_FIX_MAX_AGE_MS } from '../constants';
 import { nowMs } from '../time';
 import { courseAddressLine, formatElevation, formatLie, formatQuality, formatScoreToPar, formatThrowDetail } from '../format';
 import { courseStats, feetBetween, holeDistanceFeet, holeElevationFeet, regionAtPoint, regionForHole } from '../geo';
-import { countStrokes, nextThrowType, scoreSummary } from '../scoring';
+import { countStrokes, scoreSummary } from '../scoring';
 import { HoldPressable } from '../components/HoldPressable';
 import { BasketCircles } from '../components/BasketCircles';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { CourseLinks } from '../components/CourseLinks';
+import { LogThrowSheet, type ThrowDetails } from '../components/LogThrowSheet';
 import { ThrowEditorSheet, type ThrowTarget } from '../components/ThrowEditorSheet';
 import { useApp } from '../state/AppState';
 
+// Saving a waiting throw's location: getting a fix, a problem doing so, or a fix too poor to save
+// without asking (its accuracy in meters).
+type SaveStatus = { kind: 'ready' } | { kind: 'saving' } | { kind: 'error'; message: string } | { kind: 'poor'; accuracy: number };
+
+// A position logged for a throw, and its distance from the previous lie (or the tee).
+type LiePoint = { latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number };
+
 export const RoundScreen = () => {
   const { bag, bagDetails, dimRound, disc, finishSession, hasMultipleLayouts, history, hole, locationAllowed, mode, practiceFocus, roundMessage, selectedCourse, setDimRound, setDisc, setHole, setLocationAllowed, setRoundMessage, setShots, setThrowStyle, shots, throwStyle } = useApp();
-  const [throwType, setThrowType] = useState<ThrowType>('Drive');
-  const [loggingThrow, setLoggingThrow] = useState(false);
-  const [pendingLie, setPendingLie] = useState<{ latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number } | null>(null);
-  const [logStep, setLogStep] = useState<1 | 2 | 3 | 4>(1);
-  const [throwLie, setThrowLie] = useState<Lie>('Fairway');
+  // The throw being entered in the log sheet (null when it's closed), then the throw waiting below
+  // the map for its location to be saved.
+  const [logging, setLogging] = useState<ThrowDetails | null>(null);
+  const [pendingThrow, setPendingThrow] = useState<ThrowDetails | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: 'ready' });
+  // A GPS reading too poor to save without asking; kept so SAVE ANYWAY doesn't take another.
+  const poorFix = useRef<LiePoint | null>(null);
   const [showCourseInfo, setShowCourseInfo] = useState(false);
   const [editingThrow, setEditingThrow] = useState<ThrowTarget | null>(null);
   const roundScrollRef = useRef<ScrollView>(null);
@@ -105,6 +116,8 @@ export const RoundScreen = () => {
   const holeStrokes = countStrokes(activeShots);
   const holeFeet = activeShots.reduce((total, shot) => total + shot.feet, 0);
   const allShots = [...history.flatMap((session) => session.shots), ...shots];
+  // Throws whose distances the caddie can trust (not measured from or to a poor GPS reading).
+  const reliable = reliableDistances([...history, { shots }]);
 
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
   const selectedHoleLayout = selectedCourse?.layouts?.[hole - 1];
@@ -122,7 +135,7 @@ export const RoundScreen = () => {
   const caddieFrom = lastLie ? { latitude: lastLie.latitude!, longitude: lastLie.longitude! } : selectedHoleLayout?.tee ?? null;
   const caddieTargetFeet = caddieFrom && holeBasket && !shots.some((shot) => shot.hole === hole && shot.lie === 'Basket') ? Math.round(feetBetween(caddieFrom, holeBasket)) : null;
   const caddieType = guessThrowType(shots.filter((shot) => shot.hole === hole), caddieFrom, holeBasket);
-  const caddie = caddieTargetFeet === null ? [] : suggestDiscs(caddieTargetFeet, caddieType, allShots, bag);
+  const caddie = caddieTargetFeet === null ? [] : suggestDiscs(caddieTargetFeet, caddieType, allShots, bag, 3, reliable);
   const mappedShots = activeShots.flatMap((shot, index) =>
     shot.latitude !== undefined && shot.longitude !== undefined ? [{ index, coordinate: { latitude: shot.latitude, longitude: shot.longitude } }] : []);
   const lastMappedShot = mappedShots.at(-1);
@@ -136,20 +149,17 @@ export const RoundScreen = () => {
     return previousShot ? { latitude: previousShot.latitude!, longitude: previousShot.longitude! } : selectedHoleLayout?.tee ?? null;
   };
 
-  // Reads the GPS position at the disc. Reports progress and problems through `report`.
-  const captureLie = async (report: (message: string) => void) => {
-    report('Getting a GPS fix at your lie…');
+  // Reads the GPS position at the disc, or says what went wrong.
+  const captureLie = async (): Promise<{ point: LiePoint } | { error: string }> => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
         setLocationAllowed(false);
-        report(permission.canAskAgain ? 'Location permission is needed to log where your disc landed.' : 'Enable location access for Glide Path in Settings, then try again.');
-        return null;
+        return { error: permission.canAskAgain ? 'Location permission is needed to log where your disc landed.' : 'Enable location access for Glide Path in Settings, then try again.' };
       }
       setLocationAllowed(true);
       if (!(await Location.hasServicesEnabledAsync())) {
-        report('Turn on Location Services, then log the throw again.');
-        return null;
+        return { error: 'Turn on Location Services, then try again.' };
       }
       // The round screen's warm fix when it's recent and good; otherwise a fresh reading, keeping
       // whichever of the two is more accurate.
@@ -162,10 +172,9 @@ export const RoundScreen = () => {
       }
       const lie = { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
       const previous = previousLiePoint();
-      return { ...lie, altitude: fix.coords.altitude, accuracy: fix.coords.accuracy, feet: previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0 };
+      return { point: { ...lie, altitude: fix.coords.altitude, accuracy: fix.coords.accuracy, feet: previous ? Math.max(1, Math.round(feetBetween(previous, lie))) : 0 } };
     } catch {
-      report('Could not get a GPS fix. Wait a moment and try again.');
-      return null;
+      return { error: 'Could not get a GPS fix. Wait a moment and try again.' };
     }
   };
 
@@ -179,12 +188,12 @@ export const RoundScreen = () => {
     const pastShots = [...history].sort((a, b) => Number(a.id) - Number(b.id)).flatMap((session) => session.shots);
     const recent = [...pastShots, ...shots].reverse();
     // The caddie's pick from where this throw was thrown, then the last disc used for the type.
-    const suggested = from && basket ? suggestDiscs(Math.round(feetBetween(from, basket)), type, recent, bag, 1)[0]?.disc : undefined;
+    const suggested = from && basket ? suggestDiscs(Math.round(feetBetween(from, basket)), type, recent, bag, 1, reliable)[0]?.disc : undefined;
     return { type, disc: suggested ?? guessDisc(type, recent, bag, bagDetails, disc) };
   };
 
   // Adds a throw to the round in progress. Returns a short description for confirmations.
-  const recordThrow = (point: { latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number }, details: { type: ThrowType; disc: Disc; style: ThrowStyle; lie: Lie; quality: number | null }) => {
+  const recordThrow = (point: LiePoint, details: Omit<ThrowDetails, 'style'> & { style?: ThrowStyle }) => {
     let { latitude, longitude, altitude, accuracy, feet } = point;
     // A throw that went in is recorded at the basket, measured from the previous lie (or the tee),
     // rather than wherever the player was standing when they logged it.
@@ -203,64 +212,113 @@ export const RoundScreen = () => {
     };
     setShots((current) => [...current, shot]);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-    setThrowType(details.type === 'Putt' ? 'Putt' : 'Approach');
     const summary = `Throw ${score + 1} · ${formatThrowDetail(shot)}`;
     if (details.lie !== 'Basket') return summary;
     // A made basket finishes the hole.
     const throwCount = holeStrokes + 1;
     const holeCount = selectedCourse?.holes ?? 18;
-    setThrowLie('Fairway');
     if (hole >= holeCount) {
       setRoundMessage(`Hole ${hole} complete in ${throwCount} ${throwCount === 1 ? 'stroke' : 'strokes'}. That was the last hole.`);
       promptLastHoleComplete();
       return `Hole ${hole} complete in ${throwCount}. That was the last hole.`;
     }
     setHole(hole + 1);
-    setThrowType('Drive');
     setRoundMessage(`Hole ${hole} complete in ${throwCount} ${throwCount === 1 ? 'stroke' : 'strokes'}. On to hole ${hole + 1}.`);
     return `Hole ${hole} complete in ${throwCount}. On to hole ${hole + 1}.`;
   };
 
-  // Captures the player's GPS position at the disc, then asks for disc, throw type and quality,
-  // starting from the best guesses.
-  const startLogThrow = async () => {
-    if (loggingThrow) return;
-    setLoggingThrow(true);
-    const point = await captureLie(setRoundMessage);
-    setLoggingThrow(false);
-    if (!point) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
-      return;
-    }
+  // Opens the log sheet with the best guesses.
+  const startLogThrow = () => {
     const guess = guessThrow();
-    setThrowType(guess.type);
-    setDisc(guess.disc);
-    setThrowLie(guess.type === 'Putt' ? 'Missed' : 'Fairway');
-    setPendingLie(point);
-    setLogStep(1);
+    setLogging({ disc: guess.disc, type: guess.type, style: throwStyle, lie: guess.type === 'Putt' ? 'Missed' : 'Fairway', quality: null });
     setRoundMessage('');
   };
 
-  const cancelLogThrow = () => setPendingLie(null);
-
-  // `quality` is null when the throw is saved without a rating.
-  const saveThrow = (quality: number | null, lie: Lie = throwLie) => {
-    if (!pendingLie) return;
-    recordThrow(pendingLie, { type: throwType, disc, style: throwStyle, lie, quality });
-    setPendingLie(null);
+  // Records a throw at `point` and clears the throw waiting below the map. A throw in the basket also
+  // finishes the hole (see recordThrow).
+  const saveThrowAt = (details: ThrowDetails, point: LiePoint) => {
+    // Putts are saved without a style, and don't change the style remembered for the next throw.
+    const putt = details.type === 'Putt';
+    // A made throw is rated good unless the player rated it.
+    recordThrow(point, { ...details, style: putt ? undefined : details.style, quality: details.quality ?? (details.lie === 'Basket' ? QUALITY_MAX : null) });
+    setDisc(details.disc);
+    if (!putt) setThrowStyle(details.style);
+    setPendingThrow(null);
+    setSaveStatus({ kind: 'ready' });
+    poorFix.current = null;
   };
 
+  // A throw in the basket saves straight away, at the mapped basket. Without one, the player is
+  // standing at the basket, so a GPS reading is taken automatically and kept however accurate it is;
+  // if there's no fix, the throw waits below the map to try again.
+  const saveMadeThrow = async (details: ThrowDetails) => {
+    const basket = selectedHoleLayout?.basket;
+    if (basket) {
+      saveThrowAt(details, { latitude: basket.latitude, longitude: basket.longitude, altitude: basket.altitude ?? null, accuracy: basket.accuracy, feet: 0 });
+      return;
+    }
+    setPendingThrow(details);
+    setSaveStatus({ kind: 'saving' });
+    const reading = await captureLie();
+    if ('error' in reading) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      setSaveStatus({ kind: 'error', message: reading.error });
+      return;
+    }
+    saveThrowAt(details, reading.point);
+  };
+
+  // The sheet's NEXT: a throw in the basket saves now; any other waits below the map for its location.
+  const confirmDetails = (details: ThrowDetails) => {
+    setLogging(null);
+    poorFix.current = null;
+    if (details.lie === 'Basket') {
+      saveMadeThrow(details);
+      return;
+    }
+    setPendingThrow(details);
+    setSaveStatus({ kind: 'ready' });
+  };
+
+  const discardPendingThrow = () => {
+    setPendingThrow(null);
+    poorFix.current = null;
+  };
+
+  // Saves the waiting throw where the player is standing. A reading worse than GPS_POOR_ACCURACY_M
+  // asks first: SAVE ANYWAY (`acceptPoorFix`) keeps that reading, TRY AGAIN takes another. A throw
+  // in the basket only waits here when its automatic reading failed, so any reading will do.
+  const savePendingThrow = async (acceptPoorFix = false) => {
+    if (!pendingThrow || saveStatus.kind === 'saving') return;
+    if (acceptPoorFix && poorFix.current) {
+      saveThrowAt(pendingThrow, poorFix.current);
+      return;
+    }
+    setSaveStatus({ kind: 'saving' });
+    const reading = await captureLie();
+    if ('error' in reading) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      setSaveStatus({ kind: 'error', message: reading.error });
+      return;
+    }
+    const { point } = reading;
+    if (pendingThrow.lie !== 'Basket' && point.accuracy !== null && point.accuracy > GPS_POOR_ACCURACY_M) {
+      poorFix.current = point;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+      setSaveStatus({ kind: 'poor', accuracy: Math.round(point.accuracy) });
+      return;
+    }
+    saveThrowAt(pendingThrow, point);
+  };
 
   const startNextHole = () => {
     setHole((current) => (current >= (selectedCourse?.holes ?? 18) ? 1 : current + 1));
-    setThrowType('Drive');
   };
 
   const goToPreviousHole = () => {
     if (hole <= 1) return;
     const previousHole = hole - 1;
     setHole(previousHole);
-    setThrowType(nextThrowType(shots.filter((shot) => shot.hole === previousHole)));
   };
 
 
@@ -373,7 +431,25 @@ export const RoundScreen = () => {
         </View>}
       </View>}
 
-      <HoldPressable onPress={startLogThrow} disabled={loggingThrow} style={[styles.logThrowButton, loggingThrow && styles.disabledButton]} accessibilityRole="button"><Text style={styles.logThrowButtonText}>{loggingThrow ? 'GETTING GPS…' : `LOG THROW ${score + 1}`}</Text><Text style={styles.logThrowButtonHint}>Stand where your disc landed, then press and hold{gpsAccuracy === null ? '' : `  ·  GPS ±${gpsAccuracy} m`}</Text></HoldPressable>
+      {pendingThrow ? <View style={styles.pendingThrow}>
+        <Text style={styles.latestEyebrow}>THROW {score + 1} · READY TO SAVE</Text>
+        <Text style={styles.latestText}>{[[pendingThrow.disc || 'No disc', pendingThrow.type === 'Putt' ? null : pendingThrow.style.toLowerCase(), pendingThrow.type.toLowerCase()].filter(Boolean).join(' '), formatLie(pendingThrow.lie), pendingThrow.quality ? `quality ${pendingThrow.quality}/${QUALITY_MAX}` : null].filter(Boolean).join(' · ')}</Text>
+        {saveStatus.kind === 'error' ? <Text style={styles.gpsWarning}>{saveStatus.message}</Text> : null}
+        {saveStatus.kind === 'poor' ? <>
+          <Text style={styles.gpsWarning}>GPS is only accurate to about {saveStatus.accuracy} m here, so this throw’s distance may be off. Wait a few seconds and try again, away from trees if you can, or save it anyway.</Text>
+          <View style={styles.pendingActions}>
+            <HoldPressable onPress={() => savePendingThrow()} style={[styles.endSessionButton, styles.pendingAction]} accessibilityRole="button"><Text style={styles.undoText}>TRY AGAIN</Text></HoldPressable>
+            <HoldPressable onPress={() => savePendingThrow(true)} style={[styles.endSessionButton, styles.pendingAction, styles.saveButton]} accessibilityRole="button"><Text style={styles.saveButtonText}>SAVE ANYWAY</Text></HoldPressable>
+          </View>
+        </> : <HoldPressable onPress={() => savePendingThrow()} disabled={saveStatus.kind === 'saving'} style={[styles.logThrowButton, saveStatus.kind === 'saving' && styles.disabledButton]} accessibilityRole="button">
+          <Text style={styles.logThrowButtonText}>{saveStatus.kind === 'saving' ? 'GETTING GPS…' : 'SAVE LOCATION ✓'}</Text>
+          <Text style={styles.logThrowButtonHint}>Stand at your disc, then press and hold{gpsAccuracy === null ? '' : `  ·  GPS ±${gpsAccuracy} m`}</Text>
+        </HoldPressable>}
+        <View style={styles.pendingActions}>
+          <HoldPressable onPress={() => setLogging(pendingThrow)} disabled={saveStatus.kind === 'saving'} style={[styles.endSessionButton, styles.pendingAction]} accessibilityRole="button"><Text style={styles.undoText}>EDIT</Text></HoldPressable>
+          <HoldPressable onPress={discardPendingThrow} disabled={saveStatus.kind === 'saving'} style={[styles.endSessionButton, styles.pendingAction]} accessibilityRole="button"><Text style={styles.undoText}>CANCEL THROW</Text></HoldPressable>
+        </View>
+      </View> : <HoldPressable onPress={startLogThrow} style={styles.logThrowButton} accessibilityRole="button"><Text style={styles.logThrowButtonText}>LOG THROW {score + 1}</Text><Text style={styles.logThrowButtonHint}>Hold to enter the throw, then save its location at your disc{gpsAccuracy === null ? '' : `  ·  GPS ±${gpsAccuracy} m`}</Text></HoldPressable>}
       {roundMessage ? <Text style={styles.gpsMessage}>{roundMessage}</Text> : null}
 
       <View style={styles.latestRow}>
@@ -403,49 +479,14 @@ export const RoundScreen = () => {
       <Text style={styles.footnote}>{selectedHoleLayout?.tee ? 'Distances are measured by GPS from the tee or your previous lie.' : 'Map this hole’s tee in Course builder to measure your first throw. Later throws are measured from your previous lie.'}</Text>
     </ScrollView>
 
-    <Modal visible={pendingLie !== null} transparent animationType="slide" onRequestClose={cancelLogThrow}>
-      <View style={styles.sheetBackdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.controlHeading}><Text style={styles.controlTitle}>Log throw {score + 1}</Text><Text style={styles.controlStep}>0{logStep} / 04</Text></View>
-          <Text style={styles.sheetDistance}>{pendingLie?.feet ? `${pendingLie.feet} ft from ${activeShots.some((shot) => shot.latitude !== undefined) ? 'your previous lie' : 'the tee'}` : 'Distance unavailable: this hole’s tee is not mapped'}{pendingLie?.accuracy == null ? '' : `  ·  GPS ±${Math.round(pendingLie.accuracy)} m`}</Text>
-          {pendingLie?.accuracy != null && pendingLie.accuracy > GPS_POOR_ACCURACY_M && <Text style={styles.gpsWarning}>GPS is only accurate to about {Math.round(pendingLie.accuracy)} m here, so this distance may be off. For a better reading, cancel and log the throw again in a few seconds, away from trees if you can.</Text>}
-          {logStep === 1 ? <>
-            <Text style={styles.fieldLabel}>WHICH DISC?</Text>
-            <View style={styles.sheetOptions}>
-              {bag.map((item, index) => <HoldPressable key={`${item}-${index}`} onPress={() => { setDisc(item); setLogStep(2); }} style={[styles.chip, styles.sheetChip, disc === item && styles.chipSelected]}><Text style={[styles.chipText, disc === item && styles.chipTextSelected]}>{item}</Text></HoldPressable>)}
-              {!bag.length && <HoldPressable onPress={() => { setDisc(''); setLogStep(2); }} style={[styles.chip, styles.sheetChip]}><Text style={styles.chipText}>No disc (bag is empty)</Text></HoldPressable>}
-            </View>
-          </> : logStep === 2 ? <>
-            <Text style={styles.fieldLabel}>TYPE OF THROW</Text>
-            <View style={styles.typeRow}>
-              {TYPE_OPTIONS.map((item) => <HoldPressable key={item} onPress={() => setThrowType(item)} style={[styles.typeButton, styles.sheetTypeButton, throwType === item && styles.typeButtonSelected]} accessibilityState={{ selected: throwType === item }}><Text style={[styles.typeText, throwType === item && styles.typeTextSelected]}>{item}</Text></HoldPressable>)}
-            </View>
-            <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW DID YOU THROW IT?</Text>
-            <View style={[styles.typeRow, styles.lieGrid]}>
-              {STYLE_OPTIONS.map((item) => <HoldPressable key={item} onPress={() => { setThrowStyle(item); setLogStep(3); }} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwStyle === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwStyle === item && styles.typeTextSelected]}>{item}</Text></HoldPressable>)}
-            </View>
-          </> : logStep === 3 ? <>
-            <Text style={styles.fieldLabel}>{throwType === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
-            <View style={[styles.typeRow, styles.lieGrid]}>
-              {lieOptionsFor(throwType).map((item) => <HoldPressable key={item} onPress={() => { if (item === 'Basket') { saveThrow(QUALITY_MAX, 'Basket'); return; } setThrowLie(item); setLogStep(4); }} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwLie === item && styles.typeButtonSelected]} accessibilityLabel={item === 'OB' ? 'Out of bounds, one penalty stroke' : lieLabel(item, throwType)}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwLie === item && styles.typeTextSelected]}>{lieLabel(item, throwType)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</HoldPressable>)}
-            </View>
-          </> : <>
-            <Text style={styles.fieldLabel}>HOW WAS THE THROW?</Text>
-            <View style={styles.typeRow}>
-              {QUALITY_OPTIONS.map((option) => <HoldPressable key={option.value} onPress={() => saveThrow(option.value)} style={[styles.typeButton, styles.qualityButton]} accessibilityLabel={`Quality ${option.value}, ${option.label}`}><Text style={styles.qualityValue}>{option.value}</Text><Text style={styles.qualityLabel}>{option.label}</Text></HoldPressable>)}
-            </View>
-          </>}
-          <View style={styles.editFooter}>
-            {logStep > 1 ? <HoldPressable onPress={() => setLogStep(logStep === 4 ? 3 : logStep === 3 ? 2 : 1)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></HoldPressable> : <View />}
-            <View style={styles.editFooterActions}>
-              <HoldPressable onPress={cancelLogThrow} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></HoldPressable>
-              {/* Saves with the choices so far: the guesses plus anything changed. */}
-              <HoldPressable onPress={() => saveThrow(null)} style={[styles.sheetFooterButton, styles.saveButton]} accessibilityLabel={`Save now: ${disc || 'no disc'} ${throwStyle.toLowerCase()} ${throwType.toLowerCase()}, ${throwLie.toLowerCase()}`}><Text style={styles.saveButtonText}>SAVE ✓</Text></HoldPressable>
-            </View>
-          </View>
-        </View>
-      </View>
-    </Modal>
+    {logging && <LogThrowSheet
+      throwNumber={score + 1}
+      initial={logging}
+      bag={bag}
+      onNext={confirmDetails}
+      lastHole={hole >= (selectedCourse?.holes ?? 18)}
+      onCancel={() => setLogging(null)}
+    />}
     {editingThrow && <ThrowEditorSheet target={editingThrow} layouts={selectedCourse?.layouts} hold onClose={() => setEditingThrow(null)} />}
   </>;
 };

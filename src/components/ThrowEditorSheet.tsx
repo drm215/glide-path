@@ -36,7 +36,7 @@ export const ThrowEditorSheet = ({ target, layouts, hold = false, onClose }: {
     updateSessionShots(sessionId, (list) => {
       const edited = list.map((shot, position) => (position === index
         ? {
-          ...shot, disc: throwDraft.disc, type: throwDraft.type, style: throwDraft.style, lie: throwDraft.lie,
+          ...shot, disc: throwDraft.disc, type: throwDraft.type, style: throwDraft.type === 'Putt' ? undefined : throwDraft.style, lie: throwDraft.lie,
           ...(throwDraft.quality === null ? {} : { quality: throwDraft.quality, qualityMax: QUALITY_MAX }),
           ...(moveToBasket ? { latitude: layout.basket!.latitude, longitude: layout.basket!.longitude, accuracy: layout.basket!.accuracy } : {}),
         }
@@ -83,10 +83,13 @@ export const ThrowEditorSheet = ({ target, layouts, hold = false, onClose }: {
           <View style={styles.typeRow}>
             {TYPE_OPTIONS.map((item) => <Button key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, type: item }))} style={[styles.typeButton, styles.sheetTypeButton, throwDraft.type === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.type === item && styles.typeTextSelected]}>{item}</Text></Button>)}
           </View>
-          <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW WAS IT THROWN?</Text>
-          <View style={[styles.typeRow, styles.lieGrid]}>
-            {STYLE_OPTIONS.map((item) => <Button key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, style: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwDraft.style === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.style === item && styles.typeTextSelected]}>{item}</Text></Button>)}
-          </View>
+          {/* Putts aren't saved with a style. */}
+          {throwDraft.type !== 'Putt' && <>
+            <Text style={[styles.fieldLabel, styles.typeLabel]}>HOW WAS IT THROWN?</Text>
+            <View style={[styles.typeRow, styles.lieGrid]}>
+              {STYLE_OPTIONS.map((item) => <Button key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, style: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.styleButton, throwDraft.style === item && styles.typeButtonSelected]}><Text style={[styles.typeText, throwDraft.style === item && styles.typeTextSelected]}>{item}</Text></Button>)}
+            </View>
+          </>}
           <Text style={[styles.fieldLabel, styles.typeLabel]}>{throwDraft.type === 'Putt' ? 'PUTT RESULT' : 'WHERE DID IT LAND?'}</Text>
           <View style={[styles.typeRow, styles.lieGrid]}>
             {lieOptionsFor(throwDraft.type).map((item) => <Button key={item} onPress={() => setThrowDraft((draft) => ({ ...draft, lie: item }))} style={[styles.typeButton, styles.sheetTypeButton, styles.lieButton, item === 'OB' && styles.obButton, throwDraft.lie === item && styles.typeButtonSelected]}><Text style={[styles.typeText, item === 'OB' && styles.obText, throwDraft.lie === item && styles.typeTextSelected]}>{lieLabel(item, throwDraft.type)}</Text>{item === 'OB' && <Text style={styles.obPenaltyText}>+1 STROKE</Text>}</Button>)}

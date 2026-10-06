@@ -271,6 +271,16 @@ export const styles = StyleSheet.create({
   qualityLabel: { color: MUTED, fontSize: 11, fontWeight: '700', marginTop: 2 },
   sheetFooter: { flexDirection: 'row-reverse', justifyContent: 'space-between', marginTop: 18 },
   pickerSheet: { maxHeight: '80%' },
+  // The throw log sheet scrolls its options when they don't fit.
+  logSheet: { maxHeight: '92%' },
+  // The log sheet shows every option at once, so its buttons are a little shorter than elsewhere.
+  logChip: { height: 34, marginBottom: 6, paddingHorizontal: 13 },
+  logButton: { height: 38 },
+  logQualityButton: { height: 46 },
+  // A throw waiting below the map for its location to be saved.
+  pendingThrow: { marginTop: 4 },
+  pendingActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  pendingAction: { flex: 1 },
   pickerList: { flexGrow: 0 },
   sheetFooterButton: { borderWidth: 1, borderColor: '#26302b', borderRadius: 5, paddingHorizontal: 14, paddingVertical: 10 },
   controlHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
