@@ -278,6 +278,25 @@ test('a GPS problem keeps the throw waiting, to try again', async () => {
   await waitFor(() => expect(stored<{ shots: { lie: string }[] }>(KEYS.round)?.shots.map((shot) => shot.lie)).toEqual(['Hazard']));
 });
 
+test('a made putt on the last hole is saved with the round when it ends from the prompt', async () => {
+  const oneHole: Course = { ...cedarGrove, holes: 1, layouts: [cedarGrove.layouts![0]] };
+  await seed({ [KEYS.courses]: [oneHole], [KEYS.bag]: ['Aviar'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('Putt').then(() => 'Putt'));
+  await press('Made');
+  await hold('SAVE ✓');
+  await pressAlertButton('End round & see summary');
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  await waitFor(() => {
+    const history = stored<SessionArchive[]>(KEYS.history);
+    expect(history).toHaveLength(1);
+    expect(history![0].shots).toEqual([expect.objectContaining({ type: 'Putt', lie: 'Basket' })]);
+  });
+});
+
 test('the round screen dims, and the dimming switch is saved and restores brightness', async () => {
   await seed({ [KEYS.courses]: [cedarGrove] });
   await renderApp();

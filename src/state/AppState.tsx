@@ -308,8 +308,17 @@ const useAppState = () => {
   // Exactly `holes` entries, so a hole can be written by index.
   const fullHoleLayouts = (layout: CourseLayout) => Array.from({ length: layout.holes }, (_, index) => layout.layouts[index] ?? { tee: null, basket: null });
 
+  // The session in progress as of the latest render. Alerts keep the callbacks they were created
+  // with, so ending a session from one (such as the prompt right after the last hole's made throw)
+  // reads these rather than values from before that throw was added.
+  const latestSession = useRef({ shots, mode, selectedCourse, resumedFrom });
+  useEffect(() => {
+    latestSession.current = { shots, mode, selectedCourse, resumedFrom };
+  });
+
   // Moves the current session's throws into history so a new one can begin.
   const archiveSession = () => {
+    const { shots, mode, selectedCourse, resumedFrom } = latestSession.current;
     const id = shots.length ? (resumedFrom?.id ?? newSessionId()) : null;
     if (id) {
       const record: SessionArchive = {
@@ -379,8 +388,9 @@ const useAppState = () => {
 
   // Ends the session; a finished round opens its summary, anything else returns home.
   const finishSession = () => {
+    const finishedMode = latestSession.current.mode;
     const id = archiveSession();
-    if (id && mode === 'Round') {
+    if (id && finishedMode === 'Round') {
       openRound(id, true);
       return;
     }
