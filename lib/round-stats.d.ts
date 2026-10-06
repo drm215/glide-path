@@ -26,7 +26,9 @@ export type StatsRound = { shots: Shot[]; layouts?: (HoleLayout | null | undefin
 export declare const QUALITY_LABELS: Record<number, string>;
 export declare const C1_FEET: number;
 export declare const C2_FEET: number;
+export declare const POOR_ACCURACY_M: number;
 export declare function quality(shot: Pick<Shot, 'quality' | 'qualityMax'>): number | null;
-export declare function summarizeRounds(rounds: StatsRound[]): RoundSummary;
+export declare function reliableDistances(rounds: StatsRound[]): Set<Shot>;
+export declare function summarizeRounds(rounds: StatsRound[], reliable?: Set<Shot>): RoundSummary;
 export declare function summarizeRound(shots: Shot[], layouts?: StatsRound['layouts']): RoundSummary;
 export declare function roundScore(shots: Shot[], layouts?: StatsRound['layouts']): { holes: number; strokes: number; toPar: number | null };

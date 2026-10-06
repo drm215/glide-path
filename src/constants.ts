@@ -1,3 +1,4 @@
+import { POOR_ACCURACY_M } from '../lib/round-stats';
 import type { Disc, Lie, ThrowStyle, ThrowType } from '../lib/types';
 
 // Wait this long after the last edit before syncing, so a burst of edits uploads once.
@@ -23,7 +24,7 @@ export const ROUND_BRIGHTNESS = 0.3;
 // GPS accuracy (meters) good enough to log a throw without taking a fresh reading, and the point
 // past which the throw sheet warns that its distance is unreliable.
 export const GPS_GOOD_ACCURACY_M = 8;
-export const GPS_POOR_ACCURACY_M = 15;
+export const GPS_POOR_ACCURACY_M = POOR_ACCURACY_M;
 // How old the round screen's warm GPS fix can be and still be used for a throw.
 export const WARM_FIX_MAX_AGE_MS = 5_000;
 export const ROUND_KEEP_AWAKE_TAG = 'round-in-progress';

@@ -119,6 +119,12 @@ describe('suggestDiscs (the caddie)', () => {
     ]);
   });
 
+  test("leaves out throws whose distance isn't reliable, when told which are", () => {
+    const reliable = new Set(history.filter((item) => !(item.disc === 'Buzzz' && item.feet === 290)));
+    const [best] = suggestDiscs(285, 'Drive', history, bag, 1, reliable);
+    assert.deepEqual([best.disc, best.averageFeet, best.count], ['Buzzz', 275, 2]);
+  });
+
   test('approaches use approach history, falling back to any non-putt', () => {
     assert.deepEqual(suggestDiscs(160, 'Approach', history, bag).map((item) => item.disc), ['Buzzz']);
     assert.equal(suggestDiscs(160, 'Approach', history, ['Wraith'])[0].disc, 'Wraith', 'no approaches with Wraith yet: falls back to drives');

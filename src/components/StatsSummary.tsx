@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, summarizeRounds, type GroupStats, type StatsRound } from '../../lib/round-stats';
+import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, reliableDistances, summarizeRounds, type GroupStats, type StatsRound } from '../../lib/round-stats';
 import type { ThrowType } from '../../lib/types';
 import { FILTER_TYPES } from '../constants';
 import { statFeet, statPercent, statQuality } from '../format';
@@ -36,7 +36,8 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
   const [discQuality, setDiscQuality] = useState<number | null>(null);
   const shots = rounds.flatMap((round) => round.shots);
   if (!shots.length) return null;
-  const summary = summarizeRounds(rounds);
+  const reliable = reliableDistances(rounds);
+  const summary = summarizeRounds(rounds, reliable);
   const { putting, driveCircles } = summary;
   const types = FILTER_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => qualityOf(shot) === value));
@@ -73,7 +74,7 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
           <StatTile label="IN C1" value={statPercent(driveCircles.c1, driveCircles.measured)} note={`${driveCircles.c1} of ${driveCircles.measured} · within 33 ft`} />
           <StatTile label="IN C2" value={statPercent(driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c2} of ${driveCircles.measured} · 33–66 ft`} />
           <StatTile label="INSIDE C2" value={statPercent(driveCircles.c1 + driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c1 + driveCircles.c2} of ${driveCircles.measured} drives`} />
-          <StatTile label="MEASURED" value={`${driveCircles.measured}/${driveCircles.drives}`} note="Need a logged spot and mapped basket" />
+          <StatTile label="MEASURED" value={`${driveCircles.measured}/${driveCircles.drives}`} note="Need an accurate logged spot and a mapped basket" />
         </View> : <Text style={styles.mapInstruction}>Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in {scope} has both.</Text>}
       </>}
       <Text style={styles.statsHeading}>By disc</Text>
@@ -83,7 +84,7 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
       {ratings.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         {[filterChip('Any quality', discQuality === null, () => setDiscQuality(null)), ...ratings.map((value) => filterChip(QUALITY_NAMES[value], discQuality === value, () => setDiscQuality(value)))]}
       </ScrollView>}
-      {discShots.length ? <GroupTable heading="DISC" rows={summarizeRounds([{ shots: discShots }]).byDisc} /> : <Text style={styles.mapInstruction}>No throws match these filters.</Text>}
+      {discShots.length ? <GroupTable heading="DISC" rows={summarizeRounds([{ shots: discShots }], reliable).byDisc} /> : <Text style={styles.mapInstruction}>No throws match these filters.</Text>}
       {summary.landings.length > 0 && <>
         <Text style={styles.statsHeading}>Where throws landed</Text>
         <Text style={styles.statsChips}>{summary.landings.map((item) => `${item.lie === 'Basket' ? 'In the basket' : item.lie} ${item.count}`).join('  ·  ')}</Text>

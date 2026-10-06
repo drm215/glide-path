@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
-import { roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
+import { reliableDistances, roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
 import { segmentLabels, throwMarkerClass, throwSegments } from '../public/js/lib.js';
 
@@ -123,6 +123,54 @@ describe('summarizeRound', () => {
     assert.equal(combined.count, 2);
     assert.deepEqual(combined.driveCircles, { drives: 2, measured: 2, c1: 2, c2: 0 });
     assert.deepEqual(summarizeRound(roundA.shots, roundA.layouts).driveCircles, { drives: 1, measured: 1, c1: 1, c2: 0 });
+  });
+
+  test('distances measured from or to a poor GPS reading are left out of distance figures', () => {
+    const at = (latitude: number, accuracy?: number) => ({ latitude, longitude: -75, ...(accuracy === undefined ? {} : { accuracy }) });
+    const round = [
+      { hole: 1, type: 'Drive', disc: 'D', feet: 300, lie: 'Fairway', ...at(40.0008, 4) },
+      // Logged under trees at ±30 m: its own distance is unreliable...
+      { hole: 1, type: 'Approach', disc: 'A', feet: 500, lie: 'Fairway', ...at(40.0009, 30) },
+      // ...and so is the next one, measured from it.
+      { hole: 1, type: 'Approach', disc: 'A', feet: 400, lie: 'Fairway', ...at(40.00095, 5) },
+      // Measured from a good lie again; logged before accuracy was saved, so it counts.
+      { hole: 1, type: 'Approach', disc: 'A', feet: 40, lie: 'Fairway', ...at(40.00096) },
+      // Another hole starts afresh from its tee.
+      { hole: 2, type: 'Drive', disc: 'D', feet: 320, lie: 'Fairway', ...at(41.0008, 3) },
+    ];
+    const summary = summarizeRound(round);
+    assert.equal(summary.count, 5, 'every throw still counts');
+    assert.equal(summary.totalFeet, 660);
+    assert.deepEqual(summary.longest, { feet: 320, disc: 'D', type: 'Drive' });
+    const approach = summary.byType.find((row: { label: string }) => row.label === 'Approach');
+    assert.deepEqual([approach.count, approach.averageFeet], [3, 40]);
+    assert.equal(reliableDistances([{ shots: round }]).size, 3);
+  });
+
+  test('first putts and drive circles skip positions with poor GPS accuracy', () => {
+    const at = (latitude: number, accuracy?: number) => ({ latitude, longitude: -75, ...(accuracy === undefined ? {} : { accuracy }) });
+    const holes = [{ tee: at(40), basket: at(40.001) }, { tee: at(41), basket: at(41.001) }];
+    const { putting, driveCircles } = summarizeRound([
+      // Hole 1: the drive's fix is poor, so neither the drive nor the putt from there is measured.
+      { hole: 1, type: 'Drive', disc: 'D', feet: 350, lie: 'Fairway', ...at(40.00095, 25) },
+      { hole: 1, type: 'Putt', disc: 'P', feet: 20, lie: 'Basket', ...at(40.001) },
+      // Hole 2: a good fix about 20 ft short; both measured.
+      { hole: 2, type: 'Drive', disc: 'D', feet: 345, lie: 'Fairway', ...at(41.001 - 20 / 364_000, 4) },
+      { hole: 2, type: 'Putt', disc: 'P', feet: 20, lie: 'Basket', ...at(41.001) },
+    ], holes);
+    assert.deepEqual(driveCircles, { drives: 2, measured: 1, c1: 1, c2: 0 });
+    assert.deepEqual([putting.firstPutts.attempts, putting.firstPutts.made, putting.firstPutts.measured], [2, 2, 1]);
+  });
+
+  test("a filtered list of throws keeps the full rounds' judgement of which distances are reliable", () => {
+    const round = [
+      { hole: 1, type: 'Drive', disc: 'D', feet: 300, lie: 'Fairway', latitude: 40.0008, longitude: -75, accuracy: 40 },
+      { hole: 1, type: 'Approach', disc: 'A', feet: 60, lie: 'Fairway', latitude: 40.0009, longitude: -75, accuracy: 3 },
+    ];
+    const reliable = reliableDistances([{ shots: round }]);
+    // On its own the approach looks fine; it was thrown from the poor drive position.
+    assert.equal(summarizeRounds([{ shots: [round[1]] }]).byDisc[0].averageFeet, 60);
+    assert.equal(summarizeRounds([{ shots: [round[1]] }], reliable).byDisc[0].averageFeet, null);
   });
 
   test('roundScore counts OB penalties and scores to par only over holes with a par', () => {

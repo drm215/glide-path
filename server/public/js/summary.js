@@ -1,7 +1,7 @@
 // Round summary for the website's round pages: totals, and breakdowns by throw type, disc,
 // landing spot and quality. Built from the same throw data the maps use.
 import { el } from './lib.js';
-import { QUALITY_LABELS, quality, summarizeRounds } from './round-stats.js';
+import { QUALITY_LABELS, quality, reliableDistances, summarizeRounds } from './round-stats.js';
 
 const feet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
 const qualityText = (value) => (value === null ? '—' : `${value.toFixed(1)} / 3`);
@@ -32,8 +32,9 @@ const filterGroup = (label, options, onSelect) => {
   return el('div', { class: 'tabs', role: 'group', 'aria-label': label }, buttons);
 };
 
-// The By disc table with throw-type and quality filters that combine.
-const discBreakdown = (shots) => {
+// The By disc table with throw-type and quality filters that combine. `reliable` comes from the
+// full rounds, since a filtered list of throws no longer shows each throw's previous lie.
+const discBreakdown = (shots, reliable) => {
   const filters = { type: null, quality: null };
   const types = THROW_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => quality(shot) === value));
@@ -43,7 +44,7 @@ const discBreakdown = (shots) => {
   const render = () => {
     const matching = shots.filter((shot) => (filters.type === null || shot.type === filters.type) && (filters.quality === null || quality(shot) === filters.quality));
     const next = matching.length
-      ? breakdownTable('DISC', summarizeRounds([{ shots: matching }]).byDisc)
+      ? breakdownTable('DISC', summarizeRounds([{ shots: matching }], reliable).byDisc)
       : el('p', { class: 'meta' }, 'No throws match these filters.');
     if (table) table.replaceWith(next);
     else container.append(next);
@@ -89,12 +90,12 @@ const renderSummary = (title, rounds, scope) => {
           statTile('IN C2', percent(summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c2} of ${summary.driveCircles.measured} · 33–66 ft (10–20 m)`),
           statTile('INSIDE C2', percent(summary.driveCircles.c1 + summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c1 + summary.driveCircles.c2} of ${summary.driveCircles.measured} · within 66 ft`)),
         summary.driveCircles.measured < summary.driveCircles.drives
-          ? el('p', { class: 'meta' }, `${summary.driveCircles.measured} of ${summary.driveCircles.drives} drives could be measured; the rest have no logged position or no mapped basket.`)
+          ? el('p', { class: 'meta' }, `${summary.driveCircles.measured} of ${summary.driveCircles.drives} drives could be measured; the rest have no logged position, a position with poor GPS accuracy, or no mapped basket.`)
           : null,
       ] : el('p', { class: 'meta' }, `Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in ${scope} has both.`),
     ] : null,
     el('h3', {}, 'By disc'),
-    discBreakdown(shots),
+    discBreakdown(shots, reliableDistances(rounds)),
     summary.landings.length ? [el('h3', {}, 'Where throws landed'), el('div', { class: 'chips' }, summary.landings.map((item) => el('span', { class: 'chip' }, `${item.lie === 'Basket' ? 'In the basket' : item.lie} · ${item.count}`)))] : null,
     summary.qualities.length ? [el('h3', {}, 'Throw quality'), el('div', { class: 'chips' }, summary.qualities.map((item) => el('span', { class: 'chip' }, `${item.label} · ${item.count}`)))] : null,
   );

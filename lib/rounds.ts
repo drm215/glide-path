@@ -69,9 +69,10 @@ export type DiscSuggestion = { disc: Disc; style?: ThrowStyle; averageFeet: numb
 // The caddie: discs (and the style they were thrown with) from the bag whose average distance for
 // this type of throw is closest to the distance needed. Approaches fall back to any non-putt when
 // there are none yet. For putts, distance doesn't pick the disc, so the most-used come first.
-// Throws with no measured distance are ignored.
-export const suggestDiscs = (targetFeet: number, type: ThrowType, history: Shot[], bag: Disc[], limit = 3): DiscSuggestion[] => {
-  const usable = (shot: Shot) => shot.feet > 0 && bag.includes(shot.disc);
+// Throws with no measured distance are ignored, and so are throws not in `reliable` when it's given
+// (see reliableDistances: distances measured from or to a position with poor GPS accuracy).
+export const suggestDiscs = (targetFeet: number, type: ThrowType, history: Shot[], bag: Disc[], limit = 3, reliable?: Set<Shot>): DiscSuggestion[] => {
+  const usable = (shot: Shot) => shot.feet > 0 && bag.includes(shot.disc) && (!reliable || reliable.has(shot));
   let pool = history.filter((shot) => usable(shot) && shot.type === type);
   if (!pool.length && type !== 'Putt') pool = history.filter((shot) => usable(shot) && shot.type !== 'Putt');
   const groups = new Map<string, Shot[]>();
