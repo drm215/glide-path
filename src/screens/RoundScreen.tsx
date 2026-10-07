@@ -37,6 +37,9 @@ export const RoundScreen = () => {
   const [logging, setLogging] = useState<ThrowDetails | null>(null);
   const [pendingThrow, setPendingThrow] = useState<ThrowDetails | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: 'ready' });
+  // While a throw waits for its location, it belongs to this hole: moving holes, undoing or ending
+  // the round are off until it's saved or cancelled.
+  const throwWaiting = pendingThrow !== null;
   // A GPS reading too poor to save without asking; kept so SAVE ANYWAY doesn't take another.
   const poorFix = useRef<LiePoint | null>(null);
   const [showCourseInfo, setShowCourseInfo] = useState(false);
@@ -391,9 +394,9 @@ export const RoundScreen = () => {
       <View style={styles.roundToolbar}>
         <View style={styles.courseLabel}><Text style={styles.holeLabel}>{mode === 'Practice' ? `${practiceFocus.toUpperCase()} PRACTICE` : 'PLAYING AT'}</Text><Text style={styles.courseLabelName}>{selectedCourse?.name ?? 'Practice area'}{hasMultipleLayouts ? ` · ${selectedCourse?.layoutLabel}` : ''}</Text></View>
         <View style={styles.roundHoleNav}>
-          <HoldPressable onPress={goToPreviousHole} disabled={hole <= 1} style={[styles.roundHoleArrow, hole <= 1 && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Previous hole"><Text style={styles.holeNavArrow}>‹</Text></HoldPressable>
+          <HoldPressable onPress={goToPreviousHole} disabled={hole <= 1 || throwWaiting} style={[styles.roundHoleArrow, (hole <= 1 || throwWaiting) && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Previous hole"><Text style={styles.holeNavArrow}>‹</Text></HoldPressable>
           <View style={styles.holeSelector}><Text style={styles.holeLabel}>HOLE</Text><Text style={styles.holeNumber}>{String(hole).padStart(2, '0')}<Text style={styles.holeTotal}> / {selectedCourse?.holes ?? 18}</Text></Text></View>
-          <HoldPressable onPress={startNextHole} style={styles.roundHoleArrow} accessibilityRole="button" accessibilityLabel="Next hole"><Text style={styles.holeNavArrow}>›</Text></HoldPressable>
+          <HoldPressable onPress={startNextHole} disabled={throwWaiting} style={[styles.roundHoleArrow, throwWaiting && styles.holeNavDisabled]} accessibilityRole="button" accessibilityLabel="Next hole"><Text style={styles.holeNavArrow}>›</Text></HoldPressable>
         </View>
       </View>
 
@@ -454,10 +457,11 @@ export const RoundScreen = () => {
 
       <View style={styles.latestRow}>
         <HoldPressable onPress={() => latestShot && setEditingThrow({ sessionId: ACTIVE_SESSION_ID, index: shots.indexOf(latestShot) })} disabled={!latestShot} style={styles.latestCopy} accessibilityRole="button" accessibilityHint="Opens the throw to change its details"><Text style={styles.latestEyebrow}>LATEST THROW{latestShot ? '  ·  HOLD TO EDIT' : ''}</Text><Text style={styles.latestText}>{latestShot ? [latestShot.feet ? `${latestShot.feet} ft` : 'Distance n/a', [latestShot.disc || 'No disc', latestShot.style?.toLowerCase(), latestShot.type.toLowerCase()].filter(Boolean).join(' '), formatLie(latestShot.lie), latestShot.quality ? `quality ${formatQuality(latestShot)}` : null].filter(Boolean).join(' · ') : 'No throws on this hole yet'}</Text></HoldPressable>
-        {activeShots.length > 0 && <HoldPressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></HoldPressable>}
+        {activeShots.length > 0 && !throwWaiting && <HoldPressable accessibilityLabel="Undo last throw" onPress={undoLastThrow} style={styles.undoButton}><Text style={styles.undoText}>UNDO</Text></HoldPressable>}
       </View>
-      <HoldPressable onPress={finishHole} style={styles.finishButton}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></HoldPressable>
-      <HoldPressable onPress={endSession} style={styles.endSessionButton} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></HoldPressable>
+      {throwWaiting && <Text style={styles.gpsMessage}>Save or cancel the waiting throw before moving to another hole or ending the {mode === 'Round' ? 'round' : 'session'}.</Text>}
+      <HoldPressable onPress={finishHole} disabled={throwWaiting} style={[styles.finishButton, throwWaiting && styles.disabledButton]}><Text style={styles.finishButtonText}>{mode === 'Practice' ? 'NEXT TARGET' : 'FINISH HOLE'} <Text style={styles.finishArrow}>↗</Text></Text></HoldPressable>
+      <HoldPressable onPress={endSession} disabled={throwWaiting} style={[styles.endSessionButton, throwWaiting && styles.disabledButton]} accessibilityRole="button"><Text style={styles.endSessionText}>END {mode === 'Round' ? 'ROUND' : 'PRACTICE'}</Text></HoldPressable>
       <HoldPressable onPress={() => setDimRound((current) => !current)} style={styles.endSessionButton} accessibilityRole="switch" accessibilityLabel="Dim the screen during rounds" accessibilityState={{ checked: dimRound }}><Text style={styles.dimToggleText}>SCREEN DIMMING: {dimRound ? 'ON' : 'OFF'}</Text></HoldPressable>
       {selectedCourse ? <View style={styles.roundCourseInfo}>
         <HoldPressable onPress={() => setShowCourseInfo((current) => !current)} style={styles.roundCourseInfoHeader} accessibilityRole="button" accessibilityState={{ expanded: showCourseInfo }}>

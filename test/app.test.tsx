@@ -297,6 +297,26 @@ test('a made putt on the last hole is saved with the round when it ends from the
   });
 });
 
+test('a waiting throw stays on its hole: hole controls are off until it is saved or cancelled', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('NEXT ›').then(() => 'NEXT ›'));
+  expect(await screen.findByText('THROW 1 · READY TO SAVE')).toBeTruthy();
+  // Trying to move on does nothing while the throw waits.
+  await fireEvent(screen.getByLabelText('Next hole'), 'longPress');
+  await hold('FINISH HOLE ↗');
+  expect(screen.getByText('01 / 2')).toBeTruthy();
+  expect(screen.getByText(/Save or cancel the waiting throw/)).toBeTruthy();
+  await hold('SAVE LOCATION ✓');
+  await waitFor(() => expect(stored<{ shots: { hole: number }[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 1, shots: [{ hole: 1 }] }));
+  // Once saved, the controls work again.
+  await fireEvent(screen.getByLabelText('Next hole'), 'longPress');
+  await waitFor(() => expect(stored<{ hole: number }>(KEYS.round)?.hole).toBe(2));
+});
+
 test('the round screen dims, and the dimming switch is saved and restores brightness', async () => {
   await seed({ [KEYS.courses]: [cedarGrove] });
   await renderApp();
