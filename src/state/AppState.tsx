@@ -622,16 +622,20 @@ const useAppState = () => {
           text: 'Delete course',
           style: 'destructive',
           onPress: () => {
-            const belongsToCourse = (shot: Shot) => shot.courseId === course.id || (!shot.courseId && selectedCourseId === course.id);
+            // The latest courses and throws, not those from when the alert opened: a sync or another
+            // edit may have changed them while it was showing.
+            const { shots, mode, selectedCourse } = latestSession.current;
+            const selectedId = selectedCourse?.id;
+            const belongsToCourse = (shot: Shot) => shot.courseId === course.id || (!shot.courseId && selectedId === course.id);
             const courseShots = shots.filter(belongsToCourse);
             if (courseShots.length) {
               setHistory((current) => [...current, { id: newSessionId(), mode, courseName: course.name, courseId: course.id, shots: courseShots, updatedAt: nowMs() }]);
               setShots((current) => current.filter((shot) => !belongsToCourse(shot)));
             }
-            const remainingCourses = courses.filter((item) => item.id !== course.id);
-            setCourses(remainingCourses);
+            const remainingCourses = latestSync.current.data.courses.filter((item) => item.id !== course.id);
+            setCourses((current) => current.filter((item) => item.id !== course.id));
             setDeletedCourses((current) => [...current, { clientId: course.id, updatedAt: nowMs() }]);
-            if (selectedCourseId === course.id) {
+            if (selectedId === course.id) {
               setSelectedCourseId(remainingCourses[0]?.id ?? '');
               setHole(1);
             }

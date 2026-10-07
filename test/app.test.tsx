@@ -399,6 +399,27 @@ test('a link to a round opens its summary, and its back button goes to the round
   expect(await screen.findByText('Rounds.')).toBeTruthy();
 });
 
+test('deleting a course keeps a course added while its confirmation was open', async () => {
+  mockServer({
+    '/api/public/courses': () => ({ courses: [{ uid: 'pub-1', name: 'Oak Run', holes: 1, city: 'Media', state: 'PA', mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, layoutCount: 1 }] }),
+    '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: {}, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300 } }),
+  });
+  await seed({ [KEYS.courses]: [cedarGrove] });
+  await renderApp();
+  await press(await screen.findByText('Course builder').then(() => 'Course builder'));
+  await fireEvent.press(await screen.findByLabelText('Delete Cedar Grove'));
+  // The confirmation is open; meanwhile another course arrives.
+  await fireEvent.press(screen.getByLabelText('Back to the main menu'));
+  await press(await screen.findByText('Find courses').then(() => 'Find courses'));
+  await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove or PA'), 'Oak');
+  await press('SEARCH');
+  await press(await screen.findByText('Oak Run').then(() => 'Oak Run'));
+  await press(await screen.findByText('ADD TO MY COURSES').then(() => 'ADD TO MY COURSES'));
+  await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.map((course) => course.name)).toEqual(['Cedar Grove', 'Oak Run']));
+  await pressAlertButton('Delete course');
+  await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.map((course) => course.name)).toEqual(['Oak Run']));
+});
+
 test('creates a course from the new-course flow', async () => {
   await renderApp();
   await press(await screen.findByText('Course builder').then(() => 'Course builder'));
