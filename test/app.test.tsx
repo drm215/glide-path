@@ -404,6 +404,8 @@ test('stats summarize finished rounds', async () => {
   await press(await screen.findByText('Stats').then(() => 'Stats'));
   expect(await screen.findByText('Throw stats')).toBeTruthy();
   expect(screen.getByText('BEST ROUND')).toBeTruthy();
+  expect(screen.getByText('AVG MADE PUTT')).toBeTruthy();
+  expect(screen.getByText('LONGEST MADE PUTT')).toBeTruthy();
 });
 
 test('stats leave out a distance measured from a poor GPS reading', async () => {

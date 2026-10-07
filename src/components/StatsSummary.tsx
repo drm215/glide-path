@@ -66,6 +66,8 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
           <StatTile label="AVG FIRST PUTT" value={statFeet(putting.firstPutts.averageFeet)} note={putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'} />
           <StatTile label="ALL PUTTS" value={statPercent(putting.made, putting.attempts)} note={`${putting.made} of ${putting.attempts} made`} />
           <StatTile label="MISSES" value={putting.hit + putting.missed} note={`${putting.hit} hit the basket · ${putting.missed} missed`} />
+          <StatTile label="AVG MADE PUTT" value={statFeet(putting.madePutts.averageFeet)} note={putting.madePutts.measured < putting.made ? `${putting.madePutts.measured} of ${putting.made} measured` : 'From lie to basket'} />
+          <StatTile label="LONGEST MADE PUTT" value={statFeet(putting.madePutts.longestFeet)} />
         </View>
       </>}
       {driveCircles.drives > 0 && <>

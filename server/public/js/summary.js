@@ -79,7 +79,9 @@ const renderSummary = (title, rounds, scope) => {
         statTile('FIRST-PUTT MAKES', `${Math.round((putting.firstPutts.made / putting.firstPutts.attempts) * 100)}%`, `${putting.firstPutts.made} of ${putting.firstPutts.attempts} holes`),
         statTile('AVG FIRST PUTT', feet(putting.firstPutts.averageFeet),
           putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'),
-        statTile('ALL PUTTS', `${Math.round((putting.made / putting.attempts) * 100)}%`, `${putting.made} of ${putting.attempts} made`)),
+        statTile('ALL PUTTS', `${Math.round((putting.made / putting.attempts) * 100)}%`, `${putting.made} of ${putting.attempts} made`),
+        statTile('AVG MADE PUTT', feet(putting.madePutts.averageFeet), putting.madePutts.measured < putting.made ? `${putting.madePutts.measured} of ${putting.made} measured` : 'From lie to basket'),
+        statTile('LONGEST MADE PUTT', feet(putting.madePutts.longestFeet), null)),
       putting.hit || putting.missed ? el('p', { class: 'meta' }, [putting.hit ? `${putting.hit} hit the basket` : '', putting.missed ? `${putting.missed} missed` : ''].filter(Boolean).join(' · ')) : null,
     ] : null,
     summary.driveCircles.drives ? [

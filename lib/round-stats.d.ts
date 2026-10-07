@@ -14,6 +14,8 @@ export type RoundSummary = {
   byDisc: GroupStats[];
   putting: {
     attempts: number; made: number; hit: number; missed: number;
+    // Made putts' distances from the basket; `measured` counts those with a reliable distance.
+    madePutts: { averageFeet: number | null; longestFeet: number | null; measured: number };
     firstPutts: { attempts: number; made: number; averageFeet: number | null; measured: number };
   } | null;
   driveCircles: { drives: number; measured: number; c1: number; c2: number };

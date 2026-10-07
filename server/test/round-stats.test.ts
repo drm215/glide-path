@@ -44,7 +44,11 @@ describe('summarizeRound', () => {
   test('putting results, landings and quality', () => {
     // All three putts are on hole 1, so there's one first putt (missed); with no GPS positions
     // or layouts its distance can't be measured.
-    assert.deepEqual(summary.putting, { attempts: 3, made: 1, hit: 1, missed: 1, firstPutts: { attempts: 1, made: 0, averageFeet: null, measured: 0 } });
+    assert.deepEqual(summary.putting, {
+      attempts: 3, made: 1, hit: 1, missed: 1,
+      madePutts: { averageFeet: 8, longestFeet: 8, measured: 1 },
+      firstPutts: { attempts: 1, made: 0, averageFeet: null, measured: 0 },
+    });
     assert.deepEqual(summary.landings.map((item: { lie: string; count: number }) => [item.lie, item.count]),
       [['Fairway', 2], ['Woods', 1], ['OB', 1], ['Basket', 1], ['Hit basket', 1], ['Missed', 1]]);
     assert.deepEqual(summary.qualities, [{ label: 'Good', count: 2 }, { label: 'Fair', count: 3 }, { label: 'Poor', count: 2 }]);
@@ -171,6 +175,21 @@ describe('summarizeRound', () => {
     // On its own the approach looks fine; it was thrown from the poor drive position.
     assert.equal(summarizeRounds([{ shots: [round[1]] }]).byDisc[0].averageFeet, 60);
     assert.equal(summarizeRounds([{ shots: [round[1]] }], reliable).byDisc[0].averageFeet, null);
+  });
+
+  test('made putts: average and longest distance from the basket, leaving out unreliable ones', () => {
+    const putt = (feet: number, lie: string, accuracy?: number) => ({ hole: 1, type: 'Putt', disc: 'P', feet, lie, latitude: 40, longitude: -75, ...(accuracy === undefined ? {} : { accuracy }) });
+    const { putting } = summarizeRound([
+      putt(10, 'Basket'),
+      putt(30, 'Missed'),
+      { ...putt(20, 'Basket'), hole: 2 },
+      // Its lie was logged at ±25 m, so the made putt after it isn't measured.
+      { hole: 3, type: 'Approach', disc: 'A', feet: 100, lie: 'Fairway', latitude: 40, longitude: -75, accuracy: 25 },
+      { ...putt(45, 'Basket'), hole: 3 },
+    ]);
+    assert.deepEqual(putting.madePutts, { averageFeet: 15, longestFeet: 20, measured: 2 });
+    assert.equal(putting.made, 3);
+    assert.deepEqual(summarizeRound([putt(30, 'Missed')]).putting.madePutts, { averageFeet: null, longestFeet: null, measured: 0 });
   });
 
   test('roundScore counts OB penalties and scores to par only over holes with a par', () => {
