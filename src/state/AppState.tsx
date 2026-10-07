@@ -16,7 +16,7 @@ import { isGpsPoint } from '../geo';
 import { backTo, go, openHoleMapping, openRound } from '../navigation';
 import {
   BAG_DETAILS_KEY, BAG_KEY, BAG_WEIGHTS_KEY, COURSES_KEY, HISTORY_KEY, LAST_ACCOUNT_KEY, MIGRATIONS_KEY, SETTINGS_KEY, STORAGE_KEY,
-  SYNC_KEY, SYNC_META_KEY, TOKEN_KEY, saveToStorage, unsaveableKeys, type LastAccount, type ResumedFrom, type SavedRound, type Settings,
+  SYNC_KEY, SYNC_META_KEY, TOKEN_KEY, saveToStorage, unsaveableKeys, type LastAccount, type ResumedFrom, type SavedRound, type Settings, type ThrowDetails,
 } from '../storage';
 import { newSessionId, nowMs } from '../time';
 
@@ -39,6 +39,9 @@ const useAppState = () => {
   const [practiceFocus, setPracticeFocus] = useState('Distance');
   const [sessionActive, setSessionActive] = useState(false);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
+  // A throw whose details are entered, waiting below the map for its location; saved with the
+  // round so it survives leaving the round screen or closing the app.
+  const [pendingThrow, setPendingThrow] = useState<ThrowDetails | null>(null);
   // Shown on the round screen, e.g. after resuming a round from its summary.
   const [roundMessage, setRoundMessage] = useState('');
   // The last style used is the default for the next throw.
@@ -125,6 +128,7 @@ const useAppState = () => {
         setResumedFrom(saved.resumedFrom ?? null);
         // Rounds saved before `active` existed count as in progress if they have throws.
         setSessionActive(saved.active ?? saved.shots.length > 0);
+        setPendingThrow(saved.pendingThrow ?? null);
         if (saved.practiceFocus) setPracticeFocus(saved.practiceFocus);
         savedRound = saved;
       });
@@ -170,9 +174,9 @@ const useAppState = () => {
 
   useEffect(() => {
     if (!loaded) return;
-    const saved: SavedRound = { shots, hole, mode, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom };
+    const saved: SavedRound = { shots, hole, mode, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom, pendingThrow };
     saveToStorage(STORAGE_KEY, saved);
-  }, [hole, loaded, mode, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
+  }, [hole, loaded, mode, pendingThrow, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -331,6 +335,7 @@ const useAppState = () => {
     setShots([]);
     setSessionActive(false);
     setResumedFrom(null);
+    setPendingThrow(null);
     return id;
   };
 
@@ -524,6 +529,7 @@ const useAppState = () => {
     setDisc('');
     setSessionActive(false);
     setResumedFrom(null);
+    setPendingThrow(null);
     setSelectedLayoutId(MAIN_LAYOUT_ID);
   };
 
@@ -603,6 +609,8 @@ const useAppState = () => {
             }));
             updateCourseLayout(course.id, selectedLayoutId, (layout) => ({ ...layout, holes: layout.holes - 1, layouts: fullHoleLayouts(layout).filter((_, index) => index !== holeNumber - 1) }));
             if (selectedCourseId === course.id) {
+              // Holes renumber, so a waiting throw can no longer tell which hole it was on.
+              setPendingThrow(null);
               setHole((current) => current === holeNumber ? Math.max(1, holeNumber - 1) : current > holeNumber ? current - 1 : current);
             }
             onDeleted?.();
@@ -636,6 +644,8 @@ const useAppState = () => {
             setCourses((current) => current.filter((item) => item.id !== course.id));
             setDeletedCourses((current) => [...current, { clientId: course.id, updatedAt: nowMs() }]);
             if (selectedId === course.id) {
+              // A waiting throw belonged to a hole of this course.
+              setPendingThrow(null);
               setSelectedCourseId(remainingCourses[0]?.id ?? '');
               setHole(1);
             }
@@ -718,7 +728,7 @@ const useAppState = () => {
     bag, bagDetails, bagWeights, disc, setDisc, addDisc, deleteDisc, setDiscWeight, addCatalogDisc,
     selectedCourseId, setSelectedCourseId, selectedLayoutId, setSelectedLayoutId, selectedBaseCourse, selectedCourse, selectedCourseLayouts, hasMultipleLayouts,
     locationAllowed, setLocationAllowed, dimRound, setDimRound,
-    mode, hole, setHole, shots, setShots, sessionActive, practiceFocus, setPracticeFocus, resumedFrom, roundMessage, setRoundMessage, throwStyle, setThrowStyle,
+    mode, hole, setHole, shots, setShots, sessionActive, practiceFocus, setPracticeFocus, resumedFrom, roundMessage, setRoundMessage, throwStyle, setThrowStyle, pendingThrow, setPendingThrow,
     archiveSession, beginSession, confirmNewSession, finishSession, resumeSession, deleteRound, updateSessionShots, setRoundShared,
     selectLayout, deleteLayout, setHolePar, addHoleToCourse, deleteHole, deleteCourse, updateCourseDetails, setCoursePublished, addPublicCourse,
     newCourseStep, setNewCourseStep, newCourseId, courseName, setCourseName, startNewCourse, saveNewCourseName, mapLayout,

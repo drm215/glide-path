@@ -317,6 +317,49 @@ test('a waiting throw stays on its hole: hole controls are off until it is saved
   await waitFor(() => expect(stored<{ hole: number }>(KEYS.round)?.hole).toBe(2));
 });
 
+test('a waiting throw survives leaving the round screen', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'] });
+  await renderApp();
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('Woods').then(() => 'Woods'));
+  await press('NEXT ›');
+  expect(await screen.findByText('THROW 1 · READY TO SAVE')).toBeTruthy();
+  await waitFor(() => expect(stored<{ pendingThrow: unknown }>(KEYS.round)?.pendingThrow).toMatchObject({ lie: 'Woods' }));
+
+  await fireEvent(screen.getByLabelText('Glide Path home'), 'longPress');
+  await press(await screen.findByText('Resume round').then(() => 'Resume round'));
+  expect(await screen.findByText('THROW 1 · READY TO SAVE')).toBeTruthy();
+  await hold('SAVE LOCATION ✓');
+  await waitFor(() => {
+    const round = stored<{ shots: { lie: string }[]; pendingThrow: unknown }>(KEYS.round)!;
+    expect(round.shots.map((shot) => shot.lie)).toEqual(['Woods']);
+    expect(round.pendingThrow).toBeNull();
+  });
+});
+
+test('a waiting throw saved before the app closed is still there when it reopens, until the round ends', async () => {
+  await seed({
+    [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'],
+    [KEYS.round]: { shots: [], hole: 1, mode: 'Round', courseId: 'course-1', active: true, pendingThrow: { disc: 'Buzzz', type: 'Drive', style: 'Forehand', lie: 'Hazard', quality: 2 } },
+  });
+  await renderApp();
+  await press(await screen.findByText('Resume round').then(() => 'Resume round'));
+  expect(await screen.findByText('THROW 1 · READY TO SAVE')).toBeTruthy();
+  expect(screen.getByText('Buzzz forehand drive · hazard · quality 2/3')).toBeTruthy();
+  await hold('SAVE LOCATION ✓');
+  await waitFor(() => expect(stored<{ shots: unknown[] }>(KEYS.round)?.shots).toEqual([expect.objectContaining({ lie: 'Hazard', style: 'Forehand', quality: 2 })]));
+
+  // Ending the round clears any waiting throw along with it.
+  await hold('LOG THROW 2');
+  await press(await screen.findByText('NEXT ›').then(() => 'NEXT ›'));
+  await hold(await screen.findByText('CANCEL THROW').then(() => 'CANCEL THROW'));
+  await hold(await screen.findByText('END ROUND').then(() => 'END ROUND'));
+  await pressAlertButton('End');
+  await waitFor(() => expect(stored<{ pendingThrow: unknown; shots: unknown[] }>(KEYS.round)).toMatchObject({ pendingThrow: null, shots: [] }));
+});
+
 test('the round screen dims, and the dimming switch is saved and restores brightness', async () => {
   await seed({ [KEYS.courses]: [cedarGrove] });
   await renderApp();

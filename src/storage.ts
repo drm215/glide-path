@@ -1,14 +1,19 @@
 // What the app keeps on the phone, and the helper that saves it.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert } from 'react-native';
-import type { SessionArchive, Shot } from '../lib/types';
+import type { Disc, Lie, SessionArchive, Shot, ThrowStyle, ThrowType } from '../lib/types';
 
 // A past round reopened as the round in progress keeps its id, so ending it again updates it.
 export type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null };
+// A throw's details as entered in the log sheet.
+export type ThrowDetails = { disc: Disc; type: ThrowType; style: ThrowStyle; lie: Lie; quality: number | null };
+
 export type SavedRound = {
   // history is only read, from devices that saved it here before HISTORY_KEY existed.
   shots: Shot[]; hole: number; mode: 'Round' | 'Practice'; history?: SessionArchive[]; courseId?: string; active?: boolean; practiceFocus?: string;
   layoutId?: string; resumedFrom?: ResumedFrom | null;
+  // A throw whose details are entered and whose location hasn't been saved yet.
+  pendingThrow?: ThrowDetails | null;
 };
 export type Settings = { dimRound?: boolean };
 export type LastAccount = { id: string; email: string; pushedThrough: number };

@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import type { Disc, Lie, ThrowStyle, ThrowType } from '../../lib/types';
+import type { Disc, ThrowType } from '../../lib/types';
 import { lieLabel, lieOptionsFor, QUALITY_OPTIONS, STYLE_OPTIONS, TYPE_OPTIONS } from '../constants';
+import type { ThrowDetails } from '../storage';
 import { styles } from '../theme';
 import { HoldPressable } from './HoldPressable';
 
-export type ThrowDetails = { disc: Disc; type: ThrowType; style: ThrowStyle; lie: Lie; quality: number | null };
+export type { ThrowDetails };
 
 // The details of a throw, all on one screen: disc, type, style, where it landed and an optional
 // quality, starting from the best guesses. NEXT returns to the round screen to save the location

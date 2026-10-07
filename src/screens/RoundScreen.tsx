@@ -31,11 +31,10 @@ type SaveStatus = { kind: 'ready' } | { kind: 'saving' } | { kind: 'error'; mess
 type LiePoint = { latitude: number; longitude: number; altitude: number | null; accuracy: number | null; feet: number };
 
 export const RoundScreen = () => {
-  const { bag, bagDetails, dimRound, disc, finishSession, hasMultipleLayouts, history, hole, locationAllowed, mode, practiceFocus, roundMessage, selectedCourse, setDimRound, setDisc, setHole, setLocationAllowed, setRoundMessage, setShots, setThrowStyle, shots, throwStyle } = useApp();
+  const { bag, bagDetails, dimRound, disc, finishSession, hasMultipleLayouts, history, hole, locationAllowed, mode, practiceFocus, roundMessage, selectedCourse, setDimRound, setDisc, setHole, setLocationAllowed, setRoundMessage, setShots, setThrowStyle, shots, throwStyle, pendingThrow, setPendingThrow } = useApp();
   // The throw being entered in the log sheet (null when it's closed), then the throw waiting below
   // the map for its location to be saved.
   const [logging, setLogging] = useState<ThrowDetails | null>(null);
-  const [pendingThrow, setPendingThrow] = useState<ThrowDetails | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: 'ready' });
   // While a throw waits for its location, it belongs to this hole: moving holes, undoing or ending
   // the round are off until it's saved or cancelled.
