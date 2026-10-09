@@ -4,7 +4,7 @@ import * as Brightness from 'expo-brightness';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, ScrollView, Text, View } from 'react-native';
 import { reliableDistances } from '../../lib/round-stats';
 import { guessDisc, guessThrowType, suggestDiscs } from '../../lib/rounds';
@@ -117,9 +117,11 @@ export const RoundScreen = () => {
   const score = activeShots.length;
   const holeStrokes = countStrokes(activeShots);
   const holeFeet = activeShots.reduce((total, shot) => total + shot.feet, 0);
-  const allShots = [...history.flatMap((session) => session.shots), ...shots];
+  // These go over the whole history, so they're cached and redone only when the throws change, not
+  // on every re-render (such as a change in GPS accuracy). The caddie below is a single quick pass.
+  const allShots = useMemo(() => [...history.flatMap((session) => session.shots), ...shots], [history, shots]);
   // Throws whose distances the caddie can trust (not measured from or to a poor GPS reading).
-  const reliable = reliableDistances([...history, { shots }]);
+  const reliable = useMemo(() => reliableDistances([...history, { shots }]), [history, shots]);
 
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
   const selectedHoleLayout = selectedCourse?.layouts?.[hole - 1];
