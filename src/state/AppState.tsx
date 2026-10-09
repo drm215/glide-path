@@ -675,8 +675,10 @@ const useAppState = () => {
           text: 'Remove disc',
           style: 'destructive',
           onPress: () => {
-            const remaining = bag.filter((item) => item !== name);
-            setBag(remaining);
+            // The latest bag, not the one from when the alert opened: a sync or another edit may
+            // have changed it while it was showing.
+            const remaining = latestSync.current.data.bag.filter((item) => item !== name);
+            setBag((current) => current.filter((item) => item !== name));
             setBagUpdatedAt(nowMs());
             setBagDetails((current) => {
               const { [name]: _removed, ...rest } = current;
@@ -686,7 +688,7 @@ const useAppState = () => {
               const { [name]: _removed, ...rest } = current;
               return rest;
             });
-            if (disc === name) setDisc(remaining[0] ?? '');
+            setDisc((current) => (current === name ? remaining[0] ?? '' : current));
           },
         },
       ],

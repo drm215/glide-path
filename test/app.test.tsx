@@ -482,6 +482,20 @@ test('adds a disc to the bag by name', async () => {
   await waitFor(() => expect(stored(KEYS.bag)).toEqual(['Destroyer']));
 });
 
+test('removing a disc keeps a disc added while its confirmation was open', async () => {
+  mockServer({ '/disc': () => [] });
+  await seed({ [KEYS.bag]: ['Buzzz', 'Aviar'] });
+  await renderApp();
+  await press(await screen.findByText('Bag builder').then(() => 'Bag builder'));
+  await fireEvent.press(await screen.findByLabelText('Remove Buzzz from bag'));
+  // The confirmation is open; meanwhile another disc arrives.
+  await fireEvent.changeText(screen.getByPlaceholderText('Disc name or mold'), 'Destroyer');
+  await press('ADD');
+  await waitFor(() => expect(stored(KEYS.bag)).toEqual(['Buzzz', 'Aviar', 'Destroyer']));
+  await pressAlertButton('Remove disc');
+  await waitFor(() => expect(stored(KEYS.bag)).toEqual(['Aviar', 'Destroyer']));
+});
+
 test('stats summarize finished rounds', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp();
