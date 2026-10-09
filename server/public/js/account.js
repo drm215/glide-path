@@ -68,7 +68,7 @@ const renderOverview = () => {
         return el('li', {}, el('a', { href: `#round/${encodeURIComponent(round.clientId)}` },
           el('span', {},
             el('span', { class: 'name' }, round.courseName),
-            el('span', { class: 'sub' }, [formatDate(roundDate(round)), hasLayouts && layout ? `${layout.name} layout` : null, plural(score.holes.length, 'hole'), round.mode === 'Practice' ? 'Practice' : null].filter(Boolean).join(' · '))),
+            el('span', { class: 'sub' }, [formatDate(roundDate(round)), hasLayouts && layout ? `${layout.name} layout` : null, plural(score.holes.length, 'hole'), round.mode === 'Practice' ? 'Practice' : null, round.inProgress ? 'In progress' : null].filter(Boolean).join(' · '))),
           el('span', { class: 'name' }, `${score.total}`, score.toPar === null ? null : el('span', { class: toParClass(score.toPar) }, ` ${formatToPar(score.toPar)}`))));
       }))
       : el('p', { class: 'meta' }, 'No rounds yet. Rounds appear here after you end them in the app and it syncs.'),
@@ -106,7 +106,7 @@ const renderRound = (round) => {
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': 'Satellite map of the selected hole and its throws' });
   setChildren(signedInEl,
     back(),
-    el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null].filter(Boolean).join(' · ')),
+    el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null, round.inProgress ? 'In progress' : null].filter(Boolean).join(' · ')),
     el('h1', {}, round.courseName),
     el('p', { class: 'meta' }, [course && layoutsOf(course).length > 1 && layout ? `${layout.name} layout` : null, plural(score.holes.length, 'hole')].filter(Boolean).join(' · ')),
     el('div', { class: 'score' }, el('span', { class: 'total' }, score.total), score.toPar === null ? null : el('span', { class: `par ${toParClass(score.toPar)}` }, formatToPar(score.toPar))),
@@ -171,7 +171,8 @@ const renderStats = () => {
   const practiceBox = el('input', { type: 'checkbox', id: 'stats-practice' });
 
   const render = () => {
-    const sessions = data.rounds.filter((round) => filters.practice || round.mode === 'Round');
+    // A round still being played isn't counted until it's finished.
+    const sessions = data.rounds.filter((round) => !round.inProgress && (filters.practice || round.mode === 'Round'));
     // Courses with matching sessions, most-played first.
     const courses = [...sessions.reduce((map, round) => {
       const key = courseKey(round);

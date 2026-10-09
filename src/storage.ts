@@ -14,6 +14,9 @@ export type SavedRound = {
   layoutId?: string; resumedFrom?: ResumedFrom | null;
   // A throw whose details are entered and whose location hasn't been saved yet.
   pendingThrow?: ThrowDetails | null;
+  // The round's id from when it started (or the id of the round it resumed), and when its throws
+  // last changed, for syncing it while it's in progress.
+  activeId?: string | null; activeEditedAt?: number;
 };
 export type Settings = { dimRound?: boolean };
 export type LastAccount = { id: string; email: string; pushedThrough: number };

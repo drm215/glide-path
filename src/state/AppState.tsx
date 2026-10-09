@@ -3,7 +3,7 @@
 // screen is showing (and its parameters) lives in the route.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type SetStateAction } from 'react';
 import { Alert, AppState } from 'react-native';
 import { ApiError, syncWithServer, type PublicCourse } from '../../lib/api';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from '../../lib/layouts';
@@ -25,7 +25,16 @@ export type SessionMode = 'Round' | 'Practice';
 const useAppState = () => {
   const [mode, setMode] = useState<SessionMode>('Round');
   const [hole, setHole] = useState(4);
-  const [shots, setShots] = useState<Shot[]>([]);
+  const [shots, setShotsState] = useState<Shot[]>([]);
+  // The round in progress: its id (given when it starts, so its in-progress upload and finished
+  // record are one round) and when its throws last changed, which makes it sync.
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeEditedAt, setActiveEditedAt] = useState(0);
+  // Changes to the round's throws go through here so it uploads while in progress.
+  const setShots = (update: SetStateAction<Shot[]>) => {
+    setShotsState(update);
+    setActiveEditedAt(nowMs());
+  };
   const [history, setHistory] = useState<SessionArchive[]>([]);
   const [disc, setDisc] = useState<Disc>('');
   const [bag, setBag] = useState<Disc[]>([]);
@@ -121,7 +130,7 @@ const useAppState = () => {
       let savedRound = undefined as SavedRound | undefined;
       read<SavedRound>(STORAGE_KEY, (saved) => {
         const activeShots = saved.shots.map((shot) => ({ ...shot, hole: shot.hole ?? saved.hole, courseId: shot.courseId ?? saved.courseId }));
-        setShots(fixMadeThrows ? placeMadeThrowsAtBasket(activeShots, layoutsFor(saved.courseId, saved.layoutId)) : activeShots);
+        setShotsState(fixMadeThrows ? placeMadeThrowsAtBasket(activeShots, layoutsFor(saved.courseId, saved.layoutId)) : activeShots);
         setHole(saved.hole);
         setMode(saved.mode);
         setSelectedLayoutId(saved.layoutId ?? MAIN_LAYOUT_ID);
@@ -129,6 +138,10 @@ const useAppState = () => {
         // Rounds saved before `active` existed count as in progress if they have throws.
         setSessionActive(saved.active ?? saved.shots.length > 0);
         setPendingThrow(saved.pendingThrow ?? null);
+        // Rounds saved before ids were given at the start get one now (or keep the resumed round's).
+        const active = saved.active ?? saved.shots.length > 0;
+        setActiveId(saved.activeId ?? saved.resumedFrom?.id ?? (active ? newSessionId() : null));
+        setActiveEditedAt(saved.activeEditedAt ?? 0);
         if (saved.practiceFocus) setPracticeFocus(saved.practiceFocus);
         savedRound = saved;
       });
@@ -174,9 +187,9 @@ const useAppState = () => {
 
   useEffect(() => {
     if (!loaded) return;
-    const saved: SavedRound = { shots, hole, mode, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom, pendingThrow };
+    const saved: SavedRound = { shots, hole, mode, courseId: selectedCourseId, active: sessionActive, practiceFocus, layoutId: selectedLayoutId, resumedFrom, pendingThrow, activeId, activeEditedAt };
     saveToStorage(STORAGE_KEY, saved);
-  }, [hole, loaded, mode, pendingThrow, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
+  }, [activeEditedAt, activeId, hole, loaded, mode, pendingThrow, practiceFocus, resumedFrom, selectedCourseId, selectedLayoutId, sessionActive, shots]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -226,7 +239,21 @@ const useAppState = () => {
   }, [bagUpdatedAt, deletedCourses, deletedRounds, loaded]);
 
   // Sync runs from timers and app-state events, so it reads the latest values from here.
-  const syncData: SyncData = { courses, history, bag, bagDetails, bagWeights, bagUpdatedAt, deletedCourses, deletedRounds };
+  // The session in progress as of the latest render. Alerts keep the callbacks they were created
+  // with, so ending a session from one (such as the prompt right after the last hole's made throw)
+  // reads these rather than values from before that throw was added.
+  const latestSession = useRef({ shots, mode, selectedCourse, resumedFrom, activeId, activeEditedAt });
+  useEffect(() => {
+    latestSession.current = { shots, mode, selectedCourse, resumedFrom, activeId, activeEditedAt };
+  });
+
+  // The round being played, uploaded as in progress once it has a throw.
+  const activeRound: SessionArchive | null = sessionActive && activeId && shots.length ? {
+    id: activeId, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id,
+    layoutId: selectedCourse?.layoutId, layoutName: selectedCourse?.layoutLabel, shots, updatedAt: activeEditedAt,
+    shared: resumedFrom?.shared, shareToken: resumedFrom?.shareToken, inProgress: true,
+  } : null;
+  const syncData: SyncData = { courses, history, bag, bagDetails, bagWeights, bagUpdatedAt, deletedCourses, deletedRounds, activeRound };
   const latestSync = useRef({ data: syncData, account });
   useEffect(() => {
     latestSync.current = { data: syncData, account };
@@ -248,7 +275,8 @@ const useAppState = () => {
       // Each batch's changes are kept as it arrives; local edits count as uploaded only once every batch is in.
       await sendInBatches(buildSyncRequest(data, current), (batch) => syncWithServer(current.token, batch), (batch, result) => {
         setCourses((local) => mergeCourses(local, result.courses));
-        setHistory((local) => mergeRounds(local, result.rounds));
+        // This device's own round in progress coming back isn't added to its history.
+        setHistory((local) => mergeRounds(local, result.rounds, latestSession.current.activeId));
         setDeletedCourses((local) => clearSentTombstones(local, batch.courses));
         setDeletedRounds((local) => clearSentTombstones(local, batch.rounds));
         if (result.bag && result.bag.updatedAt > latestSync.current.data.bagUpdatedAt) {
@@ -297,7 +325,7 @@ const useAppState = () => {
     if (!loaded || !account || !pendingChanges) return;
     const timer = setTimeout(() => runSyncRef.current(), SYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, bagWeights, deletedCourses, deletedRounds]);
+  }, [loaded, account, pendingChanges, courses, history, bag, bagDetails, bagWeights, deletedCourses, deletedRounds, activeEditedAt]);
 
   // User edits to courses go through here so each changed course gets a fresh edit time for sync.
   const updateCourses = (updater: (current: Course[]) => Course[]) => {
@@ -312,18 +340,11 @@ const useAppState = () => {
   // Exactly `holes` entries, so a hole can be written by index.
   const fullHoleLayouts = (layout: CourseLayout) => Array.from({ length: layout.holes }, (_, index) => layout.layouts[index] ?? { tee: null, basket: null });
 
-  // The session in progress as of the latest render. Alerts keep the callbacks they were created
-  // with, so ending a session from one (such as the prompt right after the last hole's made throw)
-  // reads these rather than values from before that throw was added.
-  const latestSession = useRef({ shots, mode, selectedCourse, resumedFrom });
-  useEffect(() => {
-    latestSession.current = { shots, mode, selectedCourse, resumedFrom };
-  });
 
   // Moves the current session's throws into history so a new one can begin.
   const archiveSession = () => {
-    const { shots, mode, selectedCourse, resumedFrom } = latestSession.current;
-    const id = shots.length ? (resumedFrom?.id ?? newSessionId()) : null;
+    const { shots, mode, selectedCourse, resumedFrom, activeId, activeEditedAt } = latestSession.current;
+    const id = shots.length ? (activeId ?? resumedFrom?.id ?? newSessionId()) : null;
     if (id) {
       const record: SessionArchive = {
         id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id,
@@ -331,8 +352,13 @@ const useAppState = () => {
         shots, updatedAt: nowMs(), shared: resumedFrom?.shared, shareToken: resumedFrom?.shareToken,
       };
       setHistory((current) => [...current.filter((session) => session.id !== id), record]);
+    } else if (activeId && activeEditedAt && latestSync.current.account) {
+      // Ended with no throws, but it may have uploaded while it had some: delete that copy.
+      setDeletedRounds((current) => [...current, { clientId: activeId, updatedAt: nowMs() }]);
     }
-    setShots([]);
+    setShotsState([]);
+    setActiveId(null);
+    setActiveEditedAt(0);
     setSessionActive(false);
     setResumedFrom(null);
     setPendingThrow(null);
@@ -376,6 +402,7 @@ const useAppState = () => {
       const nextHole = lastHoleDone && lastHole < holeCount ? lastHole + 1 : lastHole;
       setHole(nextHole);
       setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken });
+      setActiveId(session.id);
       setSessionActive(true);
       setRoundMessage(`Resumed on hole ${nextHole}.`);
       go('Round');
@@ -409,6 +436,7 @@ const useAppState = () => {
     setMode(nextMode);
     setHole(1);
     setRoundMessage('');
+    setActiveId(newSessionId());
     setSessionActive(true);
     go('Round');
   };
@@ -524,7 +552,9 @@ const useAppState = () => {
     setBagUpdatedAt(0);
     setDeletedCourses([]);
     setDeletedRounds([]);
-    setShots([]);
+    setShotsState([]);
+    setActiveId(null);
+    setActiveEditedAt(0);
     setHole(1);
     setDisc('');
     setSessionActive(false);

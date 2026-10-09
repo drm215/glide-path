@@ -22,6 +22,9 @@ export type SyncData = {
   bagUpdatedAt: number;
   deletedCourses: Tombstone[];
   deletedRounds: Tombstone[];
+  // The round being played on this device, uploaded with inProgress set so it isn't lost with the
+  // phone. It isn't in `history` until it ends.
+  activeRound?: SessionArchive | null;
 };
 
 type CourseRecord = {
@@ -32,7 +35,7 @@ type CourseRecord = {
 type RoundRecord = {
   clientId: string; updatedAt: number; deleted?: boolean; courseClientId?: string; courseName: string;
   mode: 'Round' | 'Practice'; shots: SessionArchive['shots']; shared: boolean; shareToken?: string | null; uid?: string;
-  layoutId?: string;
+  layoutId?: string; inProgress?: boolean;
 };
 type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo>; weights?: Record<Disc, number> };
 
@@ -117,6 +120,7 @@ const roundToRecord = (session: SessionArchive): RoundRecord => ({
   shots: session.shots,
   shared: Boolean(session.shared),
   layoutId: session.layoutId,
+  inProgress: Boolean(session.inProgress),
 });
 
 // A bag saved before sync existed has no edit time, so it would never upload. Stamping it
@@ -131,6 +135,9 @@ const bagWeightsToSend = (bag: Disc[], weights: Record<Disc, number>) =>
     return grams >= 1 && grams <= 999 ? [[name, grams]] : [];
   }));
 
+// Finished rounds plus the one being played here, if any.
+const allRounds = (data: SyncData) => (data.activeRound ? [...data.history, data.activeRound] : data.history);
+
 // Everything edited since the last successful sync, plus every pending deletion.
 export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cursor' | 'pushedThrough'>): SyncRequest => ({
   cursor: account.cursor,
@@ -139,7 +146,7 @@ export const buildSyncRequest = (data: SyncData, account: Pick<SyncAccount, 'cur
     ...data.deletedCourses.map(tombstoneToRecord),
   ],
   rounds: [
-    ...data.history.filter((session) => editTime(session) > account.pushedThrough).map(roundToRecord),
+    ...allRounds(data).filter((session) => editTime(session) > account.pushedThrough).map(roundToRecord),
     ...data.deletedRounds.map(roundTombstoneToRecord),
   ],
   bag: data.bagUpdatedAt > account.pushedThrough
@@ -151,7 +158,7 @@ export const countPendingChanges = (data: SyncData, pushedThrough: number) =>
   data.courses.filter((course) => editTime(course) > pushedThrough).length
   + data.deletedCourses.length
   + data.deletedRounds.length
-  + data.history.filter((session) => editTime(session) > pushedThrough).length
+  + allRounds(data).filter((session) => editTime(session) > pushedThrough).length
   + (data.bagUpdatedAt > pushedThrough ? 1 : 0);
 
 const courseFromRecord = (record: CourseRecord, local?: Course): Course => ({
@@ -199,11 +206,14 @@ const roundFromRecord = (record: RoundRecord): SessionArchive => ({
   shareToken: record.shareToken ?? null,
   updatedAt: record.updatedAt,
   layoutId: record.layoutId ?? undefined,
+  inProgress: record.inProgress || undefined,
 });
 
-export const mergeRounds = (current: SessionArchive[], remote: RoundRecord[]): SessionArchive[] => {
+// `activeRoundId` is the round being played here: its own upload coming back isn't added to history.
+export const mergeRounds = (current: SessionArchive[], remote: RoundRecord[], activeRoundId?: string | null): SessionArchive[] => {
   let next = current;
   for (const record of remote) {
+    if (activeRoundId && record.clientId === activeRoundId) continue;
     const local = next.find((session) => session.id === record.clientId);
     if (record.deleted) {
       if (local && editTime(local) <= record.updatedAt) next = next.filter((session) => session !== local);

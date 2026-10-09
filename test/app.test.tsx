@@ -585,6 +585,38 @@ test('signing in uploads this phone’s data and keeps the token in the keychain
   await waitFor(() => expect(stored(KEYS.lastAccount)).toMatchObject({ id: 'u1', email: 'pat@example.com' }));
 });
 
+test('a round in progress uploads while it is being played, marked in progress', async () => {
+  const requests = mockServer({ '/api/sync': () => ({ cursor: 1, more: false, courses: [], rounds: [], bag: null }) });
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'], [KEYS.sync]: { user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' }, cursor: 0, pushedThrough: 0 } });
+  await SecureStore.setItemAsync('glide-path-token', 'token-1');
+  await renderApp();
+  // The launch sync is done; let the (fake) clock move on so the throw is a later edit.
+  await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+  await testing.act(async () => { jest.advanceTimersByTime(1_000); });
+  await press(await screen.findByText('Start a round').then(() => 'Start a round'));
+  await press('Cedar Grove');
+  await hold(await screen.findByText('LOG THROW 1').then(() => 'LOG THROW 1'));
+  await press(await screen.findByText('NEXT ›').then(() => 'NEXT ›'));
+  await hold(await screen.findByText('SAVE LOCATION ✓').then(() => 'SAVE LOCATION ✓'));
+  type Upload = { rounds: { clientId: string; inProgress: boolean; shots: unknown[] }[] };
+  await waitFor(() => expect(requests.some((request) => (request.body as Upload).rounds.some((round) => round.inProgress))).toBe(true));
+  const live = requests.map((request) => request.body as Upload).flatMap((body) => body.rounds).find((round) => round.inProgress)!;
+  expect(live.shots).toHaveLength(1);
+  expect(live.clientId).toBe(stored<{ activeId: string }>(KEYS.round)?.activeId);
+  // Nothing went into this phone's history: the round is still being played here.
+  expect(stored(KEYS.history) ?? []).toEqual([]);
+});
+
+test('a round in progress on another device is tagged in Rounds and left out of stats', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [{ ...pastRound, inProgress: true }] });
+  await renderApp();
+  await press(await screen.findByText('Rounds').then(() => 'Rounds'));
+  expect(await screen.findByText('IN PROGRESS')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Back to the main menu'));
+  await press(await screen.findByText('Stats').then(() => 'Stats'));
+  expect(await screen.findByText(/No finished rounds yet/)).toBeTruthy();
+});
+
 test('signing in to a different account asks first, and cancelling stays signed out', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.lastAccount]: { id: 'u1', email: 'old@example.com', pushedThrough: 10 } });
   const requests = mockServer({

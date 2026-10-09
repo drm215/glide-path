@@ -33,7 +33,7 @@ npx eas-cli@latest build -p ios --profile preview
 - **Hole history**: choose a course in Stats to list its holes, or follow a hole's link in a past round, to see every throw ever recorded on that hole on one map, with the hole's scoring, its throw stats, and each time it was played.
 - **Resume**: a round in progress survives leaving the screen or closing the app.
 - **Practice**: log throws with a distance, accuracy, or putting focus.
-- **Account and sync** (optional): sign in from the avatar in the top corner to back up courses, finished rounds, and the bag, and sync them across devices. Sync runs on launch, when the app returns to the foreground, and a few seconds after edits; the app works fully offline.
+- **Account and sync** (optional): sign in from the avatar in the top corner to back up courses, rounds (including the one being played, so it isn’t lost with the phone), and the bag, and sync them across devices. Sync runs on launch, when the app returns to the foreground, and a few seconds after edits; the app works fully offline.
 - **Publish and share**: publish a course to the public directory from Course builder, or share a finished round's scorecard by link from its round detail.
 - **Find courses**: search published courses by name, city, or state, or find courses near you, and add them to your courses.
 

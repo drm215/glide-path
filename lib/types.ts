@@ -21,6 +21,9 @@ export type SessionArchive = {
   updatedAt?: number; shared?: boolean; shareToken?: string | null;
   // Which of the course's layouts was played; absent means the main layout.
   layoutId?: string; layoutName?: string;
+  // A round still being played on some device, synced so it isn't lost with the phone; it's left
+  // out of stats until it's finished.
+  inProgress?: boolean;
 };
 
 // One way to play a course (tee pads, pin positions): its own holes, tees, baskets and pars.

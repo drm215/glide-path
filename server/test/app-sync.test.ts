@@ -29,7 +29,7 @@ const syncDevice = async (server: Server, device: Device) => {
     device.data = {
       ...device.data,
       courses: mergeCourses(device.data.courses, result.courses),
-      history: mergeRounds(device.data.history, result.rounds),
+      history: mergeRounds(device.data.history, result.rounds, device.data.activeRound?.id),
       deletedCourses: clearSentTombstones(device.data.deletedCourses, batch.courses),
       deletedRounds: clearSentTombstones(device.data.deletedRounds, batch.rounds),
       ...(result.bag && result.bag.updatedAt > device.data.bagUpdatedAt ? { bag: result.bag.discs, bagDetails: result.bag.details, bagWeights: result.bag.weights ?? {}, bagUpdatedAt: result.bag.updatedAt } : {}),
@@ -154,6 +154,42 @@ describe('app sync against the API', () => {
 
     // Once stamped, the stored time is kept on later launches.
     assert.equal(initialBagUpdatedAt(phone.data.bagUpdatedAt, 2, tick()), phone.data.bagUpdatedAt);
+  });
+
+  test("a round in progress syncs as in progress, then as finished, and never lands in its own phone's history", async () => {
+    const token = await server.register('live@example.com');
+    const phone = newDevice(token);
+    const tablet = newDevice(token);
+    const live = session('live-1', { updatedAt: tick(), inProgress: true });
+    phone.data.activeRound = live;
+    const upload = await syncDevice(server, phone);
+    assert.deepEqual(upload.rounds.map((round) => [round.clientId, round.inProgress]), [['live-1', true]]);
+    assert.deepEqual(phone.data.history, [], 'its own round coming back stays out of history');
+
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.history.map((round) => [round.id, round.inProgress]), [['live-1', true]]);
+
+    // Finishing moves it into history with the same id and a newer edit time.
+    phone.data.activeRound = null;
+    phone.data.history = [{ ...live, inProgress: undefined, updatedAt: tick() }];
+    await syncDevice(server, phone);
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.history.map((round) => [round.id, round.inProgress]), [['live-1', undefined]]);
+  });
+
+  test('a round abandoned after uploading is deleted from other devices', async () => {
+    const token = await server.register('abandon@example.com');
+    const phone = newDevice(token);
+    const tablet = newDevice(token);
+    phone.data.activeRound = session('gone-1', { updatedAt: tick(), inProgress: true });
+    await syncDevice(server, phone);
+    await syncDevice(server, tablet);
+    assert.equal(tablet.data.history.length, 1);
+    phone.data.activeRound = null;
+    phone.data.deletedRounds = [{ clientId: 'gone-1', updatedAt: tick() }];
+    await syncDevice(server, phone);
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.history, []);
   });
 
   test('a deleted round disappears from other devices and its share link stops working', async () => {

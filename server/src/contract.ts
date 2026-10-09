@@ -68,6 +68,8 @@ export const roundRecord = z.object({
   courseName: z.string().min(1).max(200),
   mode: z.enum(['Round', 'Practice']),
   layoutId: z.string().max(100).optional(),
+  // Still being played; older app versions don't send it.
+  inProgress: z.boolean().optional(),
   shots: z.array(shot).max(3000),
   shared: z.boolean().default(false),
 });

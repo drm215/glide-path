@@ -5,9 +5,9 @@ import { countStrokes } from './scoring';
 
 export type HoleVisit = { session: SessionArchive; shots: Shot[]; strokes: number };
 
-// Sessions played on this course and layout (rounds, plus practice when `includePractice`).
+// Finished sessions played on this course and layout (rounds, plus practice when `includePractice`).
 const sessionsOn = (history: SessionArchive[], courseId: string, layoutId: string, includePractice: boolean) =>
-  history.filter((session) => session.courseId === courseId && (session.layoutId ?? MAIN_LAYOUT_ID) === layoutId && (includePractice || session.mode === 'Round'));
+  history.filter((session) => !session.inProgress && session.courseId === courseId && (session.layoutId ?? MAIN_LAYOUT_ID) === layoutId && (includePractice || session.mode === 'Round'));
 
 // The visits to one hole, newest first.
 export const holeVisits = (history: SessionArchive[], courseId: string, layoutId: string, hole: number, includePractice: boolean): HoleVisit[] =>
@@ -34,7 +34,7 @@ export const holeScoring = (visits: HoleVisit[]) => {
 export const holesPlayed = (history: SessionArchive[], courseId: string, includePractice: boolean) => {
   const layouts = new Map<string, number[]>();
   for (const session of history) {
-    if (session.courseId !== courseId || (!includePractice && session.mode !== 'Round')) continue;
+    if (session.inProgress || session.courseId !== courseId || (!includePractice && session.mode !== 'Round')) continue;
     const layoutId = session.layoutId ?? MAIN_LAYOUT_ID;
     const holes = new Set([...(layouts.get(layoutId) ?? []), ...session.shots.map((shot) => shot.hole)]);
     layouts.set(layoutId, [...holes].sort((a, b) => a - b));

@@ -22,7 +22,8 @@ export const StatsScreen = () => {
     const base = courses.find((course) => course.id === session.courseId);
     return (base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [];
   };
-  const statsSessions = history.filter((session) => statsPractice || session.mode === 'Round');
+  // A round still being played (on another device) isn't counted until it's finished.
+  const statsSessions = history.filter((session) => !session.inProgress && (statsPractice || session.mode === 'Round'));
   const statsCourseKey = (session: SessionArchive) => session.courseId ?? `name:${session.courseName}`;
   const statsCourses = [...statsSessions.reduce((groups, session) => {
     const key = statsCourseKey(session);

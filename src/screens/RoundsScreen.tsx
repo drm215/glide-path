@@ -27,6 +27,7 @@ export const RoundsScreen = () => {
       {pastSessions.map((session) => <View key={session.id} style={styles.courseItem}>
         <Pressable onPress={() => openRound(session.id)} style={styles.courseItemSelect} accessibilityRole="button">
           <View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{session.courseName}</Text><Text style={styles.courseItemMeta}>{formatSessionDate(session)} · {sessionSummary(session)}</Text></View>
+          {session.inProgress && <Text style={styles.sessionModeTag}>IN PROGRESS</Text>}
           {session.mode === 'Practice' && <Text style={styles.sessionModeTag}>PRACTICE</Text>}
           <Text style={styles.menuArrow}>›</Text>
         </Pressable>

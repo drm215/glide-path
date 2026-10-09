@@ -8,7 +8,8 @@ export const formatFlightNumbers = (info: DiscInfo) => `${info.speed} | ${info.g
 
 export const formatDiscMeta = (info: DiscInfo) => `${info.brand} · ${formatFlightNumbers(info)}`;
 
-// Archive ids are the Date.now() timestamp of when the session ended.
+// Session ids are the Date.now() timestamp of when the session started (before rounds synced while
+// in progress, of when it ended).
 export const formatSessionDate = (session: SessionArchive) => {
   const date = new Date(Number(session.id));
   return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
