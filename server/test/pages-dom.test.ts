@@ -142,10 +142,15 @@ describe('website pages in a browser', () => {
     assert.match(text, /By throw style/);
     assert.equal(view.querySelectorAll('ol.throws li').length, 4);
     assert.match(text, /Round summary/);
-    assert.match(text, /FIRST-PUTT MAKES50%1 of 2 holes/);
-    assert.match(text, /ALL PUTTS50%1 of 2 made/);
+    // Hole 1: a fairway drive, then a 60 ft putt made; hole 2: an OB drive, then a missed putt.
+    assert.match(text, /50%1\/2 Fairway/);
+    assert.match(text, /100%1\/1 C2 Putting/);
+    assert.match(text, /1 OB {2}\.500 OB rate/);
     // Score: hole 1 = 2 strokes (par 3), hole 2 = 2 throws + 1 OB penalty (par 4).
-    assert.match(view.querySelector('.score')!.textContent ?? '', /5-2/);
+    assert.match(view.querySelector('.score')!.textContent ?? '', /^-2Total 5Par 7/);
+    const scorecard = view.querySelector('table.scorecard')!;
+    assert.deepEqual([...scorecard.querySelectorAll('.mark')].map((mark) => [mark.className, mark.textContent]), [['mark birdie', '2'], ['mark birdie', '3']]);
+    assert.equal(scorecard.querySelectorAll('td[data-hole="2"] .icon.ob').length, 2, 'OB in the Driving and OB / Penalty rows');
   });
 
   test('My rounds: the By disc table filters by throw type and quality', async () => {

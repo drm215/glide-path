@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, reliableDistances, summarizeRounds, type GroupStats, type StatsRound } from '../../lib/round-stats';
+import { quality as qualityOf, QUALITY_LABELS as QUALITY_NAMES, reliableDistances, scoringStats, summarizeRounds, type GroupStats, type ScoringStats, type StatsRound } from '../../lib/round-stats';
 import type { ThrowType } from '../../lib/types';
 import { FILTER_TYPES } from '../constants';
-import { statFeet, statPercent, statQuality } from '../format';
+import { statFeet, statQuality } from '../format';
 import { styles } from '../theme';
 
 export const StatTile = ({ label, value, note }: { label: string; value: string | number; note?: string | null }) => (
@@ -29,16 +29,52 @@ export const GroupTable = ({ heading, rows }: { heading: string; rows: GroupStat
   </View>
 );
 
-// Throw stats for one or many rounds, matching the website's round summary. Each round brings
-// the hole layouts it was played on, for first-putt distances and drive circles.
-export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: StatsRound[]; scope: string }) => {
+// One percentage bar: `count` of `of` filled in green, with an optional inner share (C1 inside C2).
+const StatBar = ({ count, of, inner, children }: { count: number; of: number; inner?: number; children: ReactNode }) => {
+  const share = (value: number) => Math.round((value / of) * 100);
+  const fill = (value: number, outer: boolean) => <View style={[styles.statBarFill, outer && styles.statBarFillOuter, { width: `${share(value)}%` }]}>
+    {share(value) >= 12 && <Text style={styles.statBarPercent}>{share(value)}%</Text>}
+  </View>;
+  return <View style={styles.statBarRow}>
+    <View style={styles.statBarTrack}>
+      {inner === undefined ? fill(count, false) : <>{fill(count, true)}{fill(inner, false)}</>}
+    </View>
+    <Text style={styles.statBarLabel}>{children}</Text>
+  </View>;
+};
+
+const Count = ({ count, of }: { count: number; of: number }) => <Text style={styles.statBarCount}>{count}/{of}</Text>;
+
+// Scoring percentages: fairways, scrambles, greens in regulation and putting from the circles,
+// then made-putt distances and out-of-bounds throws.
+export const ScoringBars = ({ stats }: { stats: ScoringStats }) => {
+  const { fairway, scramble, greens, c1x, c2, madePutts, penalties } = stats;
+  if (!stats.holes) return null;
+  return <View style={styles.statBars}>
+    {fairway.drives > 0 && <StatBar count={fairway.hit} of={fairway.drives}><Count count={fairway.hit} of={fairway.drives} /> Fairway</StatBar>}
+    {scramble.chances > 0 && <StatBar count={scramble.saved} of={scramble.chances}><Count count={scramble.saved} of={scramble.chances} /> Scramble</StatBar>}
+    {greens.holes > 0 && <StatBar count={greens.c2} inner={greens.c1} of={greens.holes}><Count count={greens.c1} of={greens.holes} /> C1R  <Count count={greens.c2} of={greens.holes} /> C2R</StatBar>}
+    {c1x.attempts > 0 && <StatBar count={c1x.made} of={c1x.attempts}><Count count={c1x.made} of={c1x.attempts} /> C1X Putting</StatBar>}
+    {c2.attempts > 0 && <StatBar count={c2.made} of={c2.attempts}><Count count={c2.made} of={c2.attempts} /> C2 Putting</StatBar>}
+    {madePutts.count > 0 && <Text style={styles.statBarNote}>
+      <Text style={styles.statBarCount}>{madePutts.averageFeet!.toFixed(1)} ft</Text> avg putt   <Text style={styles.statBarCount}>{madePutts.totalFeet.toLocaleString()} ft</Text> total putt   <Text style={styles.statBarCount}>{madePutts.longestFeet} ft</Text> long
+    </Text>}
+    <Text style={styles.statBarNote}>
+      <Text style={styles.statBarCount}>{penalties}</Text> OB   <Text style={styles.statBarCount}>{(penalties / stats.holes).toFixed(3).replace(/^0/, '')}</Text> OB rate
+    </Text>
+  </View>;
+};
+
+// Scoring and throw stats for one or many rounds. Each round brings the hole layouts it was
+// played on, since circles, greens and putt distances are measured against its baskets.
+export const StatsSummary = ({ title, rounds }: { title: string; rounds: StatsRound[] }) => {
   const [discType, setDiscType] = useState<ThrowType | null>(null);
   const [discQuality, setDiscQuality] = useState<number | null>(null);
   const shots = rounds.flatMap((round) => round.shots);
   if (!shots.length) return null;
   const reliable = reliableDistances(rounds);
   const summary = summarizeRounds(rounds, reliable);
-  const { putting, driveCircles } = summary;
+  const scoring = scoringStats(rounds);
   const types = FILTER_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => qualityOf(shot) === value));
   const discShots = shots.filter((shot) => (discType === null || shot.type === discType) && (discQuality === null || qualityOf(shot) === discQuality));
@@ -50,6 +86,7 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
   return (
     <View style={styles.statsSection}>
       <Text style={styles.sectionTitle}>{title}</Text>
+      <ScoringBars stats={scoring} />
       <View style={styles.courseStatsGrid}>
         <StatTile label="THROWS" value={summary.count} note={summary.penalties === 1 ? '1 OB penalty' : summary.penalties ? `${summary.penalties} OB penalties` : 'No penalties'} />
         <StatTile label="TOTAL DISTANCE" value={statFeet(summary.totalFeet)} note="Measured by GPS" />
@@ -59,26 +96,6 @@ export const StatsSummary = ({ title, rounds, scope }: { title: string; rounds: 
       <Text style={styles.statsHeading}>By throw type</Text>
       <GroupTable heading="TYPE" rows={summary.byType} />
       {summary.byStyle.length > 0 && <><Text style={styles.statsHeading}>By throw style</Text><GroupTable heading="STYLE" rows={summary.byStyle} /></>}
-      {putting && <>
-        <Text style={styles.statsHeading}>Putting</Text>
-        <View style={styles.courseStatsGrid}>
-          <StatTile label="FIRST-PUTT MAKES" value={statPercent(putting.firstPutts.made, putting.firstPutts.attempts)} note={`${putting.firstPutts.made} of ${putting.firstPutts.attempts} holes`} />
-          <StatTile label="AVG FIRST PUTT" value={statFeet(putting.firstPutts.averageFeet)} note={putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'} />
-          <StatTile label="ALL PUTTS" value={statPercent(putting.made, putting.attempts)} note={`${putting.made} of ${putting.attempts} made`} />
-          <StatTile label="MISSES" value={putting.hit + putting.missed} note={`${putting.hit} hit the basket · ${putting.missed} missed`} />
-          <StatTile label="AVG MADE PUTT" value={statFeet(putting.madePutts.averageFeet)} note={putting.madePutts.measured < putting.made ? `${putting.madePutts.measured} of ${putting.made} measured` : 'From lie to basket'} />
-          <StatTile label="LONGEST MADE PUTT" value={statFeet(putting.madePutts.longestFeet)} />
-        </View>
-      </>}
-      {driveCircles.drives > 0 && <>
-        <Text style={styles.statsHeading}>Drives in the circles</Text>
-        {driveCircles.measured ? <View style={styles.courseStatsGrid}>
-          <StatTile label="IN C1" value={statPercent(driveCircles.c1, driveCircles.measured)} note={`${driveCircles.c1} of ${driveCircles.measured} · within 33 ft`} />
-          <StatTile label="IN C2" value={statPercent(driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c2} of ${driveCircles.measured} · 33–66 ft`} />
-          <StatTile label="INSIDE C2" value={statPercent(driveCircles.c1 + driveCircles.c2, driveCircles.measured)} note={`${driveCircles.c1 + driveCircles.c2} of ${driveCircles.measured} drives`} />
-          <StatTile label="MEASURED" value={`${driveCircles.measured}/${driveCircles.drives}`} note="Need an accurate logged spot and a mapped basket" />
-        </View> : <Text style={styles.mapInstruction}>Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in {scope} has both.</Text>}
-      </>}
       <Text style={styles.statsHeading}>By disc</Text>
       {types.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         {[filterChip('All throws', discType === null, () => setDiscType(null)), ...types.map((type) => filterChip(type, discType === type, () => setDiscType(type)))]}

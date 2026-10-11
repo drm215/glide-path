@@ -88,9 +88,57 @@ tbody tr[data-course]:hover { background: var(--green-soft); }
 .summary-table td:first-child { font-weight: 600; }
 @media (max-width: 520px) { .summary-table th, .summary-table td { padding: 8px 5px; font-size: 13px; } }
 
-.score { display: flex; gap: 14px; align-items: baseline; font-family: Georgia, serif; margin: 8px 0 4px; }
-.score .total { font-size: 52px; line-height: 1; }
-.score .par { font-size: 28px; }
+/* Score strip: the score to par in a badge, then the round's totals. */
+.score { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 4px; color: var(--muted); }
+.score .par { min-width: 64px; height: 52px; padding: 0 12px; border-radius: 8px; display: grid; place-items: center; background: var(--muted); color: #fff; font: 800 26px system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.score .par.under { background: var(--green); }
+.score .par.over { background: var(--orange); }
+.score .figure strong { color: var(--ink); font-size: 20px; font-variant-numeric: tabular-nums; }
+/* The dark theme's greens and oranges are light, so filled shapes take dark text. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) :is(.score .par, .mark.birdie, .mark.eagle, .mark.double, .bar .fill) { color: #121815; }
+}
+:root[data-theme="dark"] :is(.score .par, .mark.birdie, .mark.eagle, .mark.double, .bar .fill) { color: #121815; }
+
+/* Scorecard: labels down a sticky left column, a column per hole, scrolling sideways. */
+.scorecard-wrap { overflow-x: auto; margin: 12px 0 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+table.scorecard { margin: 0; border: 0; border-radius: 0; min-width: 100%; width: auto; }
+.scorecard th, .scorecard td { padding: 5px 4px; min-width: 34px; border-bottom: 0; text-align: center; font-size: 14px; white-space: nowrap; }
+.scorecard thead th { background: transparent; color: var(--ink); font-size: 13px; letter-spacing: 0; }
+.scorecard th[scope="row"], .scorecard thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--card); text-align: right; padding: 5px 12px 5px 10px; color: var(--ink); font-size: 13px; font-weight: 700; letter-spacing: 0; }
+.scorecard tr.muted th[scope="row"] { color: var(--muted); font-weight: 400; font-style: italic; }
+.scorecard tr.muted td { color: var(--muted); font-style: italic; font-size: 12px; }
+.scorecard .total { background: var(--paper); font-weight: 700; padding: 5px 10px; }
+.scorecard [data-hole] { cursor: pointer; }
+.scorecard [data-hole]:hover, .scorecard [data-hole].active { background: var(--green-soft); }
+.scorecard .made { color: var(--green); font-weight: 800; }
+.scorecard .missed { color: var(--muted); font-weight: 800; }
+.mark { display: inline-grid; place-items: center; width: 28px; height: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mark.birdie, .mark.eagle { border-radius: 50%; background: var(--green); color: #fff; }
+.mark.eagle { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--green); }
+.mark.bogey, .mark.double { border-radius: 4px; background: var(--line); }
+.mark.double { background: var(--orange); color: #fff; }
+/* Drive and green icons: a ring, with a dot for C2 or a filled center for C1. */
+.icon { display: inline-block; position: relative; width: 15px; height: 15px; border: 1.5px solid var(--ink); border-radius: 50%; vertical-align: middle; }
+.icon.c1::after, .icon.c2::after { content: ""; position: absolute; border-radius: 50%; }
+.icon.c1::after { inset: 2px; background: var(--green); }
+.icon.c2::after { inset: 4px; background: var(--ink); }
+.icon.ace { background: var(--green); border-color: var(--green); }
+.icon.rough { width: 0; height: 0; border: 0; border-radius: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid var(--muted); }
+.icon.ob { border-radius: 2px; border-color: var(--orange); }
+.icon.ob::after { content: "✕"; position: absolute; inset: 0; color: var(--orange); font: 900 10px/12px system-ui, sans-serif; text-align: center; }
+.scorecard-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+
+/* Percentage bars: the share filled in green, the count beside it. */
+.bars { margin: 12px 0 18px; }
+.bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.bar { position: relative; flex: 1; height: 22px; border-radius: 4px; background: var(--green-soft); overflow: hidden; }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; background: var(--green); color: #fff; font-size: 11px; font-weight: 800; }
+.bar .fill.outer { background: color-mix(in srgb, var(--green) 55%, var(--green-soft)); }
+.bar-label { flex: 0 0 190px; color: var(--muted); font-size: 14px; }
+.bar-label strong, .bar-note strong { color: var(--ink); }
+.bar-note { color: var(--muted); font-size: 14px; margin: 4px 0; white-space: pre-wrap; }
+@media (max-width: 520px) { .bar-label { flex-basis: 140px; font-size: 13px; } }
 .under { color: var(--green); }
 .over { color: var(--orange); }
 

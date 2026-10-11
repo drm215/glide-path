@@ -35,7 +35,7 @@ describe('website', () => {
 
   test('serves the scripts, map settings, and Leaflet, compressed', async () => {
     const base = server.baseUrl;
-    for (const path of ['/js/lib.js', '/js/home.js', '/js/course.js', '/js/round.js', '/js/account.js', '/js/summary.js', '/js/round-stats.js', '/styles.css', '/vendor/leaflet/leaflet.css']) {
+    for (const path of ['/js/lib.js', '/js/home.js', '/js/course.js', '/js/round.js', '/js/account.js', '/js/summary.js', '/js/scorecard.js', '/js/round-stats.js', '/styles.css', '/vendor/leaflet/leaflet.css']) {
       assert.equal((await fetch(`${base}${path}`)).status, 200, path);
     }
     for (const path of ['/js/account.js', '/styles.css', '/js/config.js']) {

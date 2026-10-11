@@ -434,6 +434,28 @@ test('resumes a past round from its summary at the next unfinished hole', async 
   await waitFor(() => expect(stored<{ shots: unknown[]; hole: number }>(KEYS.round)).toMatchObject({ hole: 2, shots: pastRound.shots }));
 });
 
+test('a past round shows its scorecard: score to par, the drive and green, putts and the throw in', async () => {
+  const parked: SessionArchive = {
+    ...pastRound,
+    shots: [
+      // About 55 ft short of the basket: inside C2, which is a green in regulation on a par 3.
+      { x: 0.5, y: 0.5, feet: 310, disc: 'Buzzz', type: 'Drive', hole: 1, lie: 'Fairway', latitude: 40.00085, longitude: -75 },
+      { x: 0.5, y: 0.5, feet: 55, disc: 'Aviar', type: 'Putt', hole: 1, lie: 'Basket', latitude: 40.001, longitude: -75 },
+    ],
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [parked] });
+  await renderApp(`/rounds/${parked.id}`);
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  expect(screen.getAllByText('-1').length).toBeGreaterThan(0);
+  expect(screen.getByText('C2 Putting')).toBeTruthy();
+  expect(screen.getByText('1/1 C2 Putting')).toBeTruthy();
+  expect(screen.getByText('0/1 C1R  1/1 C2R')).toBeTruthy();
+  expect(screen.getByText('55')).toBeTruthy();
+  // A hole's column opens its map.
+  await fireEvent.press(screen.getByLabelText('Show map for hole 1'));
+  expect(await screen.findByText('− MAP')).toBeTruthy();
+});
+
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp(`/rounds/${pastRound.id}`);
@@ -502,8 +524,10 @@ test('stats summarize finished rounds', async () => {
   await press(await screen.findByText('Stats').then(() => 'Stats'));
   expect(await screen.findByText('Throw stats')).toBeTruthy();
   expect(screen.getByText('BEST ROUND')).toBeTruthy();
-  expect(screen.getByText('AVG MADE PUTT')).toBeTruthy();
-  expect(screen.getByText('LONGEST MADE PUTT')).toBeTruthy();
+  // The drive landed in the fairway, outside the circles; the putt went in from about 73 ft.
+  expect(screen.getByText('1/1 Fairway')).toBeTruthy();
+  expect(screen.getByText('0/1 C1R  0/1 C2R')).toBeTruthy();
+  expect(screen.getByText('0 OB   .000 OB rate')).toBeTruthy();
 });
 
 test('stats leave out a distance measured from a poor GPS reading', async () => {
@@ -533,7 +557,8 @@ test('stats open every throw recorded on a hole, across rounds', async () => {
   await press(await screen.findByText('Stats').then(() => 'Stats'));
   await press(await screen.findByText('Cedar Grove (2)').then(() => 'Cedar Grove (2)'));
   expect(await screen.findByText('By hole')).toBeTruthy();
-  expect(screen.getByText('Par 3 · played 2 times · avg 2.5 (-0.5) · best 2')).toBeTruthy();
+  // Hole 1 (par 3), played twice: average 2.5, best 2.
+  expect(testing.within(screen.getByLabelText('Every throw on hole 1')).getByText('2.5')).toBeTruthy();
   await fireEvent.press(screen.getByLabelText('Every throw on hole 1'));
 
   expect(await screen.findByText('Hole 01.')).toBeTruthy();

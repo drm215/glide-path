@@ -243,7 +243,11 @@ describe('app sync against the API', () => {
     const page = await server.request('GET', `/r/${shareToken}`);
     assert.equal(page.status, 200);
     assert.match(page.body, /Public Pines/);
-    assert.match(page.body, /<span class="total">3<\/span>/, 'OB penalty counted: 2 throws + 1');
+    assert.match(page.body, /<strong class="total">3<\/strong>/, 'OB penalty counted: 2 throws + 1');
+    // The scorecard is in the HTML: an OB drive, then a 30 ft putt made, saving par.
+    assert.match(page.body, /<span class="mark even">3<\/span>/);
+    assert.match(page.body, /Scramble<\/th><td data-hole="1"><span class="made"/);
+    assert.match(page.body, /C1X Putting<\/th><td data-hole="1">1\/1<\/td>/);
 
     const coursePage = await server.request('GET', `/c/${phone.data.courses[0].uid}`);
     assert.equal(coursePage.status, 200);

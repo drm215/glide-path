@@ -27,6 +27,13 @@ export const setChildren = (parent, ...children) => {
   parent.replaceChildren(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
 };
 
+// Parses markup built by scorecard.js, which escapes every value, into one element.
+export const fromHtml = (html) => {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  return template.content.firstElementChild;
+};
+
 export const TOKEN_KEY = 'glide-path-token';
 
 export const api = async (path, { method = 'GET', body, token } = {}) => {
@@ -197,7 +204,7 @@ export const fitTo = (map, bounds, fallbackZoom = 18) => {
 };
 
 // Shows one hole of a round at a time: its tee and basket plus each logged throw.
-// Rows with data-hole under `rowsRoot` switch the hole.
+// Rows or cells with data-hole under `rowsRoot` switch the hole.
 export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) => {
   const map = satelliteMap(container);
   if (!map) {
@@ -213,7 +220,7 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
     const course = drawHoles(map, layouts, { only: hole });
     const throws = drawThrows(map, shots.filter((shot) => shot.hole === hole), layout?.tee ?? null);
     layers = [course.group, throws.group];
-    rowsRoot.querySelectorAll('tr[data-hole]').forEach((row) => row.classList.toggle('active', Number(row.dataset.hole) === hole));
+    rowsRoot.querySelectorAll('[data-hole]').forEach((row) => row.classList.toggle('active', Number(row.dataset.hole) === hole));
     if (!fitTo(map, [...course.bounds, ...throws.bounds])) map.setView([39.8, -98.6], 3);
   };
 
@@ -225,7 +232,7 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
   }
   showHole(first);
   rowsRoot.addEventListener('click', (event) => {
-    const row = event.target.closest('tr[data-hole]');
+    const row = event.target.closest('[data-hole]');
     if (!row) return;
     showHole(Number(row.dataset.hole));
     container.scrollIntoView({ behavior: 'smooth', block: 'center' });

@@ -75,7 +75,7 @@ export const HoleHistoryScreen = () => {
           {(Object.keys(THROW_TYPE_COLORS) as ThrowType[]).map((type) => <Text key={type}><Text style={{ color: THROW_TYPE_COLORS[type] }}>●</Text> {type}   </Text>)}
         </Text>
 
-        <StatsSummary title="Throws on this hole" rounds={visits.map((visit) => ({ shots: visit.shots, layouts: course?.layouts ?? [] }))} scope="these visits" />
+        <StatsSummary title="Throws on this hole" rounds={visits.map((visit) => ({ shots: visit.shots, layouts: course?.layouts ?? [] }))} />
 
         <Text style={styles.statsHeading}>Each time you played it</Text>
         {visits.map((visit) => <Pressable key={visit.session.id} onPress={() => openRound(visit.session.id)} style={styles.courseItem} accessibilityRole="button">

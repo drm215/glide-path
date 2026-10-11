@@ -34,3 +34,37 @@ export declare function reliableDistances(rounds: StatsRound[]): Set<Shot>;
 export declare function summarizeRounds(rounds: StatsRound[], reliable?: Set<Shot>): RoundSummary;
 export declare function summarizeRound(shots: Shot[], layouts?: StatsRound['layouts']): RoundSummary;
 export declare function roundScore(shots: Shot[], layouts?: StatsRound['layouts']): { holes: number; strokes: number; toPar: number | null };
+
+export type DriveResult = 'ace' | 'c1' | 'c2' | 'fairway' | 'rough' | 'ob';
+export type PuttCount = { made: number; attempts: number };
+
+export type HoleBreakdown = {
+  hole: number;
+  par: number | null;
+  // Tee to basket, when both are mapped.
+  lengthFeet: number | null;
+  strokes: number;
+  driving: DriveResult | null;
+  scramble: boolean | null;
+  green: 'c1' | 'c2' | 'missed' | null;
+  c1x: PuttCount;
+  c2: PuttCount;
+  throwInFeet: number | null;
+  penalties: number;
+};
+
+export type ScoringStats = {
+  holes: number;
+  fairway: { hit: number; drives: number };
+  scramble: { saved: number; chances: number };
+  // c2 counts holes reaching C2 or better, so it includes the C1 holes.
+  greens: { c1: number; c2: number; holes: number };
+  c1x: PuttCount;
+  c2: PuttCount;
+  madePutts: { count: number; totalFeet: number; averageFeet: number | null; longestFeet: number | null };
+  penalties: number;
+};
+
+export declare const TAP_IN_FEET: number;
+export declare function holeBreakdown(shots: Shot[], layouts?: StatsRound['layouts']): HoleBreakdown[];
+export declare function scoringStats(rounds: StatsRound[]): ScoringStats;

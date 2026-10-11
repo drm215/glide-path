@@ -6,6 +6,7 @@ import type { SessionArchive } from '../../lib/types';
 import { GREEN, styles } from '../theme';
 import { formatScoreToPar, formatSessionDate } from '../format';
 import { StatsSummary, StatTile } from '../components/StatsSummary';
+import { HoleGrid, ScoreMark } from '../components/HoleGrid';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { holeScoring, holesPlayed } from '../holeHistory';
 import { openHoleHistory, openRound } from '../navigation';
@@ -86,30 +87,27 @@ export const StatsScreen = () => {
         </>}
         {holesCourse && holeGroups.length > 0 && <>
           <Text style={styles.statsHeading}>By hole</Text>
+          <Text style={styles.mapInstruction}>Tap a hole to see every throw on it.</Text>
           {holeGroups.map((group) => {
             const layoutView = withExistingLayout(holesCourse, group.layoutId);
             return <View key={group.layoutId}>
               {holeGroups.length > 1 && <Text style={[styles.fieldLabel, styles.typeLabel]}>{(layoutView?.layoutLabel ?? 'Deleted').toUpperCase()} LAYOUT</Text>}
-              {group.holes.map(({ hole, visits }) => {
-                const scoring = holeScoring(visits);
-                const par = layoutView?.layouts?.[hole - 1]?.par;
-                return <Pressable key={hole} onPress={() => openHoleHistory(holesCourse.id, group.layoutId, hole, statsPractice)} style={styles.courseItem} accessibilityRole="button" accessibilityLabel={`Every throw on hole ${hole}`}>
-                  <View style={styles.courseItemCopy}>
-                    <Text style={styles.courseItemName}>Hole {String(hole).padStart(2, '0')}</Text>
-                    <Text style={styles.courseItemMeta}>{[
-                      par === undefined ? null : `Par ${par}`,
-                      `played ${visits.length} ${visits.length === 1 ? 'time' : 'times'}`,
-                      scoring.average === null ? null : `avg ${scoring.average.toFixed(1)}${par === undefined ? '' : ` (${formatScoreToPar(Math.round((scoring.average - par) * 10) / 10)})`}`,
-                      scoring.best === null ? null : `best ${scoring.best}`,
-                    ].filter(Boolean).join(' · ')}</Text>
-                  </View>
-                  <Text style={styles.menuArrow}>›</Text>
-                </Pressable>;
-              })}
+              <HoleGrid
+                columns={group.holes.map(({ hole, visits }) => ({ hole, scoring: holeScoring(visits), played: visits.length, par: layoutView?.layouts?.[hole - 1]?.par ?? null }))}
+                rows={[
+                  { key: 'hole', label: 'Hole', style: 'head', cell: (column) => column.hole },
+                  { key: 'par', label: 'Par', style: 'muted', cell: (column) => column.par },
+                  { key: 'played', label: 'Played', style: 'muted', cell: (column) => column.played },
+                  { key: 'average', label: 'Avg', tall: true, cell: ({ scoring, par }) => scoring.average === null ? null : <Text style={[styles.holeGridText, styles.holeGridHead, par !== null && scoring.average < par && styles.underPar, par !== null && scoring.average > par && styles.overPar]}>{scoring.average.toFixed(1)}</Text> },
+                  { key: 'best', label: 'Best', tall: true, cell: ({ scoring, par }) => scoring.best === null ? null : <ScoreMark strokes={scoring.best} par={par} /> },
+                ]}
+                onPress={(column) => openHoleHistory(holesCourse.id, group.layoutId, column.hole, statsPractice)}
+                pressLabel={(column) => `Every throw on hole ${column.hole}`}
+              />
             </View>;
           })}
         </>}
-        <StatsSummary title="Throw stats" rounds={statsSelected.map((session) => ({ shots: session.shots, layouts: sessionLayouts(session) }))} scope="these rounds" />
+        <StatsSummary title="Throw stats" rounds={statsSelected.map((session) => ({ shots: session.shots, layouts: sessionLayouts(session) }))} />
       </>}
     </ScrollView>
   </>;

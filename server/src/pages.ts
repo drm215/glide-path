@@ -14,8 +14,15 @@ export const escapeHtml = (value: unknown) =>
 const LESS_THAN_JSON_ESCAPE = `${String.fromCharCode(92)}u003c`;
 const embedJson = (data: unknown) => JSON.stringify(data).replace(/</g, LESS_THAN_JSON_ESCAPE);
 
+// The scorecard markup is shared with the My rounds page, which builds it in the browser.
+// @ts-expect-error: plain browser JavaScript module without type declarations.
+import { scorecardHtml as untypedScorecardHtml, scorecardLegendHtml as untypedLegendHtml, scoreStripHtml as untypedScoreStripHtml } from '../public/js/scorecard.js';
+
+const scorecardHtml = untypedScorecardHtml as (shots: PageShot[], layouts: Layout[]) => string;
+const scoreStripHtml = untypedScoreStripHtml as (shots: PageShot[], layouts: Layout[]) => string;
+const scorecardLegendHtml = untypedLegendHtml as () => string;
+
 const formatToPar = (diff: number) => (diff === 0 ? 'E' : diff > 0 ? `+${diff}` : String(diff));
-const diffClass = (diff: number) => (diff < 0 ? 'under' : diff > 0 ? 'over' : '');
 
 // Matches the app: an out-of-bounds throw adds a penalty stroke.
 const strokes = (shots: PageShot[]) => shots.length + shots.filter((shot) => shot.lie === 'OB').length;
@@ -148,7 +155,6 @@ export const renderRoundPage = (round: {
   const withPar = holes.filter((item) => item.par !== undefined);
   const total = strokes(round.shots);
   const toPar = withPar.length ? withPar.reduce((sum, item) => sum + item.score - item.par!, 0) : null;
-  const parTotal = withPar.reduce((sum, item) => sum + item.par!, 0);
   const courseName = round.courseUid ? `<a href="/c/${escapeHtml(round.courseUid)}">${escapeHtml(round.courseName)}</a>` : escapeHtml(round.courseName);
   const played = new Date(round.updatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const scoreText = `${total}${toPar === null ? '' : ` (${formatToPar(toPar)})`}`;
@@ -156,18 +162,12 @@ export const renderRoundPage = (round: {
 <div class="eyebrow">${escapeHtml(round.mode === 'Practice' ? 'Practice session' : 'Round')} by ${escapeHtml(round.playedBy)}</div>
 <h1>${courseName}</h1>
 <p class="meta">${escapeHtml(played)}${round.layoutName ? ` · ${escapeHtml(round.layoutName)} layout` : ''} · ${holes.length} ${holes.length === 1 ? 'hole' : 'holes'}</p>
-<div class="score"><span class="total">${total}</span>${toPar === null ? '' : `<span class="par ${diffClass(toPar)}">${formatToPar(toPar)}</span>`}</div>
+${scoreStripHtml(round.shots, round.layouts)}
 <div id="map" class="map" role="img" aria-label="Satellite map of the selected hole and its throws"></div>
 <p class="map-note">Tap a hole in the scorecard to see where each throw landed.</p>
 <p class="map-legend"><span class="legend-dot good"></span>Good<span class="legend-dot fair"></span>Fair<span class="legend-dot poor"></span>Poor<span class="legend-dot"></span>Not rated<span class="legend-dot ob"></span>OB</p>
-<table>
-  <thead><tr><th>HOLE</th><th>PAR</th><th>SCORE</th><th>+/−</th></tr></thead>
-  <tbody>${holes.map((item) => {
-    const diff = item.par === undefined ? null : item.score - item.par;
-    return `<tr data-hole="${item.hole}"><td>${String(item.hole).padStart(2, '0')}</td><td>${item.par ?? '—'}</td><td><strong>${item.score}</strong></td><td class="${diff === null ? '' : diffClass(diff)}">${diff === null ? '—' : formatToPar(diff)}</td></tr>`;
-  }).join('')}</tbody>
-  <tfoot><tr><td>TOTAL</td><td>${withPar.length ? parTotal : '—'}</td><td>${total}</td><td class="${toPar === null ? '' : diffClass(toPar)}">${toPar === null ? '—' : formatToPar(toPar)}</td></tr></tfoot>
-</table>
+${scorecardHtml(round.shots, round.layouts)}
+${scorecardLegendHtml()}
 <div id="round-summary"></div>
 <h2>Throw by throw</h2>
 ${holes.map((item) => `<h3>Hole ${String(item.hole).padStart(2, '0')}</h3><ol class="throws">${item.shots.map((shot) => `<li>${escapeHtml(throwDetail(shot))}</li>`).join('')}</ol>`).join('')}`;

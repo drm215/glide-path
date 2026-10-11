@@ -1,7 +1,7 @@
 // Round summary for the website's round pages: totals, and breakdowns by throw type, disc,
 // landing spot and quality. Built from the same throw data the maps use.
 import { el } from './lib.js';
-import { QUALITY_LABELS, quality, reliableDistances, summarizeRounds } from './round-stats.js';
+import { QUALITY_LABELS, quality, reliableDistances, scoringStats, summarizeRounds } from './round-stats.js';
 
 const feet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
 const qualityText = (value) => (value === null ? '—' : `${value.toFixed(1)} / 3`);
@@ -10,8 +10,6 @@ const breakdownTable = (heading, rows) => el('table', { class: 'summary-table' }
   el('thead', {}, el('tr', {}, [heading, 'THROWS', 'AVG DISTANCE', 'LONGEST', 'AVG QUALITY'].map((label) => el('th', {}, label)))),
   el('tbody', {}, rows.map((row) => el('tr', {},
     el('td', {}, row.label), el('td', {}, row.count), el('td', {}, feet(row.averageFeet)), el('td', {}, feet(row.longestFeet)), el('td', {}, qualityText(row.averageQuality))))));
-
-const percent = (count, total) => `${Math.round((count / total) * 100)}%`;
 
 const statTile = (label, value, note) => el('div', { class: 'stat' },
   el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
@@ -57,14 +55,44 @@ const discBreakdown = (shots, reliable) => {
   return container;
 };
 
-// `rounds` are [{ shots, layouts }]; `scope` names them in notes ("this round", "these rounds").
-const renderSummary = (title, rounds, scope) => {
+// One percentage bar: `count` of `of` filled, with an optional inner share (C1 inside C2).
+const statBar = (count, of, inner, ...label) => {
+  const fill = (value, outer) => {
+    const share = Math.round((value / of) * 100);
+    return el('span', { class: outer ? 'fill outer' : 'fill', style: `width: ${share}%` }, share >= 12 ? `${share}%` : null);
+  };
+  return el('div', { class: 'bar-row' },
+    el('div', { class: 'bar', role: 'img', 'aria-label': `${Math.round((count / of) * 100)}%` }, inner === null ? fill(count, false) : [fill(count, true), fill(inner, false)]),
+    el('div', { class: 'bar-label' }, label));
+};
+
+const count = (made, of) => el('strong', {}, `${made}/${of}`);
+
+// Scoring percentages: fairways, scrambles, greens in regulation and putting from the circles,
+// then made-putt distances and out-of-bounds throws.
+const scoringBars = (stats) => {
+  if (!stats.holes) return null;
+  const { fairway, scramble, greens, c1x, c2, madePutts, penalties } = stats;
+  return el('div', { class: 'bars' },
+    fairway.drives ? statBar(fairway.hit, fairway.drives, null, count(fairway.hit, fairway.drives), ' Fairway') : null,
+    scramble.chances ? statBar(scramble.saved, scramble.chances, null, count(scramble.saved, scramble.chances), ' Scramble') : null,
+    greens.holes ? statBar(greens.c2, greens.holes, greens.c1, count(greens.c1, greens.holes), ' C1R  ', count(greens.c2, greens.holes), ' C2R') : null,
+    c1x.attempts ? statBar(c1x.made, c1x.attempts, null, count(c1x.made, c1x.attempts), ' C1X Putting') : null,
+    c2.attempts ? statBar(c2.made, c2.attempts, null, count(c2.made, c2.attempts), ' C2 Putting') : null,
+    madePutts.count ? el('p', { class: 'bar-note' },
+      el('strong', {}, `${madePutts.averageFeet.toFixed(1)} ft`), ' avg putt  ', el('strong', {}, `${madePutts.totalFeet.toLocaleString()} ft`), ' total putt  ',
+      el('strong', {}, `${madePutts.longestFeet} ft`), ' long') : null,
+    el('p', { class: 'bar-note' }, el('strong', {}, penalties), ' OB  ', el('strong', {}, (penalties / stats.holes).toFixed(3).replace(/^0/, '')), ' OB rate'));
+};
+
+// `rounds` are [{ shots, layouts }].
+const renderSummary = (title, rounds) => {
   const shots = rounds.flatMap((round) => round.shots);
   if (!shots.length) return null;
   const summary = summarizeRounds(rounds);
-  const { putting } = summary;
   return el('section', { class: 'round-summary', 'aria-labelledby': 'summary-heading' },
     el('h2', { id: 'summary-heading' }, title),
+    scoringBars(scoringStats(rounds)),
     el('div', { class: 'stats' },
       statTile('THROWS', summary.count, summary.penalties === 1 ? '1 OB penalty' : summary.penalties ? `${summary.penalties} OB penalties` : 'No penalties'),
       statTile('TOTAL DISTANCE', feet(summary.totalFeet), 'Measured by GPS'),
@@ -73,29 +101,6 @@ const renderSummary = (title, rounds, scope) => {
     el('h3', {}, 'By throw type'),
     breakdownTable('TYPE', summary.byType),
     summary.byStyle.length ? [el('h3', {}, 'By throw style'), breakdownTable('STYLE', summary.byStyle)] : null,
-    putting ? [
-      el('h3', {}, 'Putting'),
-      el('div', { class: 'stats' },
-        statTile('FIRST-PUTT MAKES', `${Math.round((putting.firstPutts.made / putting.firstPutts.attempts) * 100)}%`, `${putting.firstPutts.made} of ${putting.firstPutts.attempts} holes`),
-        statTile('AVG FIRST PUTT', feet(putting.firstPutts.averageFeet),
-          putting.firstPutts.measured < putting.firstPutts.attempts ? `${putting.firstPutts.measured} of ${putting.firstPutts.attempts} measured` : 'From lie to basket'),
-        statTile('ALL PUTTS', `${Math.round((putting.made / putting.attempts) * 100)}%`, `${putting.made} of ${putting.attempts} made`),
-        statTile('AVG MADE PUTT', feet(putting.madePutts.averageFeet), putting.madePutts.measured < putting.made ? `${putting.madePutts.measured} of ${putting.made} measured` : 'From lie to basket'),
-        statTile('LONGEST MADE PUTT', feet(putting.madePutts.longestFeet), null)),
-      putting.hit || putting.missed ? el('p', { class: 'meta' }, [putting.hit ? `${putting.hit} hit the basket` : '', putting.missed ? `${putting.missed} missed` : ''].filter(Boolean).join(' · ')) : null,
-    ] : null,
-    summary.driveCircles.drives ? [
-      el('h3', {}, 'Drives in the circles'),
-      summary.driveCircles.measured ? [
-        el('div', { class: 'stats' },
-          statTile('IN C1', percent(summary.driveCircles.c1, summary.driveCircles.measured), `${summary.driveCircles.c1} of ${summary.driveCircles.measured} · within 33 ft (10 m)`),
-          statTile('IN C2', percent(summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c2} of ${summary.driveCircles.measured} · 33–66 ft (10–20 m)`),
-          statTile('INSIDE C2', percent(summary.driveCircles.c1 + summary.driveCircles.c2, summary.driveCircles.measured), `${summary.driveCircles.c1 + summary.driveCircles.c2} of ${summary.driveCircles.measured} · within 66 ft`)),
-        summary.driveCircles.measured < summary.driveCircles.drives
-          ? el('p', { class: 'meta' }, `${summary.driveCircles.measured} of ${summary.driveCircles.drives} drives could be measured; the rest have no logged position, a position with poor GPS accuracy, or no mapped basket.`)
-          : null,
-      ] : el('p', { class: 'meta' }, `Circle hits need a drive’s logged landing spot and the hole’s mapped basket, and no drive in ${scope} has both.`),
-    ] : null,
     el('h3', {}, 'By disc'),
     discBreakdown(shots, reliableDistances(rounds)),
     summary.landings.length ? [el('h3', {}, 'Where throws landed'), el('div', { class: 'chips' }, summary.landings.map((item) => el('span', { class: 'chip' }, `${item.lie === 'Basket' ? 'In the basket' : item.lie} · ${item.count}`)))] : null,
@@ -103,7 +108,7 @@ const renderSummary = (title, rounds, scope) => {
   );
 };
 
-export const renderRoundSummary = (shots, layouts = []) => renderSummary('Round summary', [{ shots, layouts }], 'this round');
+export const renderRoundSummary = (shots, layouts = []) => renderSummary('Round summary', [{ shots, layouts }]);
 
 // Throw stats across many rounds, each with the layouts it was played on.
-export const renderHistorySummary = (rounds) => renderSummary('Throw stats', rounds, 'these rounds');
+export const renderHistorySummary = (rounds) => renderSummary('Throw stats', rounds);

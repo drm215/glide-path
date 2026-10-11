@@ -170,3 +170,107 @@ export const roundScore = (shots, layouts = []) => {
     toPar: withPar.length ? withPar.reduce((sum, hole) => sum + strokes(shots.filter((shot) => shot.hole === hole)) - layouts[hole - 1].par, 0) : null,
   };
 };
+
+// Putts from this close are tap-ins, left out of C1X putting (C1 putts from beyond 10 ft).
+export const TAP_IN_FEET = 10;
+
+// How far from the basket a throw stopped: 0 when it went in, null when that can't be measured
+// (no mapped basket, no logged position, poor GPS accuracy, or out of bounds).
+const lieFeet = (shot, basket) => {
+  if (shot.lie === 'Basket') return 0;
+  if (shot.lie === 'OB' || !basket || !hasPosition(shot) || !reliablePosition(shot)) return null;
+  return feetBetween(shot, basket);
+};
+
+const circleOf = (feet) => (feet === null ? null : feet <= C1_FEET ? 'c1' : feet <= C2_FEET ? 'c2' : 'outside');
+
+const ROUGH_LIES = ['Woods', 'Hazard', 'Other'];
+
+// What happened on each hole of a round, for the scorecard: the drive's result, scrambling,
+// greens in regulation, putts from inside the circles and the throw that went in.
+// - driving: 'ace', 'c1' or 'c2' (a fairway drive measured inside a circle), 'fairway', 'rough'
+//   (woods, hazard or other) or 'ob'; null when the drive has no landing spot.
+// - scramble: after a drive into the rough or OB, whether the hole was still par or better.
+// - green: the best circle reached within par − 2 strokes ('c1', 'c2' or 'missed'); null on
+//   holes under par 3, with no par, or with no throw in regulation that could be measured.
+// - c1x / c2: throws from 10–33 ft and 33–66 ft, measured from where each was thrown.
+export const holeBreakdown = (shots, layouts = []) => {
+  const reliable = reliableDistances([{ shots }]);
+  return [...new Set(shots.map((shot) => shot.hole))].sort((a, b) => a - b).map((hole) => {
+    const holeShots = shots.filter((shot) => shot.hole === hole);
+    const layout = layouts[hole - 1];
+    const basket = layout?.basket;
+    const par = layout?.par ?? null;
+    const score = strokes(holeShots);
+    // How far from the basket each throw was thrown: the tee for the first, otherwise where the
+    // previous throw stopped. A made throw with a trusted distance went exactly that far.
+    const fromFeet = holeShots.map((shot, index) => {
+      const tee = layout?.tee;
+      const feet = index > 0 ? lieFeet(holeShots[index - 1], basket) : tee && basket && reliablePosition(tee) ? feetBetween(tee, basket) : null;
+      return feet === null && shot.lie === 'Basket' && reliable.has(shot) ? shot.feet : feet;
+    });
+
+    const drive = holeShots[0];
+    const driveCircle = circleOf(lieFeet(drive, basket));
+    const driving = drive.lie === 'Basket' ? 'ace'
+      : drive.lie === 'OB' ? 'ob'
+        : ROUGH_LIES.includes(drive.lie) ? 'rough'
+          : driveCircle === 'c1' || driveCircle === 'c2' ? driveCircle
+            : drive.lie === 'Fairway' ? 'fairway' : null;
+
+    let green = null;
+    if (par !== null && par >= 3) {
+      let taken = 0;
+      let measured = false;
+      for (const shot of holeShots) {
+        taken += strokes([shot]);
+        if (taken > par - 2) break;
+        const circle = circleOf(lieFeet(shot, basket));
+        if (circle !== null || shot.lie === 'OB') measured = true;
+        if (circle === 'c1') { green = 'c1'; break; }
+        if (circle === 'c2') green = 'c2';
+      }
+      if (!green && measured) green = 'missed';
+    }
+
+    const putts = (min, max) => {
+      const attempts = holeShots.filter((shot, index) => fromFeet[index] !== null && fromFeet[index] > min && fromFeet[index] <= max);
+      return { made: attempts.filter((shot) => shot.lie === 'Basket').length, attempts: attempts.length };
+    };
+    const last = holeShots.length - 1;
+    return {
+      hole,
+      par,
+      lengthFeet: layout?.tee && basket ? Math.round(feetBetween(layout.tee, basket)) : null,
+      strokes: score,
+      driving,
+      scramble: par !== null && (driving === 'rough' || driving === 'ob') ? score <= par : null,
+      green,
+      c1x: putts(TAP_IN_FEET, C1_FEET),
+      c2: putts(C1_FEET, C2_FEET),
+      throwInFeet: holeShots[last].lie === 'Basket' && fromFeet[last] !== null ? Math.round(fromFeet[last]) : null,
+      penalties: holeShots.filter((shot) => shot.lie === 'OB').length,
+    };
+  });
+};
+
+// Scoring percentages across any number of rounds, from each hole's breakdown. Made putts are
+// the throws that went in from inside C2, tap-ins included.
+export const scoringStats = (rounds) => {
+  const holes = rounds.flatMap((round) => holeBreakdown(round.shots, round.layouts ?? []));
+  const drives = holes.filter((hole) => hole.driving !== null);
+  const scrambles = holes.filter((hole) => hole.scramble !== null);
+  const greens = holes.filter((hole) => hole.green !== null);
+  const putting = (key) => holes.reduce((total, hole) => ({ made: total.made + hole[key].made, attempts: total.attempts + hole[key].attempts }), { made: 0, attempts: 0 });
+  const madePutts = holes.map((hole) => hole.throwInFeet).filter((feet) => feet !== null && feet <= C2_FEET);
+  return {
+    holes: holes.length,
+    fairway: { hit: drives.filter((hole) => hole.driving !== 'rough' && hole.driving !== 'ob').length, drives: drives.length },
+    scramble: { saved: scrambles.filter((hole) => hole.scramble).length, chances: scrambles.length },
+    greens: { c1: greens.filter((hole) => hole.green === 'c1').length, c2: greens.filter((hole) => hole.green === 'c1' || hole.green === 'c2').length, holes: greens.length },
+    c1x: putting('c1x'),
+    c2: putting('c2'),
+    madePutts: { count: madePutts.length, totalFeet: madePutts.reduce((sum, feet) => sum + feet, 0), averageFeet: average(madePutts), longestFeet: madePutts.length ? Math.max(...madePutts) : null },
+    penalties: holes.reduce((sum, hole) => sum + hole.penalties, 0),
+  };
+};

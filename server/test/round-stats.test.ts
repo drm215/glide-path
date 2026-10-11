@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
-import { reliableDistances, roundScore, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
+import { holeBreakdown, reliableDistances, roundScore, scoringStats, summarizeRound, summarizeRounds } from '../public/js/round-stats.js';
 // @ts-expect-error: plain browser JavaScript module without type declarations.
 import { segmentLabels, throwMarkerClass, throwSegments } from '../public/js/lib.js';
 
@@ -252,5 +252,60 @@ describe('throw line colors', () => {
       [['#2e9d5b', false], ['#e3b505', false], ['#d64541', true], [null, false]]);
     assert.deepEqual(segments[0].from, tee, 'first line starts at the tee');
     assert.deepEqual(segments[1].from, { latitude: 40.0005, longitude: -75 }, 'later lines start at the previous throw');
+  });
+});
+
+describe('holeBreakdown and scoringStats', () => {
+  const at = (latitude: number) => ({ latitude, longitude: -75 });
+  const foot = 1 / 364_000; // about one foot of latitude, in degrees
+  // Baskets are 0.001° north of each tee (about 365 ft); hole 3's basket isn't mapped.
+  const layouts = [
+    { tee: at(40), basket: at(40.001), par: 3 },
+    { tee: at(41), basket: at(41.001), par: 4 },
+    { tee: at(42), basket: null, par: 3 },
+  ];
+  const short = (hole: number, feet: number) => at(39 + hole + 0.001 - feet * foot);
+  const shots = [
+    // Hole 1: parked 20 ft away, then the putt goes in. Birdie.
+    { hole: 1, type: 'Drive', disc: 'D', feet: 345, lie: 'Fairway', ...short(1, 20) },
+    { hole: 1, type: 'Putt', disc: 'P', feet: 20, lie: 'Basket', ...short(1, 0) },
+    // Hole 2: drive into the woods, approach to 50 ft (C2 in regulation), miss, tap in. Par saved.
+    { hole: 2, type: 'Drive', disc: 'D', feet: 180, lie: 'Woods', ...short(2, 185) },
+    { hole: 2, type: 'Approach', disc: 'A', feet: 135, lie: 'Fairway', ...short(2, 50) },
+    { hole: 2, type: 'Putt', disc: 'P', feet: 42, lie: 'Missed', ...short(2, 8) },
+    { hole: 2, type: 'Putt', disc: 'P', feet: 8, lie: 'Basket', ...short(2, 0) },
+    // Hole 3: OB off the tee, re-tee, then a 30 ft putt into a basket that isn't mapped. Bogey.
+    { hole: 3, type: 'Drive', disc: 'D', feet: 0, lie: 'OB' },
+    { hole: 3, type: 'Drive', disc: 'D', feet: 0, lie: 'Fairway' },
+    { hole: 3, type: 'Putt', disc: 'P', feet: 30, lie: 'Basket' },
+  ];
+  const holes = holeBreakdown(shots, layouts);
+  const near = (actual: number | null, expected: number) => assert.ok(actual !== null && Math.abs(actual - expected) <= 1, `expected about ${expected}, got ${actual}`);
+
+  test('each hole: drive, scramble, green in regulation, putts and the throw in', () => {
+    const pick = ({ hole, par, strokes, driving, scramble, green, c1x, c2, penalties }: Record<string, unknown>) => ({ hole, par, strokes, driving, scramble, green, c1x, c2, penalties });
+    assert.deepEqual(holes.map(pick), [
+      { hole: 1, par: 3, strokes: 2, driving: 'c1', scramble: null, green: 'c1', c1x: { made: 1, attempts: 1 }, c2: { made: 0, attempts: 0 }, penalties: 0 },
+      // The 8 ft tap-in is too close to count as a C1X putt.
+      { hole: 2, par: 4, strokes: 4, driving: 'rough', scramble: true, green: 'c2', c1x: { made: 0, attempts: 0 }, c2: { made: 0, attempts: 1 }, penalties: 0 },
+      // No basket to measure from: the made putt falls back to its own distance, and the green can't be told.
+      { hole: 3, par: 3, strokes: 4, driving: 'ob', scramble: false, green: null, c1x: { made: 1, attempts: 1 }, c2: { made: 0, attempts: 0 }, penalties: 1 },
+    ]);
+    near(holes[0].lengthFeet, 364);
+    assert.equal(holes[2].lengthFeet, null);
+    near(holes[0].throwInFeet, 20);
+    near(holes[1].throwInFeet, 8);
+    assert.equal(holes[2].throwInFeet, 30);
+  });
+
+  test('scoring percentages across the holes', () => {
+    const stats = scoringStats([{ shots, layouts }]);
+    assert.deepEqual(
+      { holes: stats.holes, fairway: stats.fairway, scramble: stats.scramble, greens: stats.greens, c1x: stats.c1x, c2: stats.c2, penalties: stats.penalties },
+      { holes: 3, fairway: { hit: 1, drives: 3 }, scramble: { saved: 1, chances: 2 }, greens: { c1: 1, c2: 2, holes: 2 }, c1x: { made: 2, attempts: 2 }, c2: { made: 0, attempts: 1 }, penalties: 1 },
+    );
+    assert.equal(stats.madePutts.count, 3);
+    near(stats.madePutts.totalFeet, 58);
+    near(stats.madePutts.longestFeet, 30);
   });
 });

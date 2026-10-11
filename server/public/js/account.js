@@ -1,5 +1,6 @@
+import { scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { renderHistorySummary, renderRoundSummary } from './summary.js';
-import { $, TOKEN_KEY, api, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
+import { $, TOKEN_KEY, api, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
 const signedInEl = $('#signed-in');
@@ -93,33 +94,26 @@ const renderRound = (round) => {
   const score = roundScore(round);
   const layout = layoutFor(round);
   const course = courseFor(round);
-  const table = el('table', {},
-    el('thead', {}, el('tr', {}, ['HOLE', 'PAR', 'SCORE', '+/−'].map((heading) => el('th', {}, heading)))),
-    el('tbody', {}, score.holes.map((item) => {
-      const diff = item.par === undefined ? null : item.score - item.par;
-      return el('tr', { 'data-hole': item.hole },
-        el('td', {}, String(item.hole).padStart(2, '0')), el('td', {}, item.par ?? '—'), el('td', {}, el('strong', {}, item.score)),
-        el('td', { class: diff === null ? '' : toParClass(diff) }, diff === null ? '—' : formatToPar(diff)));
-    })),
-    el('tfoot', {}, el('tr', {}, el('td', {}, 'TOTAL'), el('td', {}, score.toPar === null ? '—' : score.par), el('td', {}, score.total),
-      el('td', { class: score.toPar === null ? '' : toParClass(score.toPar) }, score.toPar === null ? '—' : formatToPar(score.toPar)))));
+  // A round with no throws has no scorecard; the map still needs somewhere to listen for hole picks.
+  const scorecard = fromHtml(scorecardHtml(round.shots, layout?.layouts ?? [])) ?? el('div', {});
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': 'Satellite map of the selected hole and its throws' });
   setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null, round.inProgress ? 'In progress' : null].filter(Boolean).join(' · ')),
     el('h1', {}, round.courseName),
     el('p', { class: 'meta' }, [course && layoutsOf(course).length > 1 && layout ? `${layout.name} layout` : null, plural(score.holes.length, 'hole')].filter(Boolean).join(' · ')),
-    el('div', { class: 'score' }, el('span', { class: 'total' }, score.total), score.toPar === null ? null : el('span', { class: `par ${toParClass(score.toPar)}` }, formatToPar(score.toPar))),
+    fromHtml(scoreStripHtml(round.shots, layout?.layouts ?? [])),
     round.shared && round.shareToken ? el('p', {}, el('a', { href: `/r/${encodeURIComponent(round.shareToken)}` }, 'Public share link')) : null,
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard to see where each throw landed.'),
     throwLegend(),
-    table,
+    scorecard,
+    fromHtml(scorecardLegendHtml()),
     renderRoundSummary(round.shots, layout?.layouts ?? []),
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`), el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot))))]),
   );
-  setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], table);
+  setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard);
 };
 
 const renderCourse = (course) => {

@@ -3,6 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { roundShareUrl } from '../../lib/api';
+import { holeBreakdown } from '../../lib/round-stats';
 import { courseLayouts, withExistingLayout } from '../../lib/layouts';
 import type { Shot } from '../../lib/types';
 import { GREEN, styles } from '../theme';
@@ -11,6 +12,7 @@ import { formatScoreToPar, formatSessionDate, formatThrowDetail } from '../forma
 import { regionForPoints } from '../geo';
 import { countStrokes, scoreSummary } from '../scoring';
 import { BasketCircles } from '../components/BasketCircles';
+import { HoleGridLegend, RoundScorecard } from '../components/HoleGrid';
 import { StatsSummary } from '../components/StatsSummary';
 import { ROUNDS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { ThrowEditorSheet, type ThrowTarget } from '../components/ThrowEditorSheet';
@@ -41,6 +43,11 @@ export const RoundDetailScreen = () => {
     : [];
   const viewedScore = viewedSession ? scoreSummary(viewedSession.shots, viewedCourse) : null;
   const viewedPar = viewedHoles.reduce((sum, item) => sum + (item.par ?? 0), 0);
+  const viewedStrokes = viewedScore?.strokes ?? viewedSession?.shots.length ?? 0;
+  const viewedToPar = viewedScore?.toPar ?? null;
+  // How each hole was played, for the scorecard; the course length when every hole is mapped.
+  const viewedBreakdown = viewedSession ? holeBreakdown(viewedSession.shots, viewedCourse?.layouts ?? []) : [];
+  const viewedLength = viewedBreakdown.length && viewedBreakdown.every((item) => item.lengthFeet !== null) ? viewedBreakdown.reduce((sum, item) => sum + item.lengthFeet!, 0) : null;
   const viewedResults = RESULT_TYPES.map((result) => ({
     ...result,
     count: viewedHoles.filter((item) => item.par !== undefined && result.matches(countStrokes(item.shots) - item.par)).length,
@@ -79,14 +86,19 @@ export const RoundDetailScreen = () => {
       {!viewedSession ? <Text style={styles.mapInstruction}>This round is no longer available.</Text> : <>
         <View style={styles.finalScore}>
           <Text style={styles.menuIntroLabel}>FINAL SCORE</Text>
-          <View style={styles.finalScoreRow}>
-            <Text style={styles.finalScoreValue}>{viewedScore?.strokes ?? viewedSession.shots.length}</Text>
-            {viewedScore?.toPar != null && <Text style={[styles.finalScoreToPar, viewedScore.toPar < 0 && styles.underPar, viewedScore.toPar > 0 && styles.overPar]}>{formatScoreToPar(viewedScore.toPar)}</Text>}
+          <View style={styles.roundHeader}>
+            <View style={[styles.roundHeaderBadge, viewedToPar === 0 && styles.roundHeaderBadgeEven, viewedToPar != null && viewedToPar > 0 && styles.roundHeaderBadgeOver]}>
+              <Text style={styles.roundHeaderBadgeText}>{viewedToPar == null ? viewedStrokes : formatScoreToPar(viewedToPar)}</Text>
+            </View>
+            <View style={styles.roundHeaderFigures}>
+              <Text style={styles.roundHeaderFigure}>Total <Text style={styles.roundHeaderFigureValue}>{viewedStrokes}</Text></Text>
+              {viewedScore?.holesWithPar ? <Text style={styles.roundHeaderFigure}>Par <Text style={styles.roundHeaderFigureValue}>{viewedPar}</Text></Text> : null}
+              {viewedLength !== null && <Text style={styles.roundHeaderFigure}>Dist <Text style={styles.roundHeaderFigureValue}>{viewedLength.toLocaleString()} ft</Text></Text>}
+            </View>
           </View>
           <Text style={styles.menuIntroCopy}>{[
             `${viewedHoles.length} ${viewedHoles.length === 1 ? 'hole' : 'holes'}`,
             viewedLayoutLabel ? `${viewedLayoutLabel} layout` : null,
-            viewedScore?.holesWithPar ? `Par ${viewedPar}` : null,
             `${viewedSession.shots.reduce((sum, shot) => sum + shot.feet, 0).toLocaleString()} ft thrown`,
           ].filter(Boolean).join(' · ')}</Text>
           {viewedResults.length > 0 && <View style={styles.resultChips}>{viewedResults.map((result) => <View key={result.label} style={styles.resultChip}><Text style={styles.resultChipText}>{result.count} {result.label}{result.count === 1 || result.label.endsWith('+') || result.label.endsWith('better') ? '' : 's'}</Text></View>)}</View>}
@@ -103,27 +115,11 @@ export const RoundDetailScreen = () => {
         </View>
         {account && viewedSession.shared && viewedSession.shareToken ? <Pressable onPress={() => shareLink(`My round at ${viewedSession.courseName}:`, roundShareUrl(viewedSession.shareToken!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SEND LINK</Text></Pressable> : null}
         <Text style={styles.sectionTitle}>Scorecard</Text>
-        <View style={styles.scorecard}>
-          <View style={[styles.scorecardRow, styles.scorecardHeader]}><Text style={[styles.scorecardCell, styles.scorecardHoleCell, styles.scorecardHeaderText]}>HOLE</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>PAR</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>SCORE</Text><Text style={[styles.scorecardCell, styles.scorecardHeaderText]}>+/−</Text></View>
-          {viewedHoles.map((item) => {
-            const diff = item.par === undefined ? null : countStrokes(item.shots) - item.par;
-            return <Pressable key={item.hole} onPress={() => toggleRoundHoleMap(item.hole, true)} style={[styles.scorecardRow, expandedHole === item.hole && styles.scorecardRowActive]} accessibilityRole="button" accessibilityLabel={`Show map for hole ${item.hole}`}>
-              <Text style={[styles.scorecardCell, styles.scorecardHoleCell]}>{String(item.hole).padStart(2, '0')}</Text>
-              <Text style={styles.scorecardCell}>{item.par ?? '—'}</Text>
-              <Text style={[styles.scorecardCell, styles.scorecardScore]}>{countStrokes(item.shots)}</Text>
-              <Text style={[styles.scorecardCell, diff !== null && diff < 0 && styles.underPar, diff !== null && diff > 0 && styles.overPar]}>{diff === null ? '—' : formatScoreToPar(diff)}</Text>
-            </Pressable>;
-          })}
-          <View style={[styles.scorecardRow, styles.scorecardTotal]}>
-            <Text style={[styles.scorecardCell, styles.scorecardHoleCell, styles.scorecardHeaderText]}>TOTAL</Text>
-            <Text style={styles.scorecardCell}>{viewedScore?.holesWithPar ? viewedPar : '—'}</Text>
-            <Text style={[styles.scorecardCell, styles.scorecardScore]}>{viewedScore?.strokes ?? viewedSession.shots.length}</Text>
-            <Text style={[styles.scorecardCell, viewedScore?.toPar != null && viewedScore.toPar < 0 && styles.underPar, viewedScore?.toPar != null && viewedScore.toPar > 0 && styles.overPar]}>{viewedScore?.toPar == null ? '—' : formatScoreToPar(viewedScore.toPar)}</Text>
-          </View>
-        </View>
+        <RoundScorecard holes={viewedBreakdown} active={expandedHole} onPressHole={(hole) => toggleRoundHoleMap(hole, true)} />
+        <HoleGridLegend />
         {viewedScore && viewedScore.holesWithPar < viewedScore.holesCompleted && <Text style={styles.mapInstruction}>{viewedScore.holesWithPar ? `To par counts only the ${viewedScore.holesWithPar} holes with a par set.` : 'Set pars for this course in Course builder to see your score to par.'}</Text>}
         {viewedSession.mode === 'Practice' && <Text style={styles.mapInstruction}>Practice session</Text>}
-        <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedCourse?.layouts ?? [] }]} scope="this round" />
+        <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedCourse?.layouts ?? [] }]} />
         <Text style={[styles.sectionTitle, styles.throwByThrowTitle]}>Throw by throw</Text>
         <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it.</Text>
         {viewedHoles.map((item) => <View key={item.hole} style={styles.roundHole} onLayout={(event) => { holeSectionOffsets.current[item.hole] = event.nativeEvent.layout.y; }}>
