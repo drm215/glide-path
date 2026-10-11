@@ -16,31 +16,37 @@ const statTile = (label, value, note) => el('div', { class: 'stat' },
 
 const THROW_TYPES = ['Drive', 'Approach', 'Putt'];
 
-// A row of toggle buttons; exactly one is pressed. `onSelect` gets the chosen value.
-const filterGroup = (label, options, onSelect) => {
+// A row of toggle buttons where any number can be picked. The option with value null ("All …")
+// clears the picks and is pressed while none are. `onChange` gets the picked values.
+export const filterGroup = (label, options, onChange, initial = []) => {
+  let picked = initial;
+  const sync = () => buttons.forEach((button, index) => {
+    const value = options[index][0];
+    button.setAttribute('aria-pressed', String(value === null ? !picked.length : picked.includes(value)));
+  });
   const buttons = options.map(([value, text]) => el('button', {
     type: 'button',
-    'aria-pressed': String(value === null),
     onclick: () => {
-      buttons.forEach((button) => button.setAttribute('aria-pressed', String(button === buttonFor(value))));
-      onSelect(value);
+      picked = value === null ? [] : picked.includes(value) ? picked.filter((item) => item !== value) : [...picked, value];
+      sync();
+      onChange(picked);
     },
   }, text));
-  const buttonFor = (value) => buttons[options.findIndex(([option]) => option === value)];
+  sync();
   return el('div', { class: 'tabs', role: 'group', 'aria-label': label }, buttons);
 };
 
-// The By disc table with throw-type and quality filters that combine. `reliable` comes from the
+// The By disc table with throw-type and quality filters that combine; each can pick several. `reliable` comes from the
 // full rounds, since a filtered list of throws no longer shows each throw's previous lie.
 const discBreakdown = (shots, reliable) => {
-  const filters = { type: null, quality: null };
+  const filters = { types: [], qualities: [] };
   const types = THROW_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => quality(shot) === value));
   let table = null;
   const container = el('div', { class: 'disc-breakdown' });
 
   const render = () => {
-    const matching = shots.filter((shot) => (filters.type === null || shot.type === filters.type) && (filters.quality === null || quality(shot) === filters.quality));
+    const matching = shots.filter((shot) => (!filters.types.length || filters.types.includes(shot.type)) && (!filters.qualities.length || filters.qualities.includes(quality(shot))));
     const next = matching.length
       ? breakdownTable('DISC', summarizeRounds([{ shots: matching }], reliable).byDisc)
       : el('p', { class: 'meta' }, 'No throws match these filters.');
@@ -49,8 +55,8 @@ const discBreakdown = (shots, reliable) => {
     table = next;
   };
 
-  if (types.length > 1) container.append(filterGroup('Filter by throw type', [[null, 'All throws'], ...types.map((type) => [type, type])], (value) => { filters.type = value; render(); }));
-  if (ratings.length > 1) container.append(filterGroup('Filter by throw quality', [[null, 'Any quality'], ...ratings.map((value) => [value, QUALITY_LABELS[value]])], (value) => { filters.quality = value; render(); }));
+  if (types.length > 1) container.append(filterGroup('Filter by throw type', [[null, 'All throws'], ...types.map((type) => [type, type])], (picked) => { filters.types = picked; render(); }));
+  if (ratings.length > 1) container.append(filterGroup('Filter by throw quality', [[null, 'Any quality'], ...ratings.map((value) => [value, QUALITY_LABELS[value]])], (picked) => { filters.qualities = picked; render(); }));
   render();
   return container;
 };
@@ -58,11 +64,11 @@ const discBreakdown = (shots, reliable) => {
 // One percentage bar: `count` of `of` filled, with an optional inner share (C1 inside C2).
 const statBar = (count, of, inner, ...label) => {
   const fill = (value, outer) => {
-    const share = Math.round((value / of) * 100);
+    const share = of ? Math.round((value / of) * 100) : 0;
     return el('span', { class: outer ? 'fill outer' : 'fill', style: `width: ${share}%` }, share >= 12 ? `${share}%` : null);
   };
   return el('div', { class: 'bar-row' },
-    el('div', { class: 'bar', role: 'img', 'aria-label': `${Math.round((count / of) * 100)}%` }, inner === null ? fill(count, false) : [fill(count, true), fill(inner, false)]),
+    el('div', { class: 'bar', role: 'img', 'aria-label': `${of ? Math.round((count / of) * 100) : 0}%` }, inner === null ? fill(count, false) : [fill(count, true), fill(inner, false)]),
     el('div', { class: 'bar-label' }, label));
 };
 
@@ -75,7 +81,7 @@ const scoringBars = (stats) => {
   const { fairway, scramble, greens, c1x, c2, madePutts, penalties } = stats;
   return el('div', { class: 'bars' },
     fairway.drives ? statBar(fairway.hit, fairway.drives, null, count(fairway.hit, fairway.drives), ' Fairway') : null,
-    scramble.chances ? statBar(scramble.saved, scramble.chances, null, count(scramble.saved, scramble.chances), ' Scramble') : null,
+    fairway.drives ? statBar(scramble.saved, scramble.chances, null, count(scramble.saved, scramble.chances), ' Scramble') : null,
     greens.holes ? statBar(greens.c2, greens.holes, greens.c1, count(greens.c1, greens.holes), ' C1R  ', count(greens.c2, greens.holes), ' C2R') : null,
     c1x.attempts ? statBar(c1x.made, c1x.attempts, null, count(c1x.made, c1x.attempts), ' C1X Putting') : null,
     c2.attempts ? statBar(c2.made, c2.attempts, null, count(c2.made, c2.attempts), ' C2 Putting') : null,

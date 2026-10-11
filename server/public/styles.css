@@ -127,6 +127,16 @@ table.scorecard { margin: 0; border: 0; border-radius: 0; min-width: 100%; width
 .icon.rough { width: 0; height: 0; border: 0; border-radius: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid var(--muted); }
 .icon.ob { border-radius: 2px; border-color: var(--orange); }
 .icon.ob::after { content: "✕"; position: absolute; inset: 0; color: var(--orange); font: 900 10px/12px system-ui, sans-serif; text-align: center; }
+.scorecard-wrap + .scorecard-wrap { margin-top: 8px; }
+/* Phones: narrower columns so a nine fits across the screen. */
+@media (max-width: 520px) {
+  .scorecard th, .scorecard td { min-width: 24px; padding: 4px 1px; font-size: 12px; }
+  .scorecard th[scope="row"], .scorecard thead th:first-child { padding: 4px 6px; font-size: 11px; }
+  .scorecard .total { padding: 4px 4px; }
+  .scorecard tr.muted td { font-size: 11px; }
+  .mark { width: 22px; height: 22px; font-size: 12px; }
+  .icon { width: 13px; height: 13px; }
+}
 .scorecard-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; margin: 0 0 12px; }
 
 /* Percentage bars: the share filled in green, the count beside it. */

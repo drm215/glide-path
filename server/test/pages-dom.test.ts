@@ -171,9 +171,15 @@ describe('website pages in a browser', () => {
     press('Filter by throw quality', 'Good');
     assert.deepEqual(discRows(), ['Aviar:1'], 'filters combine');
 
+    // Several types at once: Putt and Drive, still only Good throws.
     press('Filter by throw type', 'Drive');
+    assert.deepEqual(discRows(), ['Destroyer:1', 'Aviar:1']);
+
+    // Pressing a type again takes it out.
+    press('Filter by throw type', 'Putt');
     assert.deepEqual(discRows(), ['Destroyer:1']);
 
+    press('Filter by throw quality', 'Good');
     press('Filter by throw quality', 'Fair');
     assert.equal(breakdown.querySelector('table'), null);
     assert.match(breakdown.textContent ?? '', /No throws match these filters/);
@@ -189,13 +195,18 @@ describe('website pages in a browser', () => {
     assert.ok(document.querySelector('a[href="#stats"]'), 'overview links to all-time stats');
     await navigate('#stats');
     const view = document.getElementById('signed-in')!;
-    const options = () => [...document.querySelectorAll('#stats-course option')].map((option) => option.textContent);
+    const courseButtons = () => [...view.querySelectorAll('[aria-label="Filter by course"] button')];
+    const options = () => courseButtons().map((button) => button.textContent);
+    const pressed = () => courseButtons().filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.textContent);
+    const pressCourse = (label: string) => courseButtons().find((button) => button.textContent === label)!
+      .dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
     const tile = (label: string) => [...view.querySelectorAll('.stat')].find((item) => item.querySelector('.label')?.textContent === label)?.querySelector('.value')?.textContent;
     assertNoRenderingLeaks(view.textContent ?? '');
     assert.match(view.textContent ?? '', /All-time stats/);
     assert.match(view.textContent ?? '', /Throw stats/);
     // Practice is excluded by default: one round at one course.
     assert.deepEqual(options(), ['All courses (1)', 'Cedar Grove (1)']);
+    assert.deepEqual(pressed(), ['All courses (1)']);
     assert.equal(tile('ROUNDS'), '1');
     assert.equal(tile('BEST ROUND'), '-2', 'scored against the main layout pars (3 + 4)');
 
@@ -206,11 +217,29 @@ describe('website pages in a browser', () => {
     assert.deepEqual(options(), ['All courses (2)', 'Back Yard (1)', 'Cedar Grove (1)']);
     assert.match(view.textContent ?? '', /By course/);
 
-    const select = document.getElementById('stats-course')!;
-    for (const option of select.querySelectorAll('option')) option.toggleAttribute('selected', option.getAttribute('value') === 'name:Back Yard');
-    select.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('change'));
+    // One course: no By course table; a synced course also shows its holes.
+    pressCourse('Cedar Grove (1)');
+    assert.deepEqual(pressed(), ['Cedar Grove (1)']);
+    assert.doesNotMatch(view.textContent ?? '', /By course/);
+    assert.match(view.textContent ?? '', /By hole/);
+    const holes = view.querySelector('table.scorecard')!;
+    assert.deepEqual([...holes.querySelectorAll('.mark')].map((mark) => [mark.className, mark.textContent]), [['mark birdie', '2'], ['mark birdie', '3']], 'best scores marked against par');
+
+    // A second course adds to the first.
+    pressCourse('Back Yard (1)');
+    assert.deepEqual(pressed(), ['Back Yard (1)', 'Cedar Grove (1)']);
+    assert.match(view.textContent ?? '', /By course/);
+    assert.doesNotMatch(view.textContent ?? '', /By hole/);
+    assert.equal(tile('ROUNDS'), '1', 'the practice session is not a round');
+
+    // Taking one back out leaves the other.
+    pressCourse('Cedar Grove (1)');
+    assert.deepEqual(pressed(), ['Back Yard (1)']);
     assert.doesNotMatch(view.textContent ?? '', /By course/);
     assert.match(view.querySelector('.round-summary')?.textContent ?? '', /THROWS1/);
+
+    pressCourse('All courses (2)');
+    assert.deepEqual(pressed(), ['All courses (2)']);
     assertNoRenderingLeaks(view.textContent ?? '');
   });
 

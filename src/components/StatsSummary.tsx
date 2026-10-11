@@ -31,7 +31,7 @@ export const GroupTable = ({ heading, rows }: { heading: string; rows: GroupStat
 
 // One percentage bar: `count` of `of` filled in green, with an optional inner share (C1 inside C2).
 const StatBar = ({ count, of, inner, children }: { count: number; of: number; inner?: number; children: ReactNode }) => {
-  const share = (value: number) => Math.round((value / of) * 100);
+  const share = (value: number) => (of ? Math.round((value / of) * 100) : 0);
   const fill = (value: number, outer: boolean) => <View style={[styles.statBarFill, outer && styles.statBarFillOuter, { width: `${share(value)}%` }]}>
     {share(value) >= 12 && <Text style={styles.statBarPercent}>{share(value)}%</Text>}
   </View>;
@@ -52,7 +52,7 @@ export const ScoringBars = ({ stats }: { stats: ScoringStats }) => {
   if (!stats.holes) return null;
   return <View style={styles.statBars}>
     {fairway.drives > 0 && <StatBar count={fairway.hit} of={fairway.drives}><Count count={fairway.hit} of={fairway.drives} /> Fairway</StatBar>}
-    {scramble.chances > 0 && <StatBar count={scramble.saved} of={scramble.chances}><Count count={scramble.saved} of={scramble.chances} /> Scramble</StatBar>}
+    {fairway.drives > 0 && <StatBar count={scramble.saved} of={scramble.chances}><Count count={scramble.saved} of={scramble.chances} /> Scramble</StatBar>}
     {greens.holes > 0 && <StatBar count={greens.c2} inner={greens.c1} of={greens.holes}><Count count={greens.c1} of={greens.holes} /> C1R  <Count count={greens.c2} of={greens.holes} /> C2R</StatBar>}
     {c1x.attempts > 0 && <StatBar count={c1x.made} of={c1x.attempts}><Count count={c1x.made} of={c1x.attempts} /> C1X Putting</StatBar>}
     {c2.attempts > 0 && <StatBar count={c2.made} of={c2.attempts}><Count count={c2.made} of={c2.attempts} /> C2 Putting</StatBar>}
@@ -68,8 +68,9 @@ export const ScoringBars = ({ stats }: { stats: ScoringStats }) => {
 // Scoring and throw stats for one or many rounds. Each round brings the hole layouts it was
 // played on, since circles, greens and putt distances are measured against its baskets.
 export const StatsSummary = ({ title, rounds }: { title: string; rounds: StatsRound[] }) => {
-  const [discType, setDiscType] = useState<ThrowType | null>(null);
-  const [discQuality, setDiscQuality] = useState<number | null>(null);
+  // The By disc filters: chosen throw types and quality ratings; none chosen means all.
+  const [discTypes, setDiscTypes] = useState<ThrowType[]>([]);
+  const [discQualities, setDiscQualities] = useState<number[]>([]);
   const shots = rounds.flatMap((round) => round.shots);
   if (!shots.length) return null;
   const reliable = reliableDistances(rounds);
@@ -77,7 +78,8 @@ export const StatsSummary = ({ title, rounds }: { title: string; rounds: StatsRo
   const scoring = scoringStats(rounds);
   const types = FILTER_TYPES.filter((type) => shots.some((shot) => shot.type === type));
   const ratings = [3, 2, 1].filter((value) => shots.some((shot) => qualityOf(shot) === value));
-  const discShots = shots.filter((shot) => (discType === null || shot.type === discType) && (discQuality === null || qualityOf(shot) === discQuality));
+  const discShots = shots.filter((shot) => (!discTypes.length || discTypes.includes(shot.type)) && (!discQualities.length || discQualities.includes(qualityOf(shot) ?? 0)));
+  const toggle = <T,>(value: T) => (list: T[]) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
   const filterChip = (label: string, selected: boolean, onPress: () => void) => (
     <Pressable key={label} onPress={onPress} style={[styles.chip, selected && styles.chipSelected]} accessibilityRole="button" accessibilityState={{ selected }}>
       <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
@@ -98,10 +100,10 @@ export const StatsSummary = ({ title, rounds }: { title: string; rounds: StatsRo
       {summary.byStyle.length > 0 && <><Text style={styles.statsHeading}>By throw style</Text><GroupTable heading="STYLE" rows={summary.byStyle} /></>}
       <Text style={styles.statsHeading}>By disc</Text>
       {types.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-        {[filterChip('All throws', discType === null, () => setDiscType(null)), ...types.map((type) => filterChip(type, discType === type, () => setDiscType(type)))]}
+        {[filterChip('All throws', !discTypes.length, () => setDiscTypes([])), ...types.map((type) => filterChip(type, discTypes.includes(type), () => setDiscTypes(toggle(type))))]}
       </ScrollView>}
       {ratings.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-        {[filterChip('Any quality', discQuality === null, () => setDiscQuality(null)), ...ratings.map((value) => filterChip(QUALITY_NAMES[value], discQuality === value, () => setDiscQuality(value)))]}
+        {[filterChip('Any quality', !discQualities.length, () => setDiscQualities([])), ...ratings.map((value) => filterChip(QUALITY_NAMES[value], discQualities.includes(value), () => setDiscQualities(toggle(value))))]}
       </ScrollView>}
       {discShots.length ? <GroupTable heading="DISC" rows={summarizeRounds([{ shots: discShots }], reliable).byDisc} /> : <Text style={styles.mapInstruction}>No throws match these filters.</Text>}
       {summary.landings.length > 0 && <>

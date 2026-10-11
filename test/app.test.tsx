@@ -456,6 +456,20 @@ test('a past round shows its scorecard: score to par, the drive and green, putts
   expect(await screen.findByText('− MAP')).toBeTruthy();
 });
 
+test('a scorecard longer than nine holes is split into front and back nines', async () => {
+  const eighteen: SessionArchive = {
+    ...pastRound,
+    shots: Array.from({ length: 18 }, (_, index) => ({ x: 0.5, y: 0.5, feet: 0, disc: 'Buzzz', type: 'Drive' as const, hole: index + 1, lie: 'Basket' as const })),
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [eighteen] });
+  await renderApp(`/rounds/${eighteen.id}`);
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  // Each nine repeats the row labels; the total column comes after hole 18 only.
+  expect(screen.getAllByText('Score')).toHaveLength(2);
+  expect(screen.getAllByText('TOT')).toHaveLength(1);
+  expect(screen.getByLabelText('Show map for hole 18')).toBeTruthy();
+});
+
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp(`/rounds/${pastRound.id}`);
@@ -526,8 +540,52 @@ test('stats summarize finished rounds', async () => {
   expect(screen.getByText('BEST ROUND')).toBeTruthy();
   // The drive landed in the fairway, outside the circles; the putt went in from about 73 ft.
   expect(screen.getByText('1/1 Fairway')).toBeTruthy();
+  // No drive missed the fairway, so no scramble chances, but Scramble still shows.
+  expect(screen.getByText('0/0 Scramble')).toBeTruthy();
   expect(screen.getByText('0/1 C1R  0/1 C2R')).toBeTruthy();
   expect(screen.getByText('0 OB   .000 OB rate')).toBeTruthy();
+});
+
+test('stats combine any courses picked, and By disc filters by several throw types at once', async () => {
+  const backYard: Course = { id: 'course-2', name: 'Back Yard', holes: 1, updatedAt: 5, layouts: [{ tee: null, basket: null, par: 3 }] };
+  const backYardRound: SessionArchive = {
+    id: '1727200000000', mode: 'Round', courseName: 'Back Yard', courseId: 'course-2', updatedAt: 7,
+    shots: [
+      { x: 0.5, y: 0.5, feet: 200, disc: 'Destroyer', type: 'Drive', hole: 1, lie: 'Fairway' },
+      { x: 0.5, y: 0.5, feet: 90, disc: 'Roc', type: 'Approach', hole: 1, lie: 'Fairway' },
+      { x: 0.5, y: 0.5, feet: 10, disc: 'Aviar', type: 'Putt', hole: 1, lie: 'Basket' },
+    ],
+  };
+  await seed({ [KEYS.courses]: [cedarGrove, backYard], [KEYS.history]: [pastRound, backYardRound] });
+  await renderApp();
+  await press(await screen.findByText('Stats').then(() => 'Stats'));
+  await press(await screen.findByText('Cedar Grove (1)').then(() => 'Cedar Grove (1)'));
+  // One course: its holes, no By course list.
+  expect(await screen.findByText('By hole')).toBeTruthy();
+  expect(screen.queryByText('By course')).toBeNull();
+
+  // A second course adds to the first.
+  await press('Back Yard (1)');
+  expect(await screen.findByText('By course')).toBeTruthy();
+  expect(screen.queryByText('By hole')).toBeNull();
+  expect(screen.getByText('Across different courses')).toBeTruthy();
+
+  // Taking one back out leaves the other; All courses clears the choice.
+  await press('Cedar Grove (1)');
+  expect(await screen.findByText('By hole')).toBeTruthy();
+  await press('All courses (2)');
+  expect(await screen.findByText('By course')).toBeTruthy();
+
+  // By disc: Drive and Putt together leave out the approach (Roc).
+  // The chips are pressed by role, since the throw-type table also has rows named Drive and Putt.
+  await fireEvent.press(screen.getByRole('button', { name: 'Drive' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Putt' }));
+  expect(screen.getByRole('button', { name: 'Drive', selected: true })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Putt', selected: true })).toBeTruthy();
+  expect(screen.queryByText('Roc')).toBeNull();
+  expect(screen.getByText('Aviar')).toBeTruthy();
+  await press('All throws');
+  expect(await screen.findByText('Roc')).toBeTruthy();
 });
 
 test('stats leave out a distance measured from a poor GPS reading', async () => {

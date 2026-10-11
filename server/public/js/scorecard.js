@@ -36,8 +36,28 @@ const icon = (kind) => (kind ? `<span class="icon ${kind}" role="img" aria-label
 const LEGEND = [['c1', 'C1'], ['c2', 'C2'], ['fairway', 'Fairway'], ['rough', 'Rough'], ['ob', 'OB'], ['ace', 'Ace']];
 export const scorecardLegendHtml = () => `<p class="scorecard-legend">${LEGEND.map(([kind, label]) => `<span>${icon(kind)} ${label}</span>`).join('')}</p>`;
 
-// Labels down the left, a column per hole (each cell marked with data-hole, for the map) and a
-// total column. Rows the round has nothing for are left out.
+// Holes are shown nine at a time, like the front and back nine of a paper scorecard.
+const HOLES_PER_BLOCK = 9;
+
+// A hole grid: labels down the left and a column per hole, in blocks of nine, with a total
+// column after the last hole when any row has a total. Each row is { label, muted, className,
+// cell(column), total }; columns need a `hole`. With `pickable`, cells carry data-hole so a
+// click can pick that hole (the round map listens for it).
+const gridHtml = (columns, rows, { pickable = false } = {}) => {
+  const hasTotal = rows.some((row) => row.total !== undefined);
+  const holeAttr = (column) => (pickable ? ` data-hole="${escape(column.hole)}"` : '');
+  const blocks = Array.from({ length: Math.ceil(columns.length / HOLES_PER_BLOCK) }, (_, index) => columns.slice(index * HOLES_PER_BLOCK, (index + 1) * HOLES_PER_BLOCK));
+  return `<div class="scorecard-blocks">${blocks.map((block, index) => {
+    const total = hasTotal && index === blocks.length - 1;
+    const head = `<thead><tr><th scope="col">Hole</th>${block.map((column) => `<th scope="col"${holeAttr(column)}>${escape(column.hole)}</th>`).join('')}${total ? '<th scope="col" class="total">Tot</th>' : ''}</tr></thead>`;
+    const body = rows.map((row) => `<tr class="${[row.className, row.muted && 'muted'].filter(Boolean).join(' ')}"><th scope="row">${row.label}</th>`
+      + `${block.map((column) => `<td${holeAttr(column)}>${row.cell(column)}</td>`).join('')}${total ? `<td class="total">${row.total ?? ''}</td>` : ''}</tr>`).join('');
+    return `<div class="scorecard-wrap"><table class="scorecard">${head}<tbody>${body}</tbody></table></div>`;
+  }).join('')}</div>`;
+};
+
+// A round's scorecard: each hole's length, par and score, then how it was played. Rows the round
+// has nothing for are left out.
 export const scorecardHtml = (shots, layouts = []) => {
   const holes = holeBreakdown(shots, layouts);
   if (!holes.length) return '';
@@ -55,15 +75,23 @@ export const scorecardHtml = (shots, layouts = []) => {
     pars.some((par) => par !== null) && { label: 'Par', muted: true, cell: (hole) => escape(hole.par), total: pars.every((par) => par !== null) ? escape(sum(pars)) : '' },
     { label: 'Score', className: 'score-row', cell: (hole) => scoreMark(hole.strokes, hole.par), total: `<strong>${escape(sum(holes.map((hole) => hole.strokes)))}</strong>` },
     drives.length > 0 && { label: 'Driving', cell: (hole) => icon(hole.driving), total: fraction(drives.filter((hole) => hole.driving !== 'rough' && hole.driving !== 'ob').length, drives.length) },
-    scrambles.length > 0 && { label: 'Scramble', cell: (hole) => (hole.scramble === null ? '' : hole.scramble ? '<span class="made" title="Par or better">✓</span>' : '<span class="missed" title="Over par">✕</span>'), total: fraction(scrambles.filter((hole) => hole.scramble).length, scrambles.length) },
+    // Scramble shows whenever it could apply (drives on holes with a par), as 0/0 with no chances.
+    drives.length > 0 && pars.some((par) => par !== null) && { label: 'Scramble', cell: (hole) => (hole.scramble === null ? '' : hole.scramble ? '<span class="made" title="Par or better">✓</span>' : '<span class="missed" title="Over par">✕</span>'), total: `${scrambles.filter((hole) => hole.scramble).length}/${scrambles.length}` },
     greens.length > 0 && { label: 'Greens', cell: (hole) => (hole.green === 'c1' || hole.green === 'c2' ? icon(hole.green) : ''), total: fraction(greens.filter((hole) => hole.green !== 'missed').length, greens.length) },
     c1x.attempts > 0 && { label: 'C1X Putting', cell: (hole) => fraction(hole.c1x.made, hole.c1x.attempts), total: fraction(c1x.made, c1x.attempts) },
     c2.attempts > 0 && { label: 'C2 Putting', cell: (hole) => fraction(hole.c2.made, hole.c2.attempts), total: fraction(c2.made, c2.attempts) },
     holes.some((hole) => hole.throwInFeet !== null) && { label: 'Throw in (ft)', muted: true, cell: (hole) => escape(hole.throwInFeet), total: '' },
     penalties > 0 && { label: 'OB / Penalty', cell: (hole) => (hole.penalties ? icon('ob') : ''), total: escape(penalties) },
   ].filter(Boolean);
-  const head = `<thead><tr><th scope="col">Hole</th>${holes.map((hole) => `<th scope="col" data-hole="${hole.hole}">${hole.hole}</th>`).join('')}<th scope="col" class="total">Tot</th></tr></thead>`;
-  const body = rows.map((row) => `<tr class="${[row.className, row.muted && 'muted'].filter(Boolean).join(' ')}"><th scope="row">${row.label}</th>`
-    + `${holes.map((hole) => `<td data-hole="${hole.hole}">${row.cell(hole)}</td>`).join('')}<td class="total">${row.total}</td></tr>`).join('');
-  return `<div class="scorecard-wrap"><table class="scorecard">${head}<tbody>${body}</tbody></table></div>`;
+  return gridHtml(holes, rows, { pickable: true });
 };
+
+// Scores on each hole of a course across rounds: `holes` are { hole, par (or null), played,
+// average (or null), best (or null) }. The average is colored against par; the best is marked
+// like a scorecard score.
+export const holeAveragesHtml = (holes) => (holes.length ? gridHtml(holes, [
+  { label: 'Par', muted: true, cell: (hole) => escape(hole.par) },
+  { label: 'Played', muted: true, cell: (hole) => escape(hole.played) },
+  { label: 'Avg', cell: (hole) => (hole.average === null ? '' : `<strong class="${hole.par === null ? '' : hole.average < hole.par ? 'under' : hole.average > hole.par ? 'over' : ''}">${escape(hole.average.toFixed(1))}</strong>`) },
+  { label: 'Best', className: 'score-row', cell: (hole) => (hole.best === null ? '' : scoreMark(hole.best, hole.par)) },
+]) : '');

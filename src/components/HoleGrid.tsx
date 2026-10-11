@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import type { DriveResult, HoleBreakdown } from '../../lib/round-stats';
 import { styles } from '../theme';
@@ -13,32 +13,51 @@ export type HoleGridRow<T> = {
 const Cell = ({ children, tall, style }: { children: ReactNode; tall?: boolean; style?: HoleGridRow<unknown>['style'] }) => (
   <View style={[styles.holeGridCell, tall && styles.holeGridTallCell]}>
     {typeof children === 'string' || typeof children === 'number'
-      ? <Text style={[styles.holeGridText, style === 'head' && styles.holeGridHead, style === 'muted' && styles.holeGridMuted]}>{children}</Text>
+      ? <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.holeGridText, style === 'head' && styles.holeGridHead, style === 'muted' && styles.holeGridMuted]}>{children}</Text>
       : children}
   </View>
 );
 
-// A scorecard laid out sideways: labels down the left, a column per hole that scrolls, and a
-// total column when any row has a total. Pressing a column calls `onPress` with that hole.
+// Holes are shown nine at a time, like the front and back nine of a paper scorecard, with
+// columns narrowed to fit the screen.
+const HOLES_PER_BLOCK = 9;
+const LABEL_WIDTH = 72;
+const TOTAL_WIDTH = 40;
+const MIN_COLUMN_WIDTH = 22;
+const MAX_COLUMN_WIDTH = 36;
+
+// A scorecard laid out sideways: labels down the left, a column per hole, and a total column
+// (after the last hole) when any row has a total. Pressing a column calls `onPress` with that
+// hole. On a screen too narrow even for the narrowest columns, each block scrolls sideways.
 export const HoleGrid = <T extends { hole: number }>({ rows, columns, active, onPress, pressLabel }: {
   rows: HoleGridRow<T>[]; columns: T[]; active?: number | null; onPress?: (column: T) => void; pressLabel?: (column: T) => string;
-}) => (
-  <View style={styles.holeGrid}>
-    <View style={styles.holeGridLabels}>
-      {rows.map((row) => <View key={row.key} style={[styles.holeGridCell, styles.holeGridLabelCell, row.tall && styles.holeGridTallCell]}>
-        <Text style={[styles.holeGridLabel, row.style === 'muted' && styles.holeGridLabelMuted]}>{row.label}</Text>
-      </View>)}
-    </View>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.holeGridColumns}>
-      {columns.map((column) => <Pressable key={column.hole} disabled={!onPress} onPress={() => onPress?.(column)} style={[styles.holeGridColumn, active === column.hole && styles.holeGridColumnActive]} accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={pressLabel?.(column)}>
-        {rows.map((row) => <Cell key={row.key} tall={row.tall} style={row.style}>{row.cell(column)}</Cell>)}
-      </Pressable>)}
-      {rows.some((row) => row.total !== undefined) && <View style={styles.holeGridTotal}>
-        {rows.map((row) => <Cell key={row.key} tall={row.tall} style={row.style}>{row.total ?? null}</Cell>)}
-      </View>}
-    </ScrollView>
-  </View>
-);
+}) => {
+  const [width, setWidth] = useState(0);
+  const hasTotal = rows.some((row) => row.total !== undefined);
+  const perBlock = Math.min(columns.length, HOLES_PER_BLOCK) || 1;
+  // The grid's border takes 2 points; until the width is measured, use the widest columns.
+  const columnWidth = width
+    ? Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, Math.floor((width - 2 - LABEL_WIDTH - (hasTotal ? TOTAL_WIDTH : 0)) / perBlock)))
+    : MAX_COLUMN_WIDTH;
+  const blocks = Array.from({ length: Math.ceil(columns.length / HOLES_PER_BLOCK) }, (_, index) => columns.slice(index * HOLES_PER_BLOCK, (index + 1) * HOLES_PER_BLOCK));
+  return <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+    {blocks.map((block, blockIndex) => <View key={block[0].hole} style={styles.holeGrid}>
+      <View style={[styles.holeGridLabels, { width: LABEL_WIDTH }]}>
+        {rows.map((row) => <View key={row.key} style={[styles.holeGridCell, styles.holeGridLabelCell, row.tall && styles.holeGridTallCell]}>
+          <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.holeGridLabel, row.style === 'muted' && styles.holeGridLabelMuted]}>{row.label}</Text>
+        </View>)}
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.holeGridColumns}>
+        {block.map((column) => <Pressable key={column.hole} disabled={!onPress} onPress={() => onPress?.(column)} style={[styles.holeGridColumn, { width: columnWidth }, active === column.hole && styles.holeGridColumnActive]} accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={pressLabel?.(column)}>
+          {rows.map((row) => <Cell key={row.key} tall={row.tall} style={row.style}>{row.cell(column)}</Cell>)}
+        </Pressable>)}
+        {hasTotal && blockIndex === blocks.length - 1 && <View style={[styles.holeGridTotal, { width: TOTAL_WIDTH }]}>
+          {rows.map((row) => <Cell key={row.key} tall={row.tall} style={row.style}>{row.total ?? null}</Cell>)}
+        </View>}
+      </ScrollView>
+    </View>)}
+  </View>;
+};
 
 // A hole's score: circled under par (a ringed circle for eagle or better), boxed over par.
 export const ScoreMark = ({ strokes, par }: { strokes: number; par: number | null }) => {
@@ -98,7 +117,8 @@ export const RoundScorecard = ({ holes, active, onPressHole }: { holes: HoleBrea
     pars.some((par) => par !== null) && { key: 'par', label: 'Par', style: 'muted', cell: (hole) => hole.par, total: pars.every((par) => par !== null) ? sum(pars as number[]) : null },
     { key: 'score', label: 'Score', tall: true, cell: (hole) => <ScoreMark strokes={hole.strokes} par={hole.par} />, total: <Text style={[styles.holeGridText, styles.holeGridHead]}>{sum(holes.map((hole) => hole.strokes))}</Text> },
     drives.length > 0 && { key: 'driving', label: 'Driving', cell: (hole) => <DriveIcon result={hole.driving} />, total: fraction(drives.filter((hole) => hole.driving !== 'rough' && hole.driving !== 'ob').length, drives.length) },
-    scrambles.length > 0 && { key: 'scramble', label: 'Scramble', cell: (hole) => hole.scramble === null ? null : <Text style={[styles.holeIconMark, hole.scramble && styles.holeIconCheck]}>{hole.scramble ? '✓' : '✕'}</Text>, total: fraction(scrambles.filter((hole) => hole.scramble).length, scrambles.length) },
+    // Scramble shows whenever it could apply (drives on holes with a par), as 0/0 with no chances.
+    drives.length > 0 && pars.some((par) => par !== null) && { key: 'scramble', label: 'Scramble', cell: (hole) => hole.scramble === null ? null : <Text style={[styles.holeIconMark, hole.scramble && styles.holeIconCheck]}>{hole.scramble ? '✓' : '✕'}</Text>, total: `${scrambles.filter((hole) => hole.scramble).length}/${scrambles.length}` },
     greens.length > 0 && { key: 'greens', label: 'Greens', cell: (hole) => <GreenIcon green={hole.green} />, total: fraction(greens.filter((hole) => hole.green !== 'missed').length, greens.length) },
     c1x.attempts > 0 && { key: 'c1x', label: 'C1X Putting', cell: (hole) => fraction(hole.c1x.made, hole.c1x.attempts), total: fraction(c1x.made, c1x.attempts) },
     c2.attempts > 0 && { key: 'c2', label: 'C2 Putting', cell: (hole) => fraction(hole.c2.made, hole.c2.attempts), total: fraction(c2.made, c2.attempts) },

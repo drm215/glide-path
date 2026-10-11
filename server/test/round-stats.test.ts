@@ -309,3 +309,27 @@ describe('holeBreakdown and scoringStats', () => {
     near(stats.madePutts.longestFeet, 30);
   });
 });
+
+describe('scorecardHtml', () => {
+  test('a round longer than nine holes is split into front and back nines, with the total after hole 18', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { scorecardHtml } = await import('../public/js/scorecard.js');
+    const shots = Array.from({ length: 18 }, (_, index) => ({ hole: index + 1, type: 'Drive', disc: 'D', feet: 0, lie: 'Basket' }));
+    const html: string = scorecardHtml(shots, []);
+    assert.equal(html.match(/<table class="scorecard">/g)?.length, 2);
+    assert.equal(html.match(/>Tot</g)?.length, 1);
+    const [front, back] = html.split('</table>');
+    assert.match(front, /data-hole="9"/);
+    assert.doesNotMatch(front, /data-hole="10"/);
+    assert.match(back, /data-hole="18">18<\/th><th scope="col" class="total">Tot/);
+  });
+});
+
+describe('scorecardHtml scramble row', () => {
+  test('shows with no scramble chances, as 0/0', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { scorecardHtml } = await import('../public/js/scorecard.js');
+    const html: string = scorecardHtml([{ hole: 1, type: 'Drive', disc: 'D', feet: 300, lie: 'Fairway' }, { hole: 1, type: 'Putt', disc: 'P', feet: 20, lie: 'Basket' }], [{ tee: null, basket: null, par: 3 }]);
+    assert.match(html, /Scramble<\/th><td data-hole="1"><\/td><td class="total">0\/0<\/td>/);
+  });
+});
