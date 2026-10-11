@@ -10,7 +10,7 @@ import { holeScoring, holeVisits } from '../holeHistory';
 import { BasketCircles } from '../components/BasketCircles';
 import { PREVIOUS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { StatsSummary, StatTile } from '../components/StatsSummary';
-import { openRound } from '../navigation';
+import { openHole3d, openRound } from '../navigation';
 import { useApp } from '../state/AppState';
 import { styles } from '../theme';
 
@@ -54,6 +54,7 @@ export const HoleHistoryScreen = () => {
         {results.length > 0 && <View style={styles.resultChips}>{results.map((result) => <View key={result.label} style={styles.resultChip}><Text style={styles.resultChipText}>{result.count} {result.label}{result.count === 1 || result.label.endsWith('+') || result.label.endsWith('better') ? '' : 's'}</Text></View>)}</View>}
 
         <Text style={styles.statsHeading}>Every throw</Text>
+        <Pressable onPress={() => openHole3d(params.course, params.layout, holeNumber, { includePractice })} style={styles.textLink} accessibilityRole="button" accessibilityLabel={`Hole ${holeNumber} in 3D`}><Text style={styles.textLinkText}>3D view ›</Text></Pressable>
         {region ? <View style={styles.roundHoleMap}>
           <MapView style={styles.satelliteMap} mapType="satellite" initialRegion={region} showsMyLocationButton={false}>
             {layout?.tee && layout.basket && <Polyline coordinates={[layout.tee, layout.basket]} strokeColor="#ffffff" strokeWidth={2} lineDashPattern={[6, 4]} />}

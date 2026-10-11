@@ -470,6 +470,23 @@ test('a scorecard longer than nine holes is split into front and back nines', as
   expect(screen.getByLabelText('Show map for hole 18')).toBeTruthy();
 });
 
+test('a hole opens in 3D: the web page gets the hole, every round on it, and this round first', async () => {
+  const laterRound: SessionArchive = { ...pastRound, id: '1727100000000' };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound, laterRound] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  await fireEvent.press(await screen.findByLabelText('Hole 1 in 3D'));
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+  const webview = require('react-native-webview') as { __state: { last: { source: { uri: string }; onMessage: (event: unknown) => void } }; __posted: string[] };
+  expect(webview.__state.last.source.uri).toBe('https://glidepathdiscgolf.com/3d?theme=dark');
+  // The page says it's ready; the app answers with the hole.
+  await testing.act(async () => { webview.__state.last.onMessage({ nativeEvent: { data: 'ready' } }); });
+  const message = JSON.parse(webview.__posted.at(-1)!);
+  expect(message.type).toBe('hole3d');
+  expect(message.hole3d).toMatchObject({ hole: 1, layout: { par: 3 }, selected: [pastRound.id] });
+  // Newest first, each with its throws on this hole.
+  expect(message.hole3d.rounds.map((round: { id: string; shots: unknown[] }) => [round.id, round.shots.length])).toEqual([[laterRound.id, 2], [pastRound.id, 2]]);
+});
+
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp(`/rounds/${pastRound.id}`);

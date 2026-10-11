@@ -333,3 +333,42 @@ describe('scorecardHtml scramble row', () => {
     assert.match(html, /Scramble<\/th><td data-hole="1"><\/td><td class="total">0\/0<\/td>/);
   });
 });
+
+describe('3D hole view', () => {
+  test('a throw arc rises from the lie to a peak and comes back down at the landing spot', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { arcFeatures } = await import('../public/js/hole3d.js');
+    // About 100 m due north.
+    const boxes = arcFeatures({ latitude: 40, longitude: -75 }, { latitude: 40.0009, longitude: -75 }, '#2e9d5b');
+    const heights = boxes.map((box: { properties: { height: number } }) => box.properties.height);
+    assert.ok(boxes.length >= 8);
+    assert.ok(heights[0] < 2 && heights.at(-1) < 2, 'starts and ends near the ground');
+    const peak = Math.max(...heights);
+    assert.ok(peak > 11 && peak < 14, `peaks about an eighth of the distance up (${peak} m)`);
+    const peakAt = heights.indexOf(peak) / (heights.length - 1);
+    assert.ok(peakAt > 0.4 && peakAt < 0.6, 'peaks mid-throw');
+    assert.equal(boxes[0].properties.color, '#2e9d5b');
+    assert.deepEqual(arcFeatures({ latitude: 40, longitude: -75 }, { latitude: 40, longitude: -75 }, '#fff'), [], 'no arc for a throw that went nowhere');
+  });
+
+  test('throws are joined from the tee; a made throw without a spot goes in the basket; unplaced throws are counted', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { bearingBetween, holeThrows } = await import('../public/js/hole3d.js');
+    const layout = { tee: { latitude: 40, longitude: -75 }, basket: { latitude: 40.001, longitude: -75 }, par: 3 };
+    const rounds = [
+      { id: 'a', label: 'A', shots: [
+        { hole: 1, type: 'Drive', disc: 'D', feet: 300, lie: 'Fairway', latitude: 40.0008, longitude: -75, quality: 3, qualityMax: 3 },
+        { hole: 1, type: 'Putt', disc: 'P', feet: 0, lie: 'Basket' },
+        { hole: 2, type: 'Drive', disc: 'D', feet: 300, lie: 'Fairway', latitude: 41, longitude: -75 },
+      ] },
+      { id: 'b', label: 'B', shots: [{ hole: 1, type: 'Drive', disc: 'D', feet: 0, lie: 'Woods' }] },
+    ];
+    const { arcs, markers, unplaced } = holeThrows(rounds, 1, layout);
+    assert.deepEqual(markers.map((item: { number: number; round: { id: string }; shot: { latitude: number } }) => [item.round.id, item.number, item.shot.latitude]), [['a', 1, 40.0008], ['a', 2, 40.001]]);
+    assert.equal(unplaced, 1, "round B's drive has no logged spot");
+    // Tee to drive, then drive to basket; the good drive is green.
+    assert.ok(arcs.some((box: { properties: { color: string } }) => box.properties.color === '#2e9d5b'));
+    assert.ok(Math.abs(bearingBetween(layout.tee, layout.basket)) < 0.01, 'due north');
+    assert.ok(Math.abs(bearingBetween(layout.tee, { latitude: 40, longitude: -74.999 }) - 90) < 0.01, 'due east');
+  });
+});

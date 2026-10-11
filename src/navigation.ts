@@ -43,3 +43,8 @@ export const openRound = (id: string, justFinished = false) => {
   if (justFinished) router.dismissTo(PATHS.Home);
   router.push({ pathname: '/rounds/[id]', params: justFinished ? { id, summary: '1' } : { id } });
 };
+
+// One hole in 3D, with every recorded round on it (`includePractice` adds practice sessions);
+// `round` is the one shown first, otherwise all are.
+export const openHole3d = (courseId: string, layoutId: string, hole: number, { round, includePractice = false }: { round?: string; includePractice?: boolean } = {}) =>
+  router.push({ pathname: '/hole3d', params: { course: courseId, layout: layoutId, hole: String(hole), ...(round ? { round } : {}), ...(includePractice ? { practice: '1' } : {}) } });

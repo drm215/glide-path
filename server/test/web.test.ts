@@ -53,6 +53,17 @@ describe('website', () => {
     assert.equal(revalidatedStatus, 304, 'unchanged files cost only a 304');
     const config = await (await fetch(`${base}/js/config.js`)).text();
     assert.match(config, /window\.GLIDE_PATH_TILES = \{"url":"https:\/\/server\.arcgisonline\.com/);
+    // The 3D view: its page and scripts, and MapLibre with its worker, served as JavaScript modules.
+    for (const path of ['/3d', '/js/hole3d.js', '/js/hole3d-page.js', '/vendor/maplibre/maplibre-gl.css']) {
+      assert.equal((await fetch(`${base}${path}`)).status, 200, path);
+    }
+    for (const path of ['/vendor/maplibre/maplibre-gl.mjs', '/vendor/maplibre/maplibre-gl-worker.mjs']) {
+      const response = await fetch(`${base}${path}`);
+      assert.equal(response.status, 200, path);
+      assert.match(response.headers.get('content-type') ?? '', /javascript/, path);
+    }
+    // It fetches satellite and terrain tiles itself.
+    assert.match((await fetch(`${base}/3d`)).headers.get('content-security-policy') ?? '', /connect-src 'self' https:\/\/server\.arcgisonline\.com https:\/\/elevation-tiles-prod\.s3\.amazonaws\.com/);
     const leaflet = await fetch(`${base}/vendor/leaflet/leaflet.js`, { headers: { 'Accept-Encoding': 'gzip' } });
     assert.equal(leaflet.status, 200);
     assert.equal(leaflet.headers.get('content-encoding'), 'gzip');

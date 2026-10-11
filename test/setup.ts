@@ -64,3 +64,18 @@ jest.mock('react-native-maps', () => {
   const Stub = ({ children }: { children?: unknown }) => children ?? null;
   return { __esModule: true, default: View, Marker: Stub, Polyline: Stub, Circle: Stub };
 });
+
+// The 3D hole view's web page: a plain view. `__last` holds the latest props (so a test can send
+// the page's messages through onMessage) and `__posted` what the app posted to the page.
+jest.mock('react-native-webview', () => {
+  const React = jest.requireActual('react');
+  const { View } = jest.requireActual('react-native');
+  const posted: string[] = [];
+  const state: { last: Record<string, unknown> | null } = { last: null };
+  const WebView = React.forwardRef((props: Record<string, unknown>, ref: unknown) => {
+    state.last = props;
+    React.useImperativeHandle(ref, () => ({ postMessage: (message: string) => posted.push(message) }));
+    return React.createElement(View, { testID: 'webview' });
+  });
+  return { __esModule: true, WebView, default: WebView, __posted: posted, __state: state };
+});

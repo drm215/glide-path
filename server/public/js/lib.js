@@ -204,12 +204,13 @@ export const fitTo = (map, bounds, fallbackZoom = 18) => {
 };
 
 // Shows one hole of a round at a time: its tee and basket plus each logged throw.
-// Rows or cells with data-hole under `rowsRoot` switch the hole.
+// Rows or cells with data-hole under `rowsRoot` switch the hole. Returns { map, first } (the
+// hole shown first), or null when there's no map to show.
 export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) => {
   const map = satelliteMap(container);
   if (!map) {
     container?.remove();
-    return;
+    return null;
   }
   const holes = [...new Set(shots.map((shot) => shot.hole))].sort((a, b) => a - b);
   let layers = [];
@@ -228,7 +229,7 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
   const first = holes.find((hole) => layouts[hole - 1]?.tee || shots.some((shot) => shot.hole === hole && shot.latitude !== undefined));
   if (first === undefined) {
     container.remove();
-    return;
+    return null;
   }
   showHole(first);
   rowsRoot.addEventListener('click', (event) => {
@@ -237,4 +238,5 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
     showHole(Number(row.dataset.hole));
     container.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
+  return { map, first };
 };

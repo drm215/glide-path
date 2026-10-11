@@ -409,6 +409,9 @@ export const styles = StyleSheet.create({
   holeGridLegend: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 14 },
   holeGridLegendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 12, marginBottom: 4 },
   holeGridLegendText: { color: MUTED, fontSize: 10, marginLeft: 5 },
+  // The 3D hole view's web page fills the screen below its heading.
+  webViewFrame: { flex: 1, marginTop: 8 },
+  webView: { flex: 1, backgroundColor: PAPER },
   // Percentage bars: the share filled in green, the count beside it.
   statBars: { marginTop: 8, marginBottom: 6 },
   statBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 7 },

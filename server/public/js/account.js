@@ -1,3 +1,4 @@
+import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderRoundSummary } from './summary.js';
 import { $, TOKEN_KEY, api, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
@@ -113,7 +114,25 @@ const renderRound = (round) => {
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`), el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot))))]),
   );
-  setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard);
+  const shown = setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard);
+  // The 3D view can add the other rounds played on the same course layout, starting with this one.
+  const sameLayout = data.rounds
+    .filter((other) => other.clientId === round.clientId || (!other.inProgress && courseFor(other) && courseFor(other) === course && (other.layoutId ?? MAIN_LAYOUT_ID) === (round.layoutId ?? MAIN_LAYOUT_ID)))
+    .sort((a, b) => roundDate(b) - roundDate(a));
+  if (shown) {
+    setUpRound3d(mapEl, {
+      firstHole: shown.first,
+      rowsRoot: scorecard,
+      onShowMap: () => shown.map.invalidateSize(),
+      optionsFor: (hole) => ({
+        hole,
+        layout: layout?.layouts?.[hole - 1] ?? null,
+        rounds: sameLayout.filter((other) => other.shots.some((shot) => shot.hole === hole))
+          .map((other) => ({ id: other.clientId, label: `${other.clientId === round.clientId ? 'This round' : formatDate(roundDate(other))}${other.mode === 'Practice' ? ' (practice)' : ''}`, shots: other.shots })),
+        selected: [round.clientId],
+      }),
+    });
+  }
 };
 
 const renderCourse = (course) => {

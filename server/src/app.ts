@@ -34,6 +34,10 @@ const DEFAULT_TILE_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics,
 // The website's files live in server/public, one level up from both src/ and dist/.
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const LEAFLET_DIR = dirname(createRequire(import.meta.url).resolve('leaflet/dist/leaflet.js'));
+// The 3D hole view's map library (an ES module that loads its worker from the same folder).
+const MAPLIBRE_DIR = dirname(fileURLToPath(import.meta.resolve('maplibre-gl')));
+// Public terrain tiles for the 3D view; must match TERRAIN_TILES in public/js/hole3d.js.
+const TERRAIN_ORIGIN = 'https://elevation-tiles-prod.s3.amazonaws.com';
 
 type UserRow = { id: string; email: string; password_hash: string; display_name: string; token_version: number };
 
@@ -74,7 +78,8 @@ export const createApp = ({
         `img-src 'self' data: ${tileOrigin}`,
         "style-src 'self' 'unsafe-inline'",
         "script-src 'self'",
-        "connect-src 'self'",
+        // The 3D view fetches satellite and terrain tiles itself.
+        `connect-src 'self' ${tileOrigin} ${TERRAIN_ORIGIN}`,
         "base-uri 'self'",
         "form-action 'self'",
         "frame-ancestors 'none'",
@@ -249,6 +254,7 @@ export const createApp = ({
   });
 
   app.use('/vendor/leaflet', express.static(LEAFLET_DIR, { maxAge: '7d' }));
+  app.use('/vendor/maplibre', express.static(MAPLIBRE_DIR, { maxAge: '7d' }));
   // The site's own files change with each deploy, so browsers revalidate them on every load
   // (a cheap 304 when unchanged) instead of keeping a stale copy.
   app.use(express.static(PUBLIC_DIR, { extensions: ['html'], setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));

@@ -199,3 +199,14 @@ form.auth .button { margin-top: 18px; width: 100%; }
   .brand-name { display: none; }
   th, td { padding: 8px 8px; }
 }
+
+/* 3D hole view: tee and basket pins stand on the terrain; throw markers reuse .throw-marker. */
+.map.map3d { height: min(68vh, 560px); }
+.hole3d .tabs, .hole3d-page .tabs { margin-top: 0; }
+.hole3d-pin { padding: 2px 8px; border-radius: 999px; border: 2px solid #fff; color: #fff; font: 800 11px system-ui, sans-serif; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
+.hole3d-pin.tee { background: #1d684c; }
+.hole3d-pin.basket { background: #d77d42; }
+/* Inside the app: the view fills the screen, with room for the round buttons above it. */
+.hole3d-page { min-height: 100vh; }
+.hole3d-page main { padding: 10px 12px 16px; }
+.hole3d-page .map.map3d { height: calc(100vh - 150px); margin: 8px 0; }

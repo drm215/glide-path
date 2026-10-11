@@ -17,7 +17,7 @@ import { StatsSummary } from '../components/StatsSummary';
 import { ROUNDS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { ThrowEditorSheet, type ThrowTarget } from '../components/ThrowEditorSheet';
 import { shareLink } from '../links';
-import { backTo, go, openHoleHistory } from '../navigation';
+import { backTo, go, openHole3d, openHoleHistory } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const RoundDetailScreen = () => {
@@ -129,6 +129,7 @@ export const RoundDetailScreen = () => {
           </Pressable>
           {expandedHole === item.hole && renderRoundHoleMap(item.hole, item.shots)}
           {viewedCourse && <Pressable onPress={() => openHoleHistory(viewedCourse.id, viewedCourse.layoutId, item.hole, viewedSession.mode === 'Practice')} style={styles.textLink} accessibilityRole="button" accessibilityLabel={`Every throw on hole ${item.hole}, across all rounds`}><Text style={styles.textLinkText}>All rounds on this hole ›</Text></Pressable>}
+          {viewedCourse && <Pressable onPress={() => openHole3d(viewedCourse.id, viewedCourse.layoutId, item.hole, { round: viewedSession.id, includePractice: viewedSession.mode === 'Practice' })} style={styles.textLink} accessibilityRole="button" accessibilityLabel={`Hole ${item.hole} in 3D`}><Text style={styles.textLinkText}>3D view ›</Text></Pressable>}
           {item.shots.map((shot, index) => <Pressable key={index} onPress={() => setEditingThrow({ sessionId: viewedSession.id, index: viewedSession.shots.indexOf(shot) })} style={styles.throwRow} accessibilityRole="button" accessibilityLabel={`Edit throw ${index + 1} on hole ${item.hole}`}>
             <Text style={[styles.roundThrow, styles.throwRowText]}>{index + 1}.  {formatThrowDetail(shot)}</Text>
             <Text style={styles.throwEditHint}>EDIT</Text>
