@@ -1,6 +1,7 @@
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
+import { discStats } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -65,7 +66,7 @@ const renderOverview = () => {
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'ROUNDS'), el('div', { class: 'value' }, rounds.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES'), el('div', { class: 'value' }, courses.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'DISCS IN BAG'), el('div', { class: 'value' }, data.bag?.discs.length ?? 0))),
-    rounds.length ? el('p', {}, el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›')) : null,
+    rounds.length ? el('p', { class: 'links' }, el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')) : null,
     el('h2', {}, 'Rounds'),
     rounds.length
       ? el('ul', { class: 'results' }, rounds.map((round) => {
@@ -214,6 +215,48 @@ const renderHoleHistory = (courseId, layoutId, hole, includePractice) => {
   });
 };
 
+// Quality bar colors, matching the throw markers on the maps.
+const QUALITY_SEGMENTS = [['good', 'Good', '#2e9d5b'], ['fair', 'Fair', '#e3b505'], ['poor', 'Poor', '#d64541'], ['unrated', 'Not rated', '#59625d']];
+const discFeet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
+
+const discCard = (stats) => {
+  const segments = QUALITY_SEGMENTS.filter(([key]) => stats.quality[key]);
+  return el('section', { class: 'disc-card' },
+    el('div', { class: 'disc-card-head' },
+      el('h3', {}, stats.disc),
+      el('span', { class: 'meta' }, `${plural(stats.throws, 'throw')}${stats.measured < stats.throws ? ` · ${stats.measured} measured` : ''}`)),
+    el('dl', { class: 'disc-figures' }, [['Min', stats.minFeet], ['Avg', stats.averageFeet], ['90th', stats.p90Feet], ['95th', stats.p95Feet], ['Max', stats.maxFeet]]
+      .map(([label, feet]) => el('div', {}, el('dt', {}, label), el('dd', {}, discFeet(feet))))),
+    el('div', { class: 'disc-quality', role: 'img', 'aria-label': `Quality: ${segments.map(([key, label]) => `${stats.quality[key]} ${label.toLowerCase()}`).join(', ')}` },
+      segments.map(([key, , color]) => el('span', { style: `flex: ${stats.quality[key]}; background: ${color}` }))),
+    el('p', { class: 'meta disc-quality-text' }, [...segments.map(([key, label]) => `${label} ${stats.quality[key]}`), stats.averageQuality === null ? null : `avg ${stats.averageQuality.toFixed(1)} / 3`].filter(Boolean).join('  ·  ')));
+};
+
+// Distance and quality by disc across finished rounds: min, average, 90th and 95th percentile,
+// max, and how the throws were rated. Throw-type buttons pick several at once; none means all.
+const renderDiscStats = () => {
+  const filters = { types: [], practice: false };
+  const content = el('div', {});
+  const practiceBox = el('input', { type: 'checkbox', id: 'discs-practice' });
+  const render = () => {
+    // A round still being played isn't counted until it's finished.
+    const sessions = data.rounds.filter((round) => !round.inProgress && (filters.practice || round.mode === 'Round'));
+    const discs = discStats(sessions.map((round) => ({ shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] })), { types: filters.types });
+    setChildren(content, discs.length ? discs.map(discCard) : el('p', { class: 'meta' }, 'No throws match yet.'));
+  };
+  practiceBox.addEventListener('change', () => { filters.practice = practiceBox.checked; render(); });
+  setChildren(signedInEl,
+    back(),
+    el('div', { class: 'eyebrow' }, user.displayName),
+    el('h1', {}, 'Disc stats'),
+    filterGroup('Filter by throw type', [[null, 'All throws'], ['Drive', 'Drive'], ['Approach', 'Approach'], ['Putt', 'Putt']], (types) => { filters.types = types; render(); }),
+    el('div', { class: 'filters' }, el('label', { class: 'check' }, practiceBox, ' Include practice sessions')),
+    el('p', { class: 'meta' }, 'Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20.'),
+    content,
+  );
+  render();
+};
+
 const renderCourse = (course) => {
   const layouts = layoutsOf(course);
   const mapEl = el('div', { class: 'map tall', role: 'img', 'aria-label': 'Satellite map of the course' });
@@ -358,6 +401,7 @@ const renderStats = () => {
     back(),
     el('div', { class: 'eyebrow' }, user.displayName),
     el('h1', {}, 'All-time stats'),
+    el('p', {}, el('a', { href: '#discs' }, 'Disc stats: distances and quality by disc ›')),
     courseButtons,
     el('div', { class: 'filters' }, el('label', { class: 'check' }, practiceBox, ' Include practice sessions')),
     content,
@@ -378,6 +422,7 @@ const route = () => {
   const round = kind === 'round' ? data.rounds.find((item) => item.clientId === id) : undefined;
   const course = kind === 'course' ? data.courses.find((item) => item.clientId === id) : undefined;
   if (kind === 'stats') renderStats();
+  else if (kind === 'discs') renderDiscStats();
   else if (kind === 'hole' && Number(rest[1]) > 0) renderHoleHistory(id, rest[0], Number(rest[1]), rest[2] === 'practice');
   else if (round) renderRound(round);
   else if (course) renderCourse(course);

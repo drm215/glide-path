@@ -3,7 +3,7 @@
 // target isn't open, so each back button lands where it always has.
 import { router } from 'expo-router';
 
-export type Screen = 'Home' | 'CourseBuilder' | 'NewCourse' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'Rounds' | 'Account' | 'FindCourses';
+export type Screen = 'Home' | 'CourseBuilder' | 'NewCourse' | 'HoleWizard' | 'BagBuilder' | 'Practice' | 'Round' | 'Insights' | 'DiscStats' | 'Rounds' | 'Account' | 'FindCourses';
 
 export const PATHS = {
   Home: '/',
@@ -14,6 +14,7 @@ export const PATHS = {
   Practice: '/practice',
   Round: '/round',
   Insights: '/stats',
+  DiscStats: '/discs',
   Rounds: '/rounds',
   Account: '/account',
   FindCourses: '/find',

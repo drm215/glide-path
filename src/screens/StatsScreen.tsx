@@ -9,7 +9,7 @@ import { StatsSummary, StatTile } from '../components/StatsSummary';
 import { HoleGrid, ScoreMark } from '../components/HoleGrid';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { holeScoring, holesPlayed } from '../holeHistory';
-import { openHoleHistory, openRound } from '../navigation';
+import { go, openHoleHistory, openRound } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const StatsScreen = () => {
@@ -50,6 +50,7 @@ export const StatsScreen = () => {
   return <>
     <ScreenHeading eyebrow="ALL FINISHED ROUNDS" title="Stats." />
     <ScrollView contentContainerStyle={styles.content}>
+      <Pressable onPress={() => go('DiscStats')} style={styles.textLink} accessibilityRole="button"><Text style={styles.textLinkText}>Disc stats: distances and quality by disc ›</Text></Pressable>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         {[
           { key: 'all', name: 'All courses', count: statsSessions.length, selected: !activePicked.length, onPress: () => setStatsPicked([]) },

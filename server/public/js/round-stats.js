@@ -274,3 +274,43 @@ export const scoringStats = (rounds) => {
     penalties: holes.reduce((sum, hole) => sum + hole.penalties, 0),
   };
 };
+
+// The value `fraction` (0–1) of the way up a sorted list, interpolating between neighbours (the
+// spreadsheet PERCENTILE.INC method): 0.9 is the 90th percentile. Null for an empty list.
+export const percentile = (sorted, fraction) => {
+  if (!sorted.length) return null;
+  const rank = (sorted.length - 1) * fraction;
+  const below = Math.floor(rank);
+  const above = Math.min(below + 1, sorted.length - 1);
+  return sorted[below] + (sorted[above] - sorted[below]) * (rank - below);
+};
+
+// Each disc's distances and throw quality, most-thrown first. Distances are the reliable ones
+// (see reliableDistances), so `measured` can be fewer than `throws`. `types` limits it to those
+// throw types (none means all).
+export const discStats = (rounds, { types = [] } = {}) => {
+  // Judged on the full rounds, since a throw's distance depends on the lie before it.
+  const reliable = reliableDistances(rounds);
+  const shots = rounds.flatMap((round) => round.shots).filter((shot) => !types.length || types.includes(shot.type));
+  return groupBy(shots, (shot) => shot.disc || 'No disc').sort(([, a], [, b]) => b.length - a.length).map(([disc, group]) => {
+    const distances = group.filter((shot) => reliable.has(shot)).map((shot) => shot.feet).sort((a, b) => a - b);
+    const ratings = group.map(quality);
+    return {
+      disc,
+      throws: group.length,
+      measured: distances.length,
+      minFeet: distances.length ? distances[0] : null,
+      maxFeet: distances.length ? distances[distances.length - 1] : null,
+      averageFeet: average(distances),
+      p90Feet: percentile(distances, 0.9),
+      p95Feet: percentile(distances, 0.95),
+      quality: {
+        good: ratings.filter((value) => value === 3).length,
+        fair: ratings.filter((value) => value === 2).length,
+        poor: ratings.filter((value) => value === 1).length,
+        unrated: ratings.filter((value) => value === null).length,
+      },
+      averageQuality: average(ratings.filter((value) => value !== null)),
+    };
+  });
+};

@@ -372,3 +372,46 @@ describe('3D hole view', () => {
     assert.ok(Math.abs(bearingBetween(layout.tee, { latitude: 40, longitude: -74.999 }) - 90) < 0.01, 'due east');
   });
 });
+
+describe('discStats', () => {
+  test('percentile interpolates between neighbouring values, like a spreadsheet', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { percentile } = await import('../public/js/round-stats.js');
+    const values = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+    assert.equal(percentile(values, 0), 100);
+    assert.equal(percentile(values, 1), 1000);
+    assert.equal(percentile(values, 0.5), 550);
+    assert.ok(Math.abs(percentile(values, 0.9) - 910) < 1e-9);
+    assert.ok(Math.abs(percentile(values, 0.95) - 955) < 1e-9);
+    assert.equal(percentile([250], 0.9), 250);
+    assert.equal(percentile([], 0.9), null);
+  });
+
+  test("each disc's min, max, average, 90th and 95th percentile and quality, most-thrown first", async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { discStats } = await import('../public/js/round-stats.js');
+    const drive = (feet: number, quality?: number) => ({ hole: 1, type: 'Drive', disc: 'Destroyer', feet, lie: 'Fairway', quality, qualityMax: 3 });
+    const rounds = [{
+      shots: [
+        ...[300, 320, 340, 360, 380].map((feet, index) => drive(feet, [3, 3, 2, 1, undefined][index])),
+        // No GPS reference: a throw, but no distance.
+        drive(0, 2),
+        { hole: 2, type: 'Putt', disc: 'Aviar', feet: 20, lie: 'Basket', quality: 3, qualityMax: 3 },
+      ],
+    }];
+    const [destroyer, aviar] = discStats(rounds);
+    assert.equal(destroyer.disc, 'Destroyer');
+    assert.deepEqual(
+      { throws: destroyer.throws, measured: destroyer.measured, min: destroyer.minFeet, max: destroyer.maxFeet, average: destroyer.averageFeet },
+      { throws: 6, measured: 5, min: 300, max: 380, average: 340 },
+    );
+    assert.ok(Math.abs(destroyer.p90Feet - 372) < 1e-9);
+    assert.ok(Math.abs(destroyer.p95Feet - 376) < 1e-9);
+    assert.deepEqual(destroyer.quality, { good: 2, fair: 2, poor: 1, unrated: 1 });
+    assert.equal(destroyer.averageQuality, 2.2);
+    assert.equal(aviar.disc, 'Aviar');
+
+    // Limited to putts, only the Aviar is left.
+    assert.deepEqual(discStats(rounds, { types: ['Putt'] }).map((item: { disc: string }) => item.disc), ['Aviar']);
+  });
+});

@@ -272,6 +272,32 @@ describe('website pages in a browser', () => {
     assert.equal((globalThis as unknown as { location: { hash: string } }).location.hash, '#hole/c1/main/2');
   });
 
+  test('My rounds: disc stats show each disc, filtered by throw type and practice', async () => {
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
+    assert.ok(document.querySelector('a[href="#discs"]'), 'the overview links to disc stats');
+    await navigate('#discs');
+    const view = document.getElementById('signed-in')!;
+    const cards = () => [...view.querySelectorAll('.disc-card')].map((card) => [card.querySelector('h3')?.textContent, [...card.querySelectorAll('dd')].map((cell) => cell.textContent).join(' / ')]);
+    assertNoRenderingLeaks(view.textContent ?? '');
+    // The round's throws (no GPS here, so each distance counts): Destroyer 300 and 280, Aviar 60 and 30.
+    assert.deepEqual(cards(), [
+      ['Destroyer', '280 ft / 290 ft / 298 ft / 299 ft / 300 ft'],
+      ['Aviar', '30 ft / 45 ft / 57 ft / 59 ft / 60 ft'],
+    ]);
+    assert.match(view.textContent ?? '', /Good 1  ·  Poor 1  ·  avg 2\.0 \/ 3/);
+
+    const press = (label: string) => [...view.querySelectorAll('[aria-label="Filter by throw type"] button')].find((button) => button.textContent === label)!
+      .dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
+    press('Putt');
+    assert.deepEqual(cards().map(([disc]) => disc), ['Aviar']);
+
+    // Practice adds the Back Yard session's 40 ft putt.
+    const practice = document.getElementById('discs-practice') as unknown as { checked: boolean; dispatchEvent: (event: Event) => void };
+    practice.checked = true;
+    practice.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('change'));
+    assert.match(view.querySelector('.disc-card')?.textContent ?? '', /3 throws/);
+  });
+
   test('My rounds: a course shows each layout without leaking text', async () => {
     const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
     await navigate('#course/c1');

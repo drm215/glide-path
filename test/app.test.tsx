@@ -605,6 +605,27 @@ test('stats combine any courses picked, and By disc filters by several throw typ
   expect(await screen.findByText('Roc')).toBeTruthy();
 });
 
+test('disc stats show the distances and quality of each disc, and filter by throw type', async () => {
+  const drives: SessionArchive = {
+    ...pastRound, id: '1727300000000',
+    shots: [300, 320, 340, 360, 380].map((feet, index) => ({ x: 0.5, y: 0.5, feet, disc: 'Destroyer', type: 'Drive' as const, hole: 1, lie: 'Fairway' as const, quality: [3, 3, 2, 1, 3][index], qualityMax: 3 })),
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [drives] });
+  await renderApp();
+  await press(await screen.findByText('Stats').then(() => 'Stats'));
+  await press(await screen.findByText(/Disc stats/).then(() => /Disc stats/));
+  expect(await screen.findByText('Discs.')).toBeTruthy();
+  expect(screen.getByText('Destroyer')).toBeTruthy();
+  // Min, average, 90th and 95th percentile, max.
+  for (const feet of ['300 ft', '340 ft', '372 ft', '376 ft', '380 ft']) expect(screen.getByText(feet)).toBeTruthy();
+  expect(screen.getByText('Good 3  ·  Fair 1  ·  Poor 1  ·  avg 2.4/3')).toBeTruthy();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Putt' }));
+  expect(await screen.findByText('No throws match yet.')).toBeTruthy();
+  await press('All throws');
+  expect(await screen.findByText('Destroyer')).toBeTruthy();
+});
+
 test('stats leave out a distance measured from a poor GPS reading', async () => {
   const poorFix: SessionArchive = {
     ...pastRound, id: '1727000100000',

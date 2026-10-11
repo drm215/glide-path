@@ -68,3 +68,20 @@ export type ScoringStats = {
 export declare const TAP_IN_FEET: number;
 export declare function holeBreakdown(shots: Shot[], layouts?: StatsRound['layouts']): HoleBreakdown[];
 export declare function scoringStats(rounds: StatsRound[]): ScoringStats;
+
+export type DiscStats = {
+  disc: string;
+  throws: number;
+  // Throws with a reliable distance; the distance figures come from these.
+  measured: number;
+  minFeet: number | null;
+  maxFeet: number | null;
+  averageFeet: number | null;
+  p90Feet: number | null;
+  p95Feet: number | null;
+  quality: { good: number; fair: number; poor: number; unrated: number };
+  averageQuality: number | null;
+};
+
+export declare function percentile(sorted: number[], fraction: number): number | null;
+export declare function discStats(rounds: StatsRound[], options?: { types?: string[] }): DiscStats[];
