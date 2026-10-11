@@ -415,3 +415,17 @@ describe('discStats', () => {
     assert.deepEqual(discStats(rounds, { types: ['Putt'] }).map((item: { disc: string }) => item.disc), ['Aviar']);
   });
 });
+
+describe('discThrows', () => {
+  test("one disc's throws, longest first, unmeasured last, each with its round", async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { discThrows } = await import('../public/js/round-stats.js');
+    const throwOf = (disc: string, type: string, feet: number) => ({ hole: 1, type, disc, feet, lie: 'Fairway' });
+    const first = { id: 'first', shots: [throwOf('Buzzz', 'Approach', 180), throwOf('Buzzz', 'Drive', 0), throwOf('Aviar', 'Putt', 20)] };
+    const second = { id: 'second', shots: [throwOf('Buzzz', 'Drive', 250), { hole: 1, type: 'Putt', feet: 10, lie: 'Basket', disc: '' }] };
+    const rows = (list: { round: { id: string }; shot: { type: string }; feet: number | null }[]) => list.map((item) => [item.round.id, item.shot.type, item.feet]);
+    assert.deepEqual(rows(discThrows([first, second], 'Buzzz')), [['second', 'Drive', 250], ['first', 'Approach', 180], ['first', 'Drive', null]]);
+    assert.deepEqual(rows(discThrows([first, second], 'Buzzz', { types: ['Drive'] })), [['second', 'Drive', 250], ['first', 'Drive', null]]);
+    assert.deepEqual(rows(discThrows([first, second], 'No disc')), [['second', 'Putt', 10]], 'throws without a disc, named as disc stats names them');
+  });
+});

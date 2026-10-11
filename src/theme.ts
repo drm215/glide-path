@@ -419,6 +419,7 @@ export const styles = StyleSheet.create({
   discFigureValue: { color: INK, fontSize: 14, fontWeight: '800', marginTop: 3, fontVariant: ['tabular-nums'] },
   discQualityBar: { flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden', backgroundColor: '#1b2420', marginTop: 12 },
   discQualityText: { color: MUTED, fontSize: 10, marginTop: 6 },
+  discThrowFeet: { width: 66, color: INK, fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
   // The 3D hole view's web page fills the screen below its heading.
   webViewFrame: { flex: 1, marginTop: 8 },
   webView: { flex: 1, backgroundColor: PAPER },

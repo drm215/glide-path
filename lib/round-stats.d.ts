@@ -85,3 +85,6 @@ export type DiscStats = {
 
 export declare function percentile(sorted: number[], fraction: number): number | null;
 export declare function discStats(rounds: StatsRound[], options?: { types?: string[] }): DiscStats[];
+
+export type DiscThrow<R extends StatsRound = StatsRound> = { round: R; shot: Shot; feet: number | null };
+export declare function discThrows<R extends StatsRound>(rounds: R[], disc: string, options?: { types?: string[] }): DiscThrow<R>[];

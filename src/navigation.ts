@@ -49,3 +49,8 @@ export const openRound = (id: string, justFinished = false) => {
 // `round` is the one shown first, otherwise all are.
 export const openHole3d = (courseId: string, layoutId: string, hole: number, { round, includePractice = false }: { round?: string; includePractice?: boolean } = {}) =>
   router.push({ pathname: '/hole3d', params: { course: courseId, layout: layoutId, hole: String(hole), ...(round ? { round } : {}), ...(includePractice ? { practice: '1' } : {}) } });
+
+// Every throw with one disc (as disc stats names it), keeping disc stats' throw-type filter (none
+// means all) and practice switch.
+export const openDiscThrows = (name: string, types: string[], includePractice: boolean) =>
+  router.push({ pathname: '/disc', params: { name, ...(types.length ? { types: types.join(',') } : {}), ...(includePractice ? { practice: '1' } : {}) } });

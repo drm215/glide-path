@@ -1,7 +1,7 @@
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
-import { discStats } from './round-stats.js';
+import { discStats, discThrows, quality } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -217,14 +217,29 @@ const renderHoleHistory = (courseId, layoutId, hole, includePractice) => {
 
 // Quality bar colors, matching the throw markers on the maps.
 const QUALITY_SEGMENTS = [['good', 'Good', '#2e9d5b'], ['fair', 'Fair', '#e3b505'], ['poor', 'Poor', '#d64541'], ['unrated', 'Not rated', '#59625d']];
+const QUALITY_NAMES = { 1: 'poor', 2: 'fair', 3: 'good' };
+const THROW_TYPES = ['Drive', 'Approach', 'Putt'];
 const discFeet = (value) => (value === null || value === 0 ? '—' : `${Math.round(value).toLocaleString()} ft`);
 
-const discCard = (stats) => {
+// Every throw with one disc: #disc/<name>, then /<types> (comma-separated; 'all' for none) and
+// /practice to keep disc stats' filters.
+const discHref = (disc, types, includePractice) =>
+  `#disc/${encodeURIComponent(disc)}/${types.length ? types.map(encodeURIComponent).join(',') : 'all'}${includePractice ? '/practice' : ''}`;
+
+// Finished sessions for disc stats (practice too when `includePractice`), each with the layouts
+// it was played on and the synced round itself, for linking back to it.
+const discSessions = (includePractice) => data.rounds
+  // A round still being played isn't counted until it's finished.
+  .filter((round) => !round.inProgress && (includePractice || round.mode === 'Round'))
+  .map((round) => ({ round, shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] }));
+
+// One disc's distance figures and quality bar; with `href`, the card links to the disc's throws.
+const discCard = (stats, href) => {
   const segments = QUALITY_SEGMENTS.filter(([key]) => stats.quality[key]);
-  return el('section', { class: 'disc-card' },
+  return el(href ? 'a' : 'section', { class: 'disc-card', href, 'aria-label': href ? `Every throw with the ${stats.disc}` : undefined },
     el('div', { class: 'disc-card-head' },
       el('h3', {}, stats.disc),
-      el('span', { class: 'meta' }, `${plural(stats.throws, 'throw')}${stats.measured < stats.throws ? ` · ${stats.measured} measured` : ''}`)),
+      el('span', { class: 'meta' }, `${plural(stats.throws, 'throw')}${stats.measured < stats.throws ? ` · ${stats.measured} measured` : ''}${href ? '  ›' : ''}`)),
     el('dl', { class: 'disc-figures' }, [['Min', stats.minFeet], ['Avg', stats.averageFeet], ['90th', stats.p90Feet], ['95th', stats.p95Feet], ['Max', stats.maxFeet]]
       .map(([label, feet]) => el('div', {}, el('dt', {}, label), el('dd', {}, discFeet(feet))))),
     el('div', { class: 'disc-quality', role: 'img', 'aria-label': `Quality: ${segments.map(([key, label]) => `${stats.quality[key]} ${label.toLowerCase()}`).join(', ')}` },
@@ -232,26 +247,67 @@ const discCard = (stats) => {
     el('p', { class: 'meta disc-quality-text' }, [...segments.map(([key, label]) => `${label} ${stats.quality[key]}`), stats.averageQuality === null ? null : `avg ${stats.averageQuality.toFixed(1)} / 3`].filter(Boolean).join('  ·  ')));
 };
 
+// The throw-type buttons (several at once; none means all) and the practice box shared by disc
+// stats and a disc's throws. `filters` is { types, practice }, changed in place; `render` redraws.
+const discFilters = (filters, render) => {
+  const practiceBox = el('input', { type: 'checkbox', id: 'discs-practice', checked: filters.practice });
+  practiceBox.addEventListener('change', () => { filters.practice = practiceBox.checked; render(); });
+  return [
+    filterGroup('Filter by throw type', [[null, 'All throws'], ...THROW_TYPES.map((type) => [type, type])], (types) => { filters.types = types; render(); }, filters.types),
+    el('div', { class: 'filters' }, el('label', { class: 'check' }, practiceBox, ' Include practice sessions')),
+  ];
+};
+
 // Distance and quality by disc across finished rounds: min, average, 90th and 95th percentile,
-// max, and how the throws were rated. Throw-type buttons pick several at once; none means all.
+// max, and how the throws were rated. A disc's card opens each of its throws.
 const renderDiscStats = () => {
   const filters = { types: [], practice: false };
   const content = el('div', {});
-  const practiceBox = el('input', { type: 'checkbox', id: 'discs-practice' });
   const render = () => {
-    // A round still being played isn't counted until it's finished.
-    const sessions = data.rounds.filter((round) => !round.inProgress && (filters.practice || round.mode === 'Round'));
-    const discs = discStats(sessions.map((round) => ({ shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] })), { types: filters.types });
-    setChildren(content, discs.length ? discs.map(discCard) : el('p', { class: 'meta' }, 'No throws match yet.'));
+    const discs = discStats(discSessions(filters.practice), { types: filters.types });
+    setChildren(content, discs.length ? discs.map((stats) => discCard(stats, discHref(stats.disc, filters.types, filters.practice))) : el('p', { class: 'meta' }, 'No throws match yet.'));
   };
-  practiceBox.addEventListener('change', () => { filters.practice = practiceBox.checked; render(); });
   setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, user.displayName),
     el('h1', {}, 'Disc stats'),
-    filterGroup('Filter by throw type', [[null, 'All throws'], ['Drive', 'Drive'], ['Approach', 'Approach'], ['Putt', 'Putt']], (types) => { filters.types = types; render(); }),
-    el('div', { class: 'filters' }, el('label', { class: 'check' }, practiceBox, ' Include practice sessions')),
-    el('p', { class: 'meta' }, 'Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20.'),
+    discFilters(filters, render),
+    el('p', { class: 'meta' }, 'Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20. Pick a disc to see each throw.'),
+    content,
+  );
+  render();
+};
+
+// Every throw with one disc: its figures, then each throw longest first (unmeasured ones last),
+// each linking to the round it's from.
+const renderDiscThrows = (disc, types, includePractice) => {
+  const filters = { types: THROW_TYPES.filter((type) => types.includes(type)), practice: includePractice };
+  const content = el('div', {});
+  const render = () => {
+    const sessions = discSessions(filters.practice);
+    const stats = discStats(sessions, { types: filters.types }).find((item) => item.disc === disc);
+    const throws = discThrows(sessions, disc, { types: filters.types });
+    setChildren(content,
+      stats ? discCard(stats) : null,
+      throws.length ? [
+        el('h2', {}, 'Each throw, longest first'),
+        el('ul', { class: 'results' }, throws.map(({ round: { round }, shot, feet }) => {
+          const rating = quality(shot);
+          return el('li', {}, el('a', { href: `#round/${encodeURIComponent(round.clientId)}` },
+            el('span', { class: 'disc-throw' },
+              el('span', { class: 'disc-throw-feet' }, feet === null ? '—' : `${feet} ft`),
+              el('span', {},
+                el('span', { class: 'name' }, [shot.type, shot.style?.toLowerCase(), shot.lie ? (shot.lie === 'Basket' && shot.type === 'Putt' ? 'made' : shot.lie.toLowerCase()) : null, rating ? QUALITY_NAMES[rating] : null].filter(Boolean).join(' · ')),
+                el('span', { class: 'sub' }, [round.courseName, `hole ${shot.hole}`, formatDate(roundDate(round)), round.mode === 'Practice' ? 'practice' : null, feet === null ? 'not measured' : null].filter(Boolean).join(' · ')))),
+            el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')));
+        })),
+      ] : el('p', { class: 'meta' }, 'No throws with this disc match these filters.'));
+  };
+  setChildren(signedInEl,
+    el('p', {}, el('a', { href: '#discs' }, '‹ Disc stats')),
+    el('div', { class: 'eyebrow' }, 'Disc stats · Every throw'),
+    el('h1', {}, disc),
+    discFilters(filters, render),
     content,
   );
   render();
@@ -423,6 +479,7 @@ const route = () => {
   const course = kind === 'course' ? data.courses.find((item) => item.clientId === id) : undefined;
   if (kind === 'stats') renderStats();
   else if (kind === 'discs') renderDiscStats();
+  else if (kind === 'disc' && id) renderDiscThrows(id, rest[0] && rest[0] !== 'all' ? rest[0].split(',') : [], rest[1] === 'practice');
   else if (kind === 'hole' && Number(rest[1]) > 0) renderHoleHistory(id, rest[0], Number(rest[1]), rest[2] === 'practice');
   else if (round) renderRound(round);
   else if (course) renderCourse(course);

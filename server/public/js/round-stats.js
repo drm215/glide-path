@@ -314,3 +314,16 @@ export const discStats = (rounds, { types = [] } = {}) => {
     };
   });
 };
+
+// Every throw with one disc (named as in discStats, so 'No disc' for throws without one), each with the
+// round it's from and its reliable distance (null when it can't be trusted): longest first, then
+// the unmeasured ones in playing order. `rounds` may carry their own fields (an id, a date) for
+// the caller; each entry's `round` is the object passed in. `types` limits it to those throw
+// types (none means all).
+export const discThrows = (rounds, disc, { types = [] } = {}) => {
+  const reliable = reliableDistances(rounds);
+  const entries = rounds.flatMap((round) => round.shots
+    .filter((shot) => (shot.disc || 'No disc') === disc && (!types.length || types.includes(shot.type)))
+    .map((shot) => ({ round, shot, feet: reliable.has(shot) ? shot.feet : null })));
+  return [...entries.filter((entry) => entry.feet !== null).sort((a, b) => b.feet - a.feet), ...entries.filter((entry) => entry.feet === null)];
+};

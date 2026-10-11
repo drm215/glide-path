@@ -626,6 +626,35 @@ test('disc stats show the distances and quality of each disc, and filter by thro
   expect(await screen.findByText('Destroyer')).toBeTruthy();
 });
 
+test('a disc opens each of its throws, longest first, keeping the throw-type filter', async () => {
+  const mixed: SessionArchive = {
+    ...pastRound, id: '1727400000000',
+    shots: [
+      { x: 0.5, y: 0.5, feet: 250, disc: 'Buzzz', type: 'Drive', style: 'Forehand', hole: 1, lie: 'Fairway', quality: 3, qualityMax: 3 },
+      { x: 0.5, y: 0.5, feet: 310, disc: 'Buzzz', type: 'Drive', hole: 2, lie: 'Woods', quality: 1, qualityMax: 3 },
+      { x: 0.5, y: 0.5, feet: 60, disc: 'Buzzz', type: 'Approach', hole: 2, lie: 'Fairway' },
+    ],
+  };
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [mixed] });
+  await renderApp('/discs');
+  expect(await screen.findByText('Discs.')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Drive' }));
+  await fireEvent.press(screen.getByLabelText('Every throw with the Buzzz'));
+
+  expect(await screen.findByText('Buzzz.')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Drive', selected: true })).toBeTruthy();
+  expect(screen.getByText('Each throw, longest first')).toBeTruthy();
+  // The card's figures come first; the last two distances are the throws, longest first.
+  expect(screen.getAllByText(/^\d+ ft$/).map((node) => node.props.children).slice(-2)).toEqual(['310 ft', '250 ft']);
+  expect(screen.getByText('Drive · woods · poor')).toBeTruthy();
+  expect(screen.getByText('Drive · forehand · fairway · good')).toBeTruthy();
+  expect(screen.queryByText(/^Approach ·/)).toBeNull();
+
+  // A throw opens its round.
+  await fireEvent.press(screen.getByLabelText(/^310 ft drive on/));
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+});
+
 test('stats leave out a distance measured from a poor GPS reading', async () => {
   const poorFix: SessionArchive = {
     ...pastRound, id: '1727000100000',

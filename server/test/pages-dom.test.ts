@@ -298,6 +298,30 @@ describe('website pages in a browser', () => {
     assert.match(view.querySelector('.disc-card')?.textContent ?? '', /3 throws/);
   });
 
+  test('My rounds: a disc opens each of its throws, keeping the throw-type filter', async () => {
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
+    await navigate('#discs');
+    const view = document.getElementById('signed-in')!;
+    [...view.querySelectorAll('[aria-label="Filter by throw type"] button')].find((button) => button.textContent === 'Drive')!
+      .dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
+    const card = view.querySelector('a.disc-card')!;
+    assert.equal(card.getAttribute('href'), '#disc/Destroyer/Drive');
+
+    await navigate('#disc/Destroyer/Drive');
+    const text = view.textContent ?? '';
+    assertNoRenderingLeaks(text);
+    assert.match(text, /Disc stats · Every throw/);
+    assert.match(text, /Each throw, longest first/);
+    const rows = [...view.querySelectorAll('ul.results li')].map((row) => row.textContent);
+    assert.deepEqual(rows, [
+      '300 ftDrive · forehand · fairway · goodCedar Grove · hole 1 · September 30, 2026›',
+      '280 ftDrive · ob · poorCedar Grove · hole 2 · September 30, 2026›',
+    ]);
+    assert.ok(view.querySelector('ul.results a[href="#round/1790804819013"]'), 'each throw links to its round');
+    const pressed = [...view.querySelectorAll('[aria-label="Filter by throw type"] button')].filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.textContent);
+    assert.deepEqual(pressed, ['Drive'], 'the filter carried over');
+  });
+
   test('My rounds: a course shows each layout without leaking text', async () => {
     const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
     await navigate('#course/c1');
