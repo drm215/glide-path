@@ -1,7 +1,7 @@
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
-import { filterGroup, renderHistorySummary, renderRoundSummary } from './summary.js';
-import { $, TOKEN_KEY, api, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
+import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
+import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
 const signedInEl = $('#signed-in');
@@ -44,6 +44,11 @@ const roundScore = (round) => {
     toPar: withPar.length ? withPar.reduce((sum, item) => sum + item.score - item.par, 0) : null,
   };
 };
+
+// Every throw on one hole of a course layout: #hole/<course>/<layout>/<hole>, ending /practice to
+// include practice sessions.
+const holeHref = (courseId, layoutId, hole, includePractice) =>
+  `#hole/${[courseId, layoutId, String(hole)].map(encodeURIComponent).join('/')}${includePractice ? '/practice' : ''}`;
 
 // ---------------------------------------------------------------- views
 
@@ -112,7 +117,11 @@ const renderRound = (round) => {
     fromHtml(scorecardLegendHtml()),
     renderRoundSummary(round.shots, layout?.layouts ?? []),
     el('h2', {}, 'Throw by throw'),
-    score.holes.map((item) => [el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`), el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot))))]),
+    score.holes.map((item) => [
+      el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`),
+      course ? el('p', { class: 'meta' }, el('a', { href: holeHref(course.clientId, round.layoutId ?? MAIN_LAYOUT_ID, item.hole, round.mode === 'Practice') }, 'All rounds on this hole ›')) : null,
+      el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot)))),
+    ]),
   );
   const shown = setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard);
   // The 3D view can add the other rounds played on the same course layout, starting with this one.
@@ -133,6 +142,76 @@ const renderRound = (round) => {
       }),
     });
   }
+};
+
+const RESULT_TYPES = [
+  ['Eagle or better', (diff) => diff <= -2], ['Birdie', (diff) => diff === -1], ['Par', (diff) => diff === 0],
+  ['Bogey', (diff) => diff === 1], ['Double bogey+', (diff) => diff >= 2],
+];
+
+// Every recorded throw on one hole of a course layout, across rounds (and practice sessions when
+// `includePractice`): its scoring, all the throws on one map (or in 3D), their stats, and each visit.
+const renderHoleHistory = (courseId, layoutId, hole, includePractice) => {
+  const course = data.courses.find((item) => item.clientId === courseId);
+  const layout = course ? layoutsOf(course).find((item) => item.id === layoutId) : undefined;
+  const holeLayout = layout?.layouts?.[hole - 1] ?? null;
+  const par = holeLayout?.par;
+  const visits = data.rounds
+    .filter((round) => !round.inProgress && round.courseClientId === courseId && (round.layoutId ?? MAIN_LAYOUT_ID) === layoutId && (includePractice || round.mode === 'Round'))
+    .map((round) => ({ round, label: `${formatDate(roundDate(round))}${round.mode === 'Practice' ? ' (practice)' : ''}`, shots: round.shots.filter((shot) => shot.hole === hole) }))
+    .filter((visit) => visit.shots.length)
+    .sort((a, b) => roundDate(b.round) - roundDate(a.round));
+  // Practice doesn't count toward scoring.
+  const scores = visits.filter((visit) => visit.round.mode === 'Round').map((visit) => strokes(visit.shots));
+  const average = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
+  const best = scores.length ? Math.min(...scores) : null;
+  const results = par === undefined ? [] : RESULT_TYPES.map(([label, matches]) => [label, scores.filter((score) => matches(score - par)).length]).filter(([, count]) => count);
+  const stat = (label, value, note) => el('div', { class: 'stat' }, el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
+  const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': `Satellite map of every throw on hole ${hole}` });
+
+  setChildren(signedInEl,
+    back(),
+    el('div', { class: 'eyebrow' }, [course?.name ?? 'Course', course && layoutsOf(course).length > 1 ? `${layout?.name ?? 'Deleted'} layout` : null, 'Every throw'].filter(Boolean).join(' · ')),
+    el('h1', {}, `Hole ${String(hole).padStart(2, '0')}`),
+    visits.length ? [
+      el('div', { class: 'stats' },
+        stat('PLAYED', scores.length, visits.length > scores.length ? `+ ${plural(visits.length - scores.length, 'practice session')}` : scores.length === 1 ? 'round' : 'rounds'),
+        stat('PAR', par ?? '—', par === undefined ? 'Not set' : null),
+        stat('AVG SCORE', average === null ? '—' : average.toFixed(1), average === null || par === undefined ? null : formatToPar(Math.round((average - par) * 10) / 10)),
+        stat('BEST', best ?? '—', best === null || par === undefined ? null : formatToPar(best - par))),
+      results.length ? el('div', { class: 'chips' }, results.map(([label, count]) => el('span', { class: 'chip' }, `${count} ${label}${count === 1 || label.endsWith('+') || label.endsWith('better') ? '' : 's'}`))) : null,
+      el('h2', {}, 'Every throw'),
+      mapEl,
+      el('p', { class: 'map-legend' }, Object.entries(THROW_TYPE_COLORS).map(([type, color]) => [el('span', { class: 'legend-dot', style: `background: ${color}` }), type])),
+      renderHoleSummary(visits.map((visit) => ({ shots: visit.shots, layouts: layout?.layouts ?? [] }))),
+      el('h2', {}, 'Each time you played it'),
+      el('ul', { class: 'results' }, visits.map((visit) => {
+        const score = strokes(visit.shots);
+        return el('li', {}, el('a', { href: `#round/${encodeURIComponent(visit.round.clientId)}` },
+          el('span', {},
+            el('span', { class: 'name' }, visit.label),
+            el('span', { class: 'sub' }, [`${plural(score, 'stroke')}${par === undefined ? '' : ` (${formatToPar(score - par)})`}`, visit.shots.map((shot) => shot.disc || 'No disc').join(' › ')].join(' · '))),
+          el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')));
+      })),
+    ] : el('p', { class: 'meta' }, 'No throws recorded on this hole yet.'),
+  );
+
+  const map = visits.length ? satelliteMap(mapEl) : null;
+  if (!map) {
+    mapEl.remove();
+    return;
+  }
+  const layers = [drawHoles(map, layout?.layouts ?? [], { only: hole }), drawEveryThrow(map, visits, holeLayout?.tee ?? null)];
+  if (!fitTo(map, layers.flatMap((layer) => layer.bounds))) {
+    mapEl.remove();
+    return;
+  }
+  setUpRound3d(mapEl, {
+    firstHole: hole,
+    rowsRoot: el('div', {}),
+    onShowMap: () => map.invalidateSize(),
+    optionsFor: () => ({ hole, layout: holeLayout, rounds: visits.map((visit) => ({ id: visit.round.clientId, label: visit.label, shots: visit.shots })) }),
+  });
 };
 
 const renderCourse = (course) => {
@@ -176,12 +255,13 @@ const renderCourse = (course) => {
 
 // One course's holes, by layout: how often each was played, and the average and best scores from
 // rounds (practice doesn't count toward scoring). `rounds` are that course's sessions.
-const holeAverages = (key, rounds) => {
+const holeAverages = (key, rounds, includePractice) => {
   const course = data.courses.find((item) => item.clientId === key);
   if (!course) return null;
   const byLayout = [...rounds.reduce((map, round) => map.set(round.layoutId ?? MAIN_LAYOUT_ID, [...(map.get(round.layoutId ?? MAIN_LAYOUT_ID) ?? []), round]), new Map()).entries()];
   return [
     el('h2', {}, 'By hole'),
+    el('p', { class: 'meta' }, 'Pick a hole to see every throw on it.'),
     byLayout.map(([layoutId, layoutRounds]) => {
       const layout = layoutsOf(course).find((item) => item.id === layoutId);
       const holes = holesPlayed(layoutRounds.flatMap((round) => round.shots)).map(({ hole }) => {
@@ -195,7 +275,13 @@ const holeAverages = (key, rounds) => {
           best: scores.length ? Math.min(...scores) : null,
         };
       });
-      return [byLayout.length > 1 ? el('h3', {}, `${layout?.name ?? 'Deleted'} layout`) : null, fromHtml(holeAveragesHtml(holes))];
+      const grid = fromHtml(holeAveragesHtml(holes));
+      // A hole's column opens every throw on it.
+      grid?.addEventListener('click', (event) => {
+        const cell = event.target.closest('[data-hole]');
+        if (cell) location.hash = holeHref(key, layoutId, Number(cell.dataset.hole), includePractice);
+      });
+      return [byLayout.length > 1 ? el('h3', {}, `${layout?.name ?? 'Deleted'} layout`) : null, grid];
     }),
   ];
 };
@@ -262,7 +348,7 @@ const renderStats = () => {
               el('td', {}, courseWithPar.length ? formatToPar(Math.min(...courseWithPar.map((item) => item.toPar))) : '—'));
           }))),
       ] : null,
-      picked.length === 1 ? holeAverages(picked[0], selected) : null,
+      picked.length === 1 ? holeAverages(picked[0], selected, filters.practice) : null,
       renderHistorySummary(selected.map((round) => ({ shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] }))),
     );
   };
@@ -281,10 +367,18 @@ const renderStats = () => {
 
 const route = () => {
   if (!data) return;
-  const [kind, id] = decodeURIComponent(location.hash.slice(1)).split('/');
+  // Each part is encoded on its own, so ids can't be mistaken for separators.
+  const [kind, id, ...rest] = location.hash.slice(1).split('/').map((part) => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      return part;
+    }
+  });
   const round = kind === 'round' ? data.rounds.find((item) => item.clientId === id) : undefined;
   const course = kind === 'course' ? data.courses.find((item) => item.clientId === id) : undefined;
   if (kind === 'stats') renderStats();
+  else if (kind === 'hole' && Number(rest[1]) > 0) renderHoleHistory(id, rest[0], Number(rest[1]), rest[2] === 'practice');
   else if (round) renderRound(round);
   else if (course) renderCourse(course);
   else renderOverview();

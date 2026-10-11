@@ -243,6 +243,35 @@ describe('website pages in a browser', () => {
     assertNoRenderingLeaks(view.textContent ?? '');
   });
 
+  test('My rounds: every throw on a hole, reached from a round and from the stats By hole grid', async () => {
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi, hash: '#round/1790804819013' });
+    const view = document.getElementById('signed-in')!;
+    const links = [...view.querySelectorAll('a')].filter((link) => link.textContent === 'All rounds on this hole ›').map((link) => link.getAttribute('href'));
+    assert.deepEqual(links, ['#hole/c1/main/1', '#hole/c1/main/2']);
+
+    await navigate('#hole/c1/main/1');
+    const text = view.textContent ?? '';
+    assertNoRenderingLeaks(text);
+    assert.match(text, /Cedar Grove · Main layout · Every throw/);
+    assert.match(text, /Hole 01/);
+    // One round: 2 strokes on a par 3.
+    assert.match(text, /PLAYED1round/);
+    assert.match(text, /AVG SCORE2\.0-1/);
+    assert.match(text, /1 Birdie/);
+    assert.match(text, /Throws on this hole/);
+    assert.match(text, /Each time you played it/);
+    assert.match(text, /2 strokes \(-1\) · Destroyer › Aviar/);
+    assert.ok(view.querySelector('a[href="#round/1790804819013"]'), 'each visit links to its round');
+
+    // The stats page's By hole grid opens the same page.
+    await navigate('#stats');
+    const cedar = [...view.querySelectorAll('[aria-label="Filter by course"] button')].find((button) => button.textContent === 'Cedar Grove (1)')!;
+    cedar.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
+    const cell = [...view.querySelectorAll('table.scorecard td[data-hole="2"]')][0]!;
+    cell.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click', { bubbles: true }));
+    assert.equal((globalThis as unknown as { location: { hash: string } }).location.hash, '#hole/c1/main/2');
+  });
+
   test('My rounds: a course shows each layout without leaking text', async () => {
     const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
     await navigate('#course/c1');

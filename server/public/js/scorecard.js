@@ -88,10 +88,10 @@ export const scorecardHtml = (shots, layouts = []) => {
 
 // Scores on each hole of a course across rounds: `holes` are { hole, par (or null), played,
 // average (or null), best (or null) }. The average is colored against par; the best is marked
-// like a scorecard score.
+// like a scorecard score. Cells carry data-hole, so a click can open that hole.
 export const holeAveragesHtml = (holes) => (holes.length ? gridHtml(holes, [
   { label: 'Par', muted: true, cell: (hole) => escape(hole.par) },
   { label: 'Played', muted: true, cell: (hole) => escape(hole.played) },
   { label: 'Avg', cell: (hole) => (hole.average === null ? '' : `<strong class="${hole.par === null ? '' : hole.average < hole.par ? 'under' : hole.average > hole.par ? 'over' : ''}">${escape(hole.average.toFixed(1))}</strong>`) },
   { label: 'Best', className: 'score-row', cell: (hole) => (hole.best === null ? '' : scoreMark(hole.best, hole.par)) },
-]) : '');
+], { pickable: true }) : '');

@@ -196,6 +196,30 @@ export const drawThrows = (map, shots, tee) => {
   return { group, bounds };
 };
 
+// Throws on a hole across many rounds are colored by type (as in the app), since there are too
+// many to number.
+export const THROW_TYPE_COLORS = { Drive: '#3a8f68', Approach: '#df8547', Putt: '#e6ece8' };
+
+// Every throw on one hole across rounds: a faint path for each round from the tee, and a dot per
+// throw colored by type. `visits` are [{ label, shots }] with that hole's throws.
+export const drawEveryThrow = (map, visits, tee) => {
+  const group = L.layerGroup();
+  const bounds = tee ? [latLng(tee)] : [];
+  for (const { label, shots } of visits) {
+    const placed = shots.filter((shot) => shot.latitude !== undefined && shot.longitude !== undefined);
+    const path = [...(tee ? [latLng(tee)] : []), ...placed.map(latLng)];
+    if (path.length > 1) L.polyline(path, { color: '#df8547', weight: 2, opacity: 0.45 }).addTo(group);
+    for (const shot of placed) {
+      // Disc names are user text, so the popup gets a text node rather than an HTML string.
+      L.circleMarker(latLng(shot), { radius: 6, color: '#000', weight: 1.5, fillColor: THROW_TYPE_COLORS[shot.type] ?? '#df8547', fillOpacity: 1 })
+        .bindPopup(el('span', {}, `${label}: ${throwDetail(shot)}`)).addTo(group);
+      bounds.push(latLng(shot));
+    }
+  }
+  group.addTo(map);
+  return { group, bounds };
+};
+
 export const fitTo = (map, bounds, fallbackZoom = 18) => {
   if (!bounds.length) return false;
   if (bounds.length === 1) map.setView(bounds[0], fallbackZoom);

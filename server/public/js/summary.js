@@ -118,3 +118,6 @@ export const renderRoundSummary = (shots, layouts = []) => renderSummary('Round 
 
 // Throw stats across many rounds, each with the layouts it was played on.
 export const renderHistorySummary = (rounds) => renderSummary('Throw stats', rounds);
+
+// Throw stats for one hole across rounds.
+export const renderHoleSummary = (rounds) => renderSummary('Throws on this hole', rounds);
