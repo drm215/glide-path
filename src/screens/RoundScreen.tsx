@@ -125,7 +125,7 @@ export const RoundScreen = () => {
 
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
   const selectedHoleLayout = selectedCourse?.layouts?.[hole - 1];
-  const roundScore = scoreSummary(shots, selectedCourse, hole);
+  const roundScore = scoreSummary(shots, selectedCourse?.layouts, hole);
 
   const selectedHoleDistance = holeDistanceFeet(selectedHoleLayout);
   // From the last logged lie on this hole to the basket, once the hole is under way and not finished.

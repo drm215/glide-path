@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
-import { discStats, type DiscStats } from '../../lib/round-stats';
+import { discStats, roundLayouts, type DiscStats } from '../../lib/round-stats';
 import { withExistingLayout } from '../../lib/layouts';
 import type { Course, SessionArchive, ThrowType } from '../../lib/types';
 import { FILTER_TYPES } from '../constants';
@@ -24,7 +24,7 @@ export const discSessions = (history: SessionArchive[], courses: Course[], pract
   // A round still being played (on another device) isn't counted until it's finished.
   history.filter((session) => !session.inProgress && (practice || session.mode === 'Round')).map((session) => {
     const base = courses.find((course) => course.id === session.courseId);
-    return { session, shots: session.shots, layouts: (base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [] };
+    return { session, shots: session.shots, layouts: roundLayouts((base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [], session.pars) };
   });
 
 // The throw-type buttons (several at once; none means all) and the practice switch.

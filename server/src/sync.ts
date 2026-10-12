@@ -12,7 +12,7 @@ type CourseRow = {
 type RoundRow = {
   uid: string; client_id: string; course_client_id: string | null; course_name: string; mode: RoundRecord['mode'];
   shots: RoundRecord['shots']; shared: boolean; share_token: string | null; updated_at: string; deleted: boolean; version: string;
-  layout_id: string | null; in_progress: boolean;
+  layout_id: string | null; in_progress: boolean; pars: (number | null)[] | null;
 };
 type BagRow = { discs: string[]; details: BagRecord['details']; weights: BagRecord['weights']; updated_at: string; version: string };
 
@@ -45,10 +45,10 @@ const upsertCourse = (tx: Queryable, ownerId: string, course: CourseRecord) => {
 
 const upsertRound = (tx: Queryable, ownerId: string, round: RoundRecord) =>
   tx.query(
-    `INSERT INTO rounds (owner_id, client_id, course_client_id, course_name, mode, shots, shared, share_token, updated_at, deleted, layout_id, in_progress)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 THEN $8 END, $9, $10, $11, $12)
+    `INSERT INTO rounds (owner_id, client_id, course_client_id, course_name, mode, shots, shared, share_token, updated_at, deleted, layout_id, in_progress, pars)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 THEN $8 END, $9, $10, $11, $12, $13)
      ON CONFLICT (owner_id, client_id) DO UPDATE SET
-       course_client_id = EXCLUDED.course_client_id, layout_id = EXCLUDED.layout_id, in_progress = EXCLUDED.in_progress,
+       course_client_id = EXCLUDED.course_client_id, layout_id = EXCLUDED.layout_id, in_progress = EXCLUDED.in_progress, pars = EXCLUDED.pars,
        course_name = EXCLUDED.course_name, mode = EXCLUDED.mode, shots = EXCLUDED.shots,
        shared = EXCLUDED.shared, share_token = CASE WHEN EXCLUDED.shared THEN COALESCE(rounds.share_token, $8) END,
        updated_at = EXCLUDED.updated_at, deleted = EXCLUDED.deleted, version = nextval('sync_version')
@@ -56,7 +56,7 @@ const upsertRound = (tx: Queryable, ownerId: string, round: RoundRecord) =>
     [
       ownerId, round.clientId, round.courseClientId ?? null, round.courseName, round.mode, JSON.stringify(round.shots),
       round.shared && !round.deleted, newShareToken(), round.updatedAt, round.deleted ?? false, round.layoutId ?? null,
-      round.inProgress ?? false,
+      round.inProgress ?? false, round.pars ? JSON.stringify(round.pars) : null,
     ],
   );
 
@@ -128,6 +128,7 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
       shareToken: row.share_token,
       layoutId: row.layout_id ?? undefined,
       inProgress: row.in_progress,
+      pars: row.pars ?? undefined,
     })),
     bag: bag ? { updatedAt: Number(bag.updated_at), discs: bag.discs, details: bag.details, weights: bag.weights } : null,
   };

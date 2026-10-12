@@ -57,6 +57,8 @@ ALTER TABLE courses ADD COLUMN IF NOT EXISTS extra_layouts jsonb NOT NULL DEFAUL
 ALTER TABLE rounds ADD COLUMN IF NOT EXISTS layout_id text;
 -- A round still being played, synced so it isn't lost with the phone; finishing it clears this.
 ALTER TABLE rounds ADD COLUMN IF NOT EXISTS in_progress boolean NOT NULL DEFAULT false;
+-- The pars a round was played with, so later course edits don't rescore it; null for older rounds.
+ALTER TABLE rounds ADD COLUMN IF NOT EXISTS pars jsonb;
 -- Sign-in tokens carry the version they were issued with; raising it (on password reset)
 -- signs out every existing session.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0;

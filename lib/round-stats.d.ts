@@ -88,3 +88,6 @@ export declare function discStats(rounds: StatsRound[], options?: { types?: stri
 
 export type DiscThrow<R extends StatsRound = StatsRound> = { round: R; shot: Shot; feet: number | null };
 export declare function discThrows<R extends StatsRound>(rounds: R[], disc: string, options?: { types?: string[] }): DiscThrow<R>[];
+
+export declare function parsToSave(shots: Pick<Shot, 'hole'>[], layouts?: StatsRound['layouts'], saved?: (number | null)[]): (number | null)[] | undefined;
+export declare function roundLayouts(layouts: StatsRound['layouts'] | undefined, pars: (number | null)[] | undefined): (HoleLayout | null | undefined)[];

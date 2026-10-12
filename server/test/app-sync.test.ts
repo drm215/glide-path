@@ -257,6 +257,27 @@ describe('app sync against the API', () => {
     assert.equal(search.body.courses[0].name, 'Public Pines');
   });
 
+  test('a round keeps the pars it was played with: they sync, and the shared page scores with them', async () => {
+    const token = await server.register('pars@example.com', 'Par Keeper');
+    // Played when hole 1 was a par 4; the course has since made it a par 3.
+    const phone = newDevice(token, {
+      ...emptyData(),
+      courses: [course('course-1', { updatedAt: tick() })],
+      history: [session('round-pars', { shared: true, pars: [4], updatedAt: tick() })],
+    });
+    await syncDevice(server, phone);
+    const tablet = newDevice(token);
+    await syncDevice(server, tablet);
+    assert.deepEqual(tablet.data.history[0].pars, [4], 'the pars reach other devices');
+
+    const page = await server.request('GET', `/r/${phone.data.history[0].shareToken}`);
+    // 2 throws + 1 OB penalty on a par 4: one under, not even as against today's par 3.
+    assert.match(page.body, /<span class="par under">-1<\/span>/);
+    const round = await server.request('GET', `/api/public/rounds/${phone.data.history[0].shareToken}`);
+    assert.equal(round.body.round.layouts[0].par, 4);
+    assert.ok(round.body.round.layouts[0].tee, 'the tee still comes from the course');
+  });
+
   test('course layouts and the layout a round was played on sync and drive the shared scorecard', async () => {
     const token = await server.register('layouts@example.com', 'Layout Mapper');
     const blueTees = {

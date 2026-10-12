@@ -3,7 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { roundShareUrl } from '../../lib/api';
-import { holeBreakdown } from '../../lib/round-stats';
+import { holeBreakdown, roundLayouts } from '../../lib/round-stats';
 import { courseLayouts, withExistingLayout } from '../../lib/layouts';
 import type { Shot } from '../../lib/types';
 import { GREEN, styles } from '../theme';
@@ -34,19 +34,21 @@ export const RoundDetailScreen = () => {
   const viewedBaseCourse = courses.find((course) => course.id === viewedSession?.courseId);
   // The layout the round was played on; undefined if the course or that layout was deleted.
   const viewedCourse = viewedBaseCourse && viewedSession ? withExistingLayout(viewedBaseCourse, viewedSession.layoutId) : undefined;
+  // Its holes with the pars it was played with (saved with the round), not the course's current ones.
+  const viewedLayouts = roundLayouts(viewedCourse?.layouts ?? [], viewedSession?.pars);
   const viewedLayoutLabel = viewedBaseCourse && courseLayouts(viewedBaseCourse).length > 1 ? (viewedCourse?.layoutLabel ?? viewedSession?.layoutName ?? 'Deleted') : null;
   const viewedHoles = viewedSession
     ? [...new Set(viewedSession.shots.map((shot) => shot.hole))].sort((a, b) => a - b).map((holeNumber) => {
       const holeShots = viewedSession.shots.filter((shot) => shot.hole === holeNumber);
-      return { hole: holeNumber, shots: holeShots, par: viewedCourse?.layouts?.[holeNumber - 1]?.par, feet: holeShots.reduce((sum, shot) => sum + shot.feet, 0) };
+      return { hole: holeNumber, shots: holeShots, par: viewedLayouts[holeNumber - 1]?.par, feet: holeShots.reduce((sum, shot) => sum + shot.feet, 0) };
     })
     : [];
-  const viewedScore = viewedSession ? scoreSummary(viewedSession.shots, viewedCourse) : null;
+  const viewedScore = viewedSession ? scoreSummary(viewedSession.shots, viewedLayouts) : null;
   const viewedPar = viewedHoles.reduce((sum, item) => sum + (item.par ?? 0), 0);
   const viewedStrokes = viewedScore?.strokes ?? viewedSession?.shots.length ?? 0;
   const viewedToPar = viewedScore?.toPar ?? null;
   // How each hole was played, for the scorecard; the course length when every hole is mapped.
-  const viewedBreakdown = viewedSession ? holeBreakdown(viewedSession.shots, viewedCourse?.layouts ?? []) : [];
+  const viewedBreakdown = viewedSession ? holeBreakdown(viewedSession.shots, viewedLayouts) : [];
   const viewedLength = viewedBreakdown.length && viewedBreakdown.every((item) => item.lengthFeet !== null) ? viewedBreakdown.reduce((sum, item) => sum + item.lengthFeet!, 0) : null;
   const viewedResults = RESULT_TYPES.map((result) => ({
     ...result,
@@ -119,7 +121,7 @@ export const RoundDetailScreen = () => {
         <HoleGridLegend />
         {viewedScore && viewedScore.holesWithPar < viewedScore.holesCompleted && <Text style={styles.mapInstruction}>{viewedScore.holesWithPar ? `To par counts only the ${viewedScore.holesWithPar} holes with a par set.` : 'Set pars for this course in Course builder to see your score to par.'}</Text>}
         {viewedSession.mode === 'Practice' && <Text style={styles.mapInstruction}>Practice session</Text>}
-        <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedCourse?.layouts ?? [] }]} />
+        <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedLayouts }]} />
         <Text style={[styles.sectionTitle, styles.throwByThrowTitle]}>Throw by throw</Text>
         <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it.</Text>
         {viewedHoles.map((item) => <View key={item.hole} style={styles.roundHole} onLayout={(event) => { holeSectionOffsets.current[item.hole] = event.nativeEvent.layout.y; }}>

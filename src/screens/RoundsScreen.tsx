@@ -1,5 +1,6 @@
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { withExistingLayout } from '../../lib/layouts';
+import { roundLayouts } from '../../lib/round-stats';
 import type { SessionArchive } from '../../lib/types';
 import { styles } from '../theme';
 import { formatScoreToPar, formatSessionDate } from '../format';
@@ -14,7 +15,8 @@ export const RoundsScreen = () => {
 
   const sessionSummary = (session: SessionArchive) => {
     const baseCourse = courses.find((course) => course.id === session.courseId);
-    const summary = scoreSummary(session.shots, baseCourse ? withExistingLayout(baseCourse, session.layoutId) : undefined);
+    // Scored against the pars it was played with.
+    const summary = scoreSummary(session.shots, roundLayouts((baseCourse ? withExistingLayout(baseCourse, session.layoutId) : undefined)?.layouts ?? [], session.pars));
     const holesText = `${summary.holesCompleted} ${summary.holesCompleted === 1 ? 'hole' : 'holes'}`;
     if (session.mode === 'Practice') return `${holesText} · ${summary.strokes} ${summary.strokes === 1 ? 'throw' : 'throws'}`;
     return `${holesText} · Score ${summary.strokes}${summary.toPar === null ? '' : ` (${formatScoreToPar(summary.toPar)})`}`;

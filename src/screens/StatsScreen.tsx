@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
-import { roundScore as statsRoundScore } from '../../lib/round-stats';
+import { roundLayouts, roundScore as statsRoundScore } from '../../lib/round-stats';
 import { withExistingLayout } from '../../lib/layouts';
 import type { SessionArchive } from '../../lib/types';
 import { GREEN, styles } from '../theme';
@@ -20,9 +20,10 @@ export const StatsScreen = () => {
   const [statsPractice, setStatsPractice] = useState(false);
 
   // Stats screen: finished sessions, optionally with practice, grouped by course.
+  // A session's holes with the pars it was played with.
   const sessionLayouts = (session: SessionArchive) => {
     const base = courses.find((course) => course.id === session.courseId);
-    return (base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [];
+    return roundLayouts((base ? withExistingLayout(base, session.layoutId)?.layouts : undefined) ?? [], session.pars);
   };
   // A round still being played (on another device) isn't counted until it's finished.
   const statsSessions = history.filter((session) => !session.inProgress && (statsPractice || session.mode === 'Round'));

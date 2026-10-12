@@ -19,14 +19,26 @@ export const holeVisits = (history: SessionArchive[], courseId: string, layoutId
     .filter((visit) => visit.shots.length > 0)
     .sort((a, b) => Number(b.session.id) - Number(a.session.id));
 
-// Scores on a hole from rounds (practice doesn't count toward scoring): how many, average and best.
-export const holeScoring = (visits: HoleVisit[]) => {
-  const scores = visits.filter((visit) => visit.session.mode === 'Round').map((visit) => visit.strokes);
+// The par a visit was played against: the one saved with its round, else the hole's current par.
+export const visitPar = (visit: HoleVisit, currentPar?: number) => visit.session.pars?.[visit.shots[0].hole - 1] ?? currentPar;
+
+// Scores on a hole from rounds (practice doesn't count toward scoring): how many, average and best,
+// and each against the par it was played with (`toPars`, for rounds with a par).
+export const holeScoring = (visits: HoleVisit[], currentPar?: number) => {
+  const rounds = visits.filter((visit) => visit.session.mode === 'Round');
+  const scores = rounds.map((visit) => visit.strokes);
+  const toPars = rounds.flatMap((visit) => {
+    const par = visitPar(visit, currentPar);
+    return par === undefined ? [] : [visit.strokes - par];
+  });
   return {
     rounds: scores.length,
     average: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
     best: scores.length ? Math.min(...scores) : null,
     scores,
+    toPars,
+    averageToPar: toPars.length ? toPars.reduce((sum, value) => sum + value, 0) / toPars.length : null,
+    bestToPar: toPars.length ? Math.min(...toPars) : null,
   };
 };
 

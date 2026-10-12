@@ -1,7 +1,7 @@
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
-import { discStats, discThrows, quality } from './round-stats.js';
+import { discStats, discThrows, quality, roundLayouts } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -31,11 +31,14 @@ const layoutFor = (round) => {
   const course = courseFor(round);
   return course ? layoutsOf(course).find((layout) => layout.id === (round.layoutId ?? MAIN_LAYOUT_ID)) : undefined;
 };
+// A round's hole layouts with the pars it was played with (saved with it), not the course's current ones.
+const roundHoles = (round) => roundLayouts(layoutFor(round)?.layouts ?? [], round.pars);
+
 // Round ids are the time the round ended.
 const roundDate = (round) => (Number.isFinite(Number(round.clientId)) ? Number(round.clientId) : round.updatedAt);
 
 const roundScore = (round) => {
-  const pars = layoutFor(round)?.layouts ?? [];
+  const pars = roundHoles(round);
   const holes = holesPlayed(round.shots).map((item) => ({ ...item, score: strokes(item.shots), par: pars[item.hole - 1]?.par }));
   const withPar = holes.filter((item) => item.par !== undefined);
   return {
@@ -102,21 +105,22 @@ const renderRound = (round) => {
   const layout = layoutFor(round);
   const course = courseFor(round);
   // A round with no throws has no scorecard; the map still needs somewhere to listen for hole picks.
-  const scorecard = fromHtml(scorecardHtml(round.shots, layout?.layouts ?? [])) ?? el('div', {});
+  const holes = roundHoles(round);
+  const scorecard = fromHtml(scorecardHtml(round.shots, holes)) ?? el('div', {});
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': 'Satellite map of the selected hole and its throws' });
   setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null, round.inProgress ? 'In progress' : null].filter(Boolean).join(' · ')),
     el('h1', {}, round.courseName),
     el('p', { class: 'meta' }, [course && layoutsOf(course).length > 1 && layout ? `${layout.name} layout` : null, plural(score.holes.length, 'hole')].filter(Boolean).join(' · ')),
-    fromHtml(scoreStripHtml(round.shots, layout?.layouts ?? [])),
+    fromHtml(scoreStripHtml(round.shots, holes)),
     round.shared && round.shareToken ? el('p', {}, el('a', { href: `/r/${encodeURIComponent(round.shareToken)}` }, 'Public share link')) : null,
     scorecard,
     fromHtml(scorecardLegendHtml()),
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard above to see where each throw landed.'),
     throwLegend(),
-    renderRoundSummary(round.shots, layout?.layouts ?? []),
+    renderRoundSummary(round.shots, holes),
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [
       el('h3', {}, `Hole ${String(item.hole).padStart(2, '0')}`),
@@ -159,14 +163,18 @@ const renderHoleHistory = (courseId, layoutId, hole, includePractice) => {
   const par = holeLayout?.par;
   const visits = data.rounds
     .filter((round) => !round.inProgress && round.courseClientId === courseId && (round.layoutId ?? MAIN_LAYOUT_ID) === layoutId && (includePractice || round.mode === 'Round'))
-    .map((round) => ({ round, label: `${formatDate(roundDate(round))}${round.mode === 'Practice' ? ' (practice)' : ''}`, shots: round.shots.filter((shot) => shot.hole === hole) }))
+    // Each visit is scored against the par it was played with, which may differ from today's.
+    .map((round) => ({ round, label: `${formatDate(roundDate(round))}${round.mode === 'Practice' ? ' (practice)' : ''}`, shots: round.shots.filter((shot) => shot.hole === hole), par: round.pars?.[hole - 1] ?? par }))
     .filter((visit) => visit.shots.length)
     .sort((a, b) => roundDate(b.round) - roundDate(a.round));
   // Practice doesn't count toward scoring.
-  const scores = visits.filter((visit) => visit.round.mode === 'Round').map((visit) => strokes(visit.shots));
+  const played = visits.filter((visit) => visit.round.mode === 'Round').map((visit) => ({ score: strokes(visit.shots), par: visit.par }));
+  const scores = played.map((item) => item.score);
+  const toPars = played.filter((item) => item.par !== undefined && item.par !== null).map((item) => item.score - item.par);
   const average = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
   const best = scores.length ? Math.min(...scores) : null;
-  const results = par === undefined ? [] : RESULT_TYPES.map(([label, matches]) => [label, scores.filter((score) => matches(score - par)).length]).filter(([, count]) => count);
+  const averageToPar = toPars.length ? toPars.reduce((sum, value) => sum + value, 0) / toPars.length : null;
+  const results = RESULT_TYPES.map(([label, matches]) => [label, toPars.filter((diff) => matches(diff)).length]).filter(([, count]) => count);
   const stat = (label, value, note) => el('div', { class: 'stat' }, el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), note ? el('div', { class: 'stat-note' }, note) : null);
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': `Satellite map of every throw on hole ${hole}` });
 
@@ -178,20 +186,20 @@ const renderHoleHistory = (courseId, layoutId, hole, includePractice) => {
       el('div', { class: 'stats' },
         stat('PLAYED', scores.length, visits.length > scores.length ? `+ ${plural(visits.length - scores.length, 'practice session')}` : scores.length === 1 ? 'round' : 'rounds'),
         stat('PAR', par ?? '—', par === undefined ? 'Not set' : null),
-        stat('AVG SCORE', average === null ? '—' : average.toFixed(1), average === null || par === undefined ? null : formatToPar(Math.round((average - par) * 10) / 10)),
-        stat('BEST', best ?? '—', best === null || par === undefined ? null : formatToPar(best - par))),
+        stat('AVG SCORE', average === null ? '—' : average.toFixed(1), averageToPar === null ? null : formatToPar(Math.round(averageToPar * 10) / 10)),
+        stat('BEST', best ?? '—', toPars.length ? formatToPar(Math.min(...toPars)) : null)),
       results.length ? el('div', { class: 'chips' }, results.map(([label, count]) => el('span', { class: 'chip' }, `${count} ${label}${count === 1 || label.endsWith('+') || label.endsWith('better') ? '' : 's'}`))) : null,
       el('h2', {}, 'Every throw'),
       mapEl,
       el('p', { class: 'map-legend' }, Object.entries(THROW_TYPE_COLORS).map(([type, color]) => [el('span', { class: 'legend-dot', style: `background: ${color}` }), type])),
-      renderHoleSummary(visits.map((visit) => ({ shots: visit.shots, layouts: layout?.layouts ?? [] }))),
+      renderHoleSummary(visits.map((visit) => ({ shots: visit.shots, layouts: roundHoles(visit.round) }))),
       el('h2', {}, 'Each time you played it'),
       el('ul', { class: 'results' }, visits.map((visit) => {
         const score = strokes(visit.shots);
         return el('li', {}, el('a', { href: `#round/${encodeURIComponent(visit.round.clientId)}` },
           el('span', {},
             el('span', { class: 'name' }, visit.label),
-            el('span', { class: 'sub' }, [`${plural(score, 'stroke')}${par === undefined ? '' : ` (${formatToPar(score - par)})`}`, visit.shots.map((shot) => shot.disc || 'No disc').join(' › ')].join(' · '))),
+            el('span', { class: 'sub' }, [`${plural(score, 'stroke')}${visit.par === undefined || visit.par === null ? '' : ` (${formatToPar(score - visit.par)})`}`, visit.shots.map((shot) => shot.disc || 'No disc').join(' › ')].join(' · '))),
           el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')));
       })),
     ] : el('p', { class: 'meta' }, 'No throws recorded on this hole yet.'),
@@ -231,7 +239,7 @@ const discHref = (disc, types, includePractice) =>
 const discSessions = (includePractice) => data.rounds
   // A round still being played isn't counted until it's finished.
   .filter((round) => !round.inProgress && (includePractice || round.mode === 'Round'))
-  .map((round) => ({ round, shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] }));
+  .map((round) => ({ round, shots: round.shots, layouts: roundHoles(round) }));
 
 // One disc's distance figures and quality bar; with `href`, the card links to the disc's throws.
 const discCard = (stats, href) => {
@@ -448,7 +456,7 @@ const renderStats = () => {
           }))),
       ] : null,
       picked.length === 1 ? holeAverages(picked[0], selected, filters.practice) : null,
-      renderHistorySummary(selected.map((round) => ({ shots: round.shots, layouts: layoutFor(round)?.layouts ?? [] }))),
+      renderHistorySummary(selected.map((round) => ({ shots: round.shots, layouts: roundHoles(round) }))),
     );
   };
 

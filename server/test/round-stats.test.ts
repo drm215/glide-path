@@ -429,3 +429,29 @@ describe('discThrows', () => {
     assert.deepEqual(rows(discThrows([first, second], 'No disc')), [['second', 'Putt', 10]], 'throws without a disc, named as disc stats names them');
   });
 });
+
+describe('pars saved with a round', () => {
+  test('parsToSave records each played hole, keeps pars already saved, and is undefined with none', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { parsToSave } = await import('../public/js/round-stats.js');
+    const layouts = [{ par: 3 }, { par: 4 }, {}, { par: 5 }];
+    assert.deepEqual(parsToSave([{ hole: 1 }, { hole: 2 }, { hole: 3 }], layouts), [3, 4, null]);
+    // Hole 4 wasn't played, so its par isn't recorded.
+    assert.deepEqual(parsToSave([{ hole: 1 }], layouts), [3]);
+    // A resumed round keeps hole 1's saved par though the course now says 3.
+    assert.deepEqual(parsToSave([{ hole: 1 }, { hole: 2 }], layouts, [4]), [4, 4]);
+    assert.equal(parsToSave([{ hole: 3 }], layouts), undefined);
+  });
+
+  test('roundLayouts puts saved pars over the course, keeping its tees and baskets', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { roundLayouts, roundScore } = await import('../public/js/round-stats.js');
+    const tee = { latitude: 40, longitude: -75 };
+    const course = [{ tee, basket: null, par: 3 }, { tee: null, basket: null, par: 3 }];
+    const layouts = roundLayouts(course, [4, null, 3]);
+    assert.deepEqual(layouts, [{ tee, basket: null, par: 4 }, course[1], { tee: null, basket: null, par: 3 }]);
+    assert.equal(roundLayouts(course, undefined), course, 'rounds without saved pars use the course');
+    // Scored against the saved par (4), not the course's (3).
+    assert.equal(roundScore([{ hole: 1, lie: 'Fairway' }, { hole: 1, lie: 'Basket' }], layouts).toPar, -2);
+  });
+});

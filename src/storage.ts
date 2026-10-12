@@ -4,7 +4,8 @@ import { Alert } from 'react-native';
 import type { Disc, Lie, SessionArchive, Shot, ThrowStyle, ThrowType } from '../lib/types';
 
 // A past round reopened as the round in progress keeps its id, so ending it again updates it.
-export type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null };
+// A resumed round keeps its pars, so holes already played aren't rescored against changed ones.
+export type ResumedFrom = { id: string; shared?: boolean; shareToken?: string | null; pars?: (number | null)[] };
 // A throw's details as entered in the log sheet.
 export type ThrowDetails = { disc: Disc; type: ThrowType; style: ThrowStyle; lie: Lie; quality: number | null };
 

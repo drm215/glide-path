@@ -322,6 +322,15 @@ describe('website pages in a browser', () => {
     assert.deepEqual(pressed, ['Drive'], 'the filter carried over');
   });
 
+  test('My rounds: a round is scored against the pars it was played with', async () => {
+    // Saved when holes 1 and 2 were both par 4; the course now has 3 and 4.
+    const withPars = { ...syncedData, rounds: syncedData.rounds.map((round, index) => (index === 0 ? { ...round, pars: [4, 4] } : round)) };
+    const { document } = await loadPage(accountHtml, 'account.js', { token: 't', api: (path) => (path === '/api/me' ? accountApi(path) : withPars), hash: '#round/1790804819013' });
+    const view = document.getElementById('signed-in')!;
+    // Hole 1: 2 on a par 4; hole 2: 2 throws + 1 penalty on a par 4.
+    assert.match(view.querySelector('.score')!.textContent ?? '', /^-3Total 5Par 8/);
+  });
+
   test('My rounds: a course shows each layout without leaking text', async () => {
     const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
     await navigate('#course/c1');

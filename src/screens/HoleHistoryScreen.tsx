@@ -2,11 +2,12 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { courseLayouts, withExistingLayout } from '../../lib/layouts';
+import { roundLayouts } from '../../lib/round-stats';
 import type { ThrowType } from '../../lib/types';
 import { RESULT_TYPES } from '../constants';
 import { formatScoreToPar, formatSessionDate, formatThrowDetail } from '../format';
 import { regionForPoints } from '../geo';
-import { holeScoring, holeVisits } from '../holeHistory';
+import { holeScoring, holeVisits, visitPar } from '../holeHistory';
 import { BasketCircles } from '../components/BasketCircles';
 import { PREVIOUS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { StatsSummary, StatTile } from '../components/StatsSummary';
@@ -29,8 +30,9 @@ export const HoleHistoryScreen = () => {
   const layout = course?.layouts?.[holeNumber - 1];
   const par = layout?.par;
   const visits = holeVisits(history, params.course, params.layout, holeNumber, includePractice);
-  const scoring = holeScoring(visits);
-  const results = par === undefined ? [] : RESULT_TYPES.map((result) => ({ ...result, count: scoring.scores.filter((score) => result.matches(score - par)).length })).filter((result) => result.count > 0);
+  // Each visit is scored against the par it was played with, which may differ from today's.
+  const scoring = holeScoring(visits, par);
+  const results = RESULT_TYPES.map((result) => ({ ...result, count: scoring.toPars.filter((diff) => result.matches(diff)).length })).filter((result) => result.count > 0);
   const positioned = visits.map((visit) => ({
     visit,
     throws: visit.shots.flatMap((shot) => (shot.latitude !== undefined && shot.longitude !== undefined ? [{ shot, coordinate: { latitude: shot.latitude, longitude: shot.longitude } }] : [])),
@@ -48,8 +50,8 @@ export const HoleHistoryScreen = () => {
         <View style={styles.courseStatsGrid}>
           <StatTile label="PLAYED" value={scoring.rounds} note={visits.length > scoring.rounds ? `+ ${visits.length - scoring.rounds} practice` : scoring.rounds === 1 ? 'round' : 'rounds'} />
           <StatTile label="PAR" value={par ?? '—'} note={par === undefined ? 'Not set' : null} />
-          <StatTile label="AVG SCORE" value={scoring.average === null ? '—' : scoring.average.toFixed(1)} note={scoring.average === null || par === undefined ? null : formatScoreToPar(Math.round((scoring.average - par) * 10) / 10)} />
-          <StatTile label="BEST" value={scoring.best ?? '—'} note={scoring.best === null || par === undefined ? null : formatScoreToPar(scoring.best - par)} />
+          <StatTile label="AVG SCORE" value={scoring.average === null ? '—' : scoring.average.toFixed(1)} note={scoring.averageToPar === null ? null : formatScoreToPar(Math.round(scoring.averageToPar * 10) / 10)} />
+          <StatTile label="BEST" value={scoring.best ?? '—'} note={scoring.bestToPar === null ? null : formatScoreToPar(scoring.bestToPar)} />
         </View>
         {results.length > 0 && <View style={styles.resultChips}>{results.map((result) => <View key={result.label} style={styles.resultChip}><Text style={styles.resultChipText}>{result.count} {result.label}{result.count === 1 || result.label.endsWith('+') || result.label.endsWith('better') ? '' : 's'}</Text></View>)}</View>}
 
@@ -76,14 +78,14 @@ export const HoleHistoryScreen = () => {
           {(Object.keys(THROW_TYPE_COLORS) as ThrowType[]).map((type) => <Text key={type}><Text style={{ color: THROW_TYPE_COLORS[type] }}>●</Text> {type}   </Text>)}
         </Text>
 
-        <StatsSummary title="Throws on this hole" rounds={visits.map((visit) => ({ shots: visit.shots, layouts: course?.layouts ?? [] }))} />
+        <StatsSummary title="Throws on this hole" rounds={visits.map((visit) => ({ shots: visit.shots, layouts: roundLayouts(course?.layouts ?? [], visit.session.pars) }))} />
 
         <Text style={styles.statsHeading}>Each time you played it</Text>
         {visits.map((visit) => <Pressable key={visit.session.id} onPress={() => openRound(visit.session.id)} style={styles.courseItem} accessibilityRole="button">
           <View style={styles.courseItemCopy}>
             <Text style={styles.courseItemName}>{formatSessionDate(visit.session)}</Text>
             <Text style={styles.courseItemMeta}>{[
-              `${visit.strokes} ${visit.strokes === 1 ? 'stroke' : 'strokes'}${par === undefined ? '' : ` (${formatScoreToPar(visit.strokes - par)})`}`,
+              `${visit.strokes} ${visit.strokes === 1 ? 'stroke' : 'strokes'}${visitPar(visit, par) === undefined ? '' : ` (${formatScoreToPar(visit.strokes - visitPar(visit, par)!)})`}`,
               visit.shots.map((shot) => shot.disc || 'No disc').join(' › '),
             ].join(' · ')}</Text>
           </View>

@@ -163,7 +163,8 @@ test('plays a round: pick the course, log a throw into the basket, end, and see 
   await waitFor(() => {
     const history = stored<SessionArchive[]>(KEYS.history);
     expect(history).toHaveLength(1);
-    expect(history?.[0]).toMatchObject({ courseId: 'course-1', mode: 'Round' });
+    // The pars it was played with, so later course edits don't rescore it.
+    expect(history?.[0]).toMatchObject({ courseId: 'course-1', mode: 'Round', pars: [3] });
   });
   await press('DONE');
   expect(await screen.findByText('Ready when you are.')).toBeTruthy();
@@ -485,6 +486,27 @@ test('a hole opens in 3D: the web page gets the hole, every round on it, and thi
   expect(message.hole3d).toMatchObject({ hole: 1, layout: { par: 3 }, selected: [pastRound.id] });
   // Newest first, each with its throws on this hole.
   expect(message.hole3d.rounds.map((round: { id: string; shots: unknown[] }) => [round.id, round.shots.length])).toEqual([[laterRound.id, 2], [pastRound.id, 2]]);
+});
+
+test('rounds from before pars were saved take the course pars, once', async () => {
+  // pastRound has no saved pars; hole 1 is a par 3 on the course.
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  await waitFor(() => {
+    const [saved] = stored<SessionArchive[]>(KEYS.history)!;
+    expect(saved.pars).toEqual([3]);
+    expect(saved.updatedAt).toBeGreaterThan(pastRound.updatedAt!);
+  });
+});
+
+test('a round is scored against the par it was played with, not a changed course', async () => {
+  // Played when hole 1 was a par 4; the course now says 3. 2 strokes is still two under.
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [{ ...pastRound, pars: [4] }] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  expect(await screen.findByText('FINAL SCORE')).toBeTruthy();
+  expect(screen.getAllByText('-2').length).toBeGreaterThan(0);
+  expect(screen.queryByText('-1')).toBeNull();
 });
 
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {

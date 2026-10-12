@@ -21,6 +21,9 @@ export type SessionArchive = {
   updatedAt?: number; shared?: boolean; shareToken?: string | null;
   // Which of the course's layouts was played; absent means the main layout.
   layoutId?: string; layoutName?: string;
+  // The par of each hole when the round was played (index 0 is hole 1; null for no par), so editing
+  // the course later doesn't rescore it. Rounds saved before this have none and use the course's.
+  pars?: (number | null)[];
   // A round still being played on some device, synced so it isn't lost with the phone; it's left
   // out of stats until it's finished.
   inProgress?: boolean;

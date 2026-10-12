@@ -70,6 +70,9 @@ export const roundRecord = z.object({
   layoutId: z.string().max(100).optional(),
   // Still being played; older app versions don't send it.
   inProgress: z.boolean().optional(),
+  // The par of each hole when it was played (index 0 is hole 1; null for none). Older app versions
+  // don't send it, and such rounds are scored against the course's current pars.
+  pars: z.array(z.number().int().min(1).max(10).nullable()).max(100).optional(),
   shots: z.array(shot).max(3000),
   shared: z.boolean().default(false),
 });

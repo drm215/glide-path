@@ -327,3 +327,25 @@ export const discThrows = (rounds, disc, { types = [] } = {}) => {
     .map((shot) => ({ round, shot, feet: reliable.has(shot) ? shot.feet : null })));
   return [...entries.filter((entry) => entry.feet !== null).sort((a, b) => b.feet - a.feet), ...entries.filter((entry) => entry.feet === null)];
 };
+
+// The pars a round was played with, saved with it so later course edits don't rescore it: one
+// entry per hole (index 0 is hole 1), null for a hole with no par. Each played hole takes its par
+// from `layouts`; pars already saved (`saved`, say for a resumed round) are kept. Undefined when
+// no played hole has a par.
+export const parsToSave = (shots, layouts = [], saved = []) => {
+  const played = new Set(shots.map((shot) => shot.hole));
+  const count = Math.max(0, ...played, saved?.length ?? 0);
+  const pars = Array.from({ length: count }, (_, index) => saved?.[index] ?? (played.has(index + 1) ? layouts[index]?.par ?? null : null));
+  return pars.some((par) => par !== null) ? pars : undefined;
+};
+
+// A round's hole layouts with its saved pars (see parsToSave) in place of the course's current
+// ones; holes without a saved par keep the course's. Tees and baskets still come from the course.
+export const roundLayouts = (layouts = [], pars) => {
+  if (!pars?.length) return layouts;
+  return Array.from({ length: Math.max(layouts.length, pars.length) }, (_, index) => {
+    const layout = layouts[index];
+    const par = pars[index];
+    return par === null || par === undefined ? layout : { tee: null, basket: null, ...layout, par };
+  });
+};

@@ -7,6 +7,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode,
 import { Alert, AppState } from 'react-native';
 import { ApiError, syncWithServer, type PublicCourse } from '../../lib/api';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from '../../lib/layouts';
+import { parsToSave } from '../../lib/round-stats';
 import { placeMadeThrowsAtBasket } from '../../lib/rounds';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, sendInBatches, type SyncAccount, type SyncData } from '../../lib/sync';
 import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, HoleLayout, SessionArchive, Shot, ThrowStyle, Tombstone } from '../../lib/types';
@@ -126,6 +127,13 @@ const useAppState = () => {
         const fixed = placeMadeThrowsAtBasket(session.shots, layoutsFor(session.courseId, session.layoutId));
         return fixed === session.shots ? session : { ...session, shots: fixed, updatedAt: nowMs() };
       };
+      // Rounds finished before pars were saved with them take their course's current pars, once, so
+      // later course edits no longer rescore them. The fresh edit time syncs them everywhere.
+      const savePars = (session: SessionArchive): SessionArchive => {
+        if (session.pars || session.inProgress) return session;
+        const pars = parsToSave(session.shots, layoutsFor(session.courseId, session.layoutId));
+        return pars ? { ...session, pars, updatedAt: nowMs() } : session;
+      };
 
       let savedRound = undefined as SavedRound | undefined;
       read<SavedRound>(STORAGE_KEY, (saved) => {
@@ -155,7 +163,7 @@ const useAppState = () => {
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(storedHistory));
       }
       read<SessionArchive[]>(HISTORY_KEY, (value) => { storedHistory = value; });
-      setHistory(fixMadeThrows ? storedHistory.map(fixSession) : storedHistory);
+      setHistory((fixMadeThrows ? storedHistory.map(fixSession) : storedHistory).map(savePars));
 
       let savedBagCount = 0;
       read<Disc[]>(BAG_KEY, (value) => {
@@ -350,6 +358,8 @@ const useAppState = () => {
         id, mode, courseName: selectedCourse?.name ?? 'Practice area', courseId: selectedCourse?.id,
         layoutId: selectedCourse?.layoutId, layoutName: selectedCourse?.layoutLabel,
         shots, updatedAt: nowMs(), shared: resumedFrom?.shared, shareToken: resumedFrom?.shareToken,
+        // The pars it was played with; a resumed round keeps the ones it already had.
+        pars: parsToSave(shots, selectedCourse?.layouts, resumedFrom?.pars),
       };
       setHistory((current) => [...current.filter((session) => session.id !== id), record]);
     } else if (activeId && activeEditedAt && latestSync.current.account) {
@@ -401,7 +411,7 @@ const useAppState = () => {
       const lastHoleDone = session.shots.some((shot) => shot.hole === lastHole && shot.lie === 'Basket');
       const nextHole = lastHoleDone && lastHole < holeCount ? lastHole + 1 : lastHole;
       setHole(nextHole);
-      setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken });
+      setResumedFrom({ id: session.id, shared: session.shared, shareToken: session.shareToken, pars: session.pars });
       setActiveId(session.id);
       setSessionActive(true);
       setRoundMessage(`Resumed on hole ${nextHole}.`);

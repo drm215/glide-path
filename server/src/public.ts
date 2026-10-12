@@ -101,14 +101,23 @@ export const getPublishedCourse = async (db: Queryable, uid: string) => {
 };
 
 type SharedRoundRow = {
-  course_name: string; mode: string; shots: unknown[]; updated_at: string; display_name: string; layout_id: string | null;
+  course_name: string; mode: string; shots: unknown[]; updated_at: string; display_name: string; layout_id: string | null; pars: (number | null)[] | null;
   layouts: Layout[] | null; hole_count: number | null; course_uid: string | null; course_published: boolean | null;
   layout_name: string | null; extra_layouts: ExtraLayout[] | null;
 };
 
+// Matches roundLayouts in public/js/round-stats.js: a round's saved pars replace the course's.
+const withRoundPars = (layouts: Layout[], pars: (number | null)[] | null): Layout[] => (pars?.length
+  ? Array.from({ length: Math.max(layouts.length, pars.length) }, (_, index) => {
+    const par = pars[index];
+    const layout = layouts[index] ?? { tee: null, basket: null };
+    return par === null || par === undefined ? layout : { ...layout, par };
+  })
+  : layouts);
+
 export const getSharedRound = async (db: Queryable, shareToken: string) => {
   const { rows } = await db.query<SharedRoundRow>(
-    `SELECT r.course_name, r.mode, r.shots, r.updated_at, r.layout_id, u.display_name,
+    `SELECT r.course_name, r.mode, r.shots, r.updated_at, r.layout_id, r.pars, u.display_name,
             c.layouts, c.hole_count, c.uid AS course_uid, c.published AS course_published, c.layout_name, c.extra_layouts
      FROM rounds r
      JOIN users u ON u.id = r.owner_id
@@ -128,8 +137,9 @@ export const getSharedRound = async (db: Queryable, shareToken: string) => {
     playedBy: row.display_name,
     updatedAt: Number(row.updated_at),
     layoutName: extra ? extra.name : row.extra_layouts?.length ? (row.layout_name || 'Main') : null,
-    // Sharing a round shares the hole layouts it was played on, so its map and pars can be shown.
-    layouts: layoutMissing ? [] : extra ? extra.layouts : row.layouts ?? [],
+    // Sharing a round shares the hole layouts it was played on, so its map and pars can be shown,
+    // with the pars it was played with in place of the course's current ones.
+    layouts: withRoundPars(layoutMissing ? [] : extra ? extra.layouts : row.layouts ?? [], row.pars),
     courseUid: row.course_published ? row.course_uid : null,
   };
 };

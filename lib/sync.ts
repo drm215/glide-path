@@ -35,7 +35,7 @@ type CourseRecord = {
 type RoundRecord = {
   clientId: string; updatedAt: number; deleted?: boolean; courseClientId?: string; courseName: string;
   mode: 'Round' | 'Practice'; shots: SessionArchive['shots']; shared: boolean; shareToken?: string | null; uid?: string;
-  layoutId?: string; inProgress?: boolean;
+  layoutId?: string; inProgress?: boolean; pars?: (number | null)[];
 };
 type BagRecord = { updatedAt: number; discs: Disc[]; details: Record<Disc, DiscInfo>; weights?: Record<Disc, number> };
 
@@ -121,6 +121,7 @@ const roundToRecord = (session: SessionArchive): RoundRecord => ({
   shared: Boolean(session.shared),
   layoutId: session.layoutId,
   inProgress: Boolean(session.inProgress),
+  pars: session.pars,
 });
 
 // A bag saved before sync existed has no edit time, so it would never upload. Stamping it
@@ -207,6 +208,7 @@ const roundFromRecord = (record: RoundRecord): SessionArchive => ({
   updatedAt: record.updatedAt,
   layoutId: record.layoutId ?? undefined,
   inProgress: record.inProgress || undefined,
+  pars: record.pars ?? undefined,
 });
 
 // `activeRoundId` is the round being played here: its own upload coming back isn't added to history.
