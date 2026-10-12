@@ -163,11 +163,11 @@ export const renderRoundPage = (round: {
 <h1>${courseName}</h1>
 <p class="meta">${escapeHtml(played)}${round.layoutName ? ` · ${escapeHtml(round.layoutName)} layout` : ''} · ${holes.length} ${holes.length === 1 ? 'hole' : 'holes'}</p>
 ${scoreStripHtml(round.shots, round.layouts)}
-<div id="map" class="map" role="img" aria-label="Satellite map of the selected hole and its throws"></div>
-<p class="map-note">Tap a hole in the scorecard to see where each throw landed.</p>
-<p class="map-legend"><span class="legend-dot good"></span>Good<span class="legend-dot fair"></span>Fair<span class="legend-dot poor"></span>Poor<span class="legend-dot"></span>Not rated<span class="legend-dot ob"></span>OB</p>
 ${scorecardHtml(round.shots, round.layouts)}
 ${scorecardLegendHtml()}
+<div id="map" class="map" role="img" aria-label="Satellite map of the selected hole and its throws"></div>
+<p class="map-note">Tap a hole in the scorecard above to see where each throw landed.</p>
+<p class="map-legend"><span class="legend-dot good"></span>Good<span class="legend-dot fair"></span>Fair<span class="legend-dot poor"></span>Poor<span class="legend-dot"></span>Not rated<span class="legend-dot ob"></span>OB</p>
 <div id="round-summary"></div>
 <h2>Throw by throw</h2>
 ${holes.map((item) => `<h3>Hole ${String(item.hole).padStart(2, '0')}</h3><ol class="throws">${item.shots.map((shot) => `<li>${escapeHtml(throwDetail(shot))}</li>`).join('')}</ol>`).join('')}`;

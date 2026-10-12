@@ -121,5 +121,6 @@ describe('website', () => {
     assert.equal(pageData(page.body).shots[0].disc, hostile, 'embedded data round-trips exactly');
     assert.match(page.body, /property="og:description" content="Scored 1 on/);
     assert.match(page.body, /<div id="round-summary"><\/div>/, 'slot for the round summary');
+    assert.ok(page.body.indexOf('class="scorecard"') < page.body.indexOf('id="map"'), 'the map comes after the scorecard');
   });
 });
