@@ -226,3 +226,11 @@ a.disc-card { display: block; color: inherit; text-decoration: none; }
 a.disc-card:hover { border-color: var(--green); }
 .disc-throw { display: flex; align-items: center; gap: 14px; }
 .disc-throw-feet { flex: 0 0 72px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* Moving throws, tees and baskets on the map. */
+.map-edit { margin: 8px 0 16px; }
+.map-edit .button[aria-pressed="true"] { background: var(--green); color: #fff; }
+.map-edit .map-note { margin: 8px 0 0; }
+.leaflet-marker-draggable { cursor: grab; }
+/* A draggable tee or basket pin, centred on its point whatever its label's width. */
+.hole-pin { white-space: nowrap; transform: translate(-50%, -50%); }

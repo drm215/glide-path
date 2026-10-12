@@ -455,3 +455,26 @@ describe('pars saved with a round', () => {
     assert.equal(roundScore([{ hole: 1, lie: 'Fairway' }, { hole: 1, lie: 'Basket' }], layouts).toPar, -2);
   });
 });
+
+describe('moveThrow', () => {
+  test('moves a throw to a spot placed on the map and remeasures it and the next throw', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { moveThrow, placedPoint } = await import('../public/js/round-stats.js');
+    const tee = { latitude: 40, longitude: -75 };
+    const foot = 1 / 364_000;
+    const shots = [
+      // Saved 120 ft off with a poor GPS fix (±40 m), so its distance didn't count.
+      { hole: 1, type: 'Drive', disc: 'D', feet: 420, lie: 'Fairway', latitude: 40 + 420 * foot, longitude: -75, accuracy: 40, altitude: 99 },
+      { hole: 1, type: 'Putt', disc: 'P', feet: 50, lie: 'Basket', latitude: 40 + 350 * foot, longitude: -75 },
+      { hole: 2, type: 'Drive', disc: 'D', feet: 280, lie: 'Fairway', latitude: 41, longitude: -75 },
+    ];
+    const moved = moveThrow(shots, 0, 40 + 300 * foot, -75, tee);
+    assert.equal(moved[0].latitude, 40 + 300 * foot);
+    assert.equal(moved[0].accuracy, null, 'placed by hand: no GPS accuracy to doubt');
+    assert.equal(moved[0].altitude, null);
+    assert.ok(Math.abs(moved[0].feet - 300) <= 1, `drive is now about 300 ft (${moved[0].feet})`);
+    assert.ok(Math.abs(moved[1].feet - 50) <= 1, `the putt is remeasured from the moved drive (${moved[1].feet})`);
+    assert.equal(moved[2], shots[2], 'other holes are untouched');
+    assert.deepEqual(placedPoint(40, -75, 123), { latitude: 40, longitude: -75, accuracy: null, altitude: null, timestamp: 123 });
+  });
+});

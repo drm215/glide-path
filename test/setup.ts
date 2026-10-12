@@ -58,11 +58,12 @@ jest.mock('expo-keep-awake', () => ({
   deactivateKeepAwake: jest.fn(async () => undefined),
 }));
 
-// Maps render as plain views; their contents aren't under test.
+// Maps render as plain views. Markers keep their props (testID, onDragEnd) so a test can find one
+// and drop it somewhere; the rest of a map's contents aren't under test.
 jest.mock('react-native-maps', () => {
   const { View } = jest.requireActual('react-native');
   const Stub = ({ children }: { children?: unknown }) => children ?? null;
-  return { __esModule: true, default: View, Marker: Stub, Polyline: Stub, Circle: Stub };
+  return { __esModule: true, default: View, Marker: View, Polyline: Stub, Circle: Stub };
 });
 
 // The 3D hole view's web page: a plain view. `__last` holds the latest props (so a test can send

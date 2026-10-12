@@ -3,6 +3,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { placedPoint } from '../../lib/round-stats';
 import type { GpsPoint } from '../../lib/types';
 import { styles } from '../theme';
 import { PAR_OPTIONS } from '../constants';
@@ -70,6 +71,18 @@ export const HoleWizardScreen = () => {
     } catch {
       setGpsMessage('Could not find your location. Try again outdoors.');
     }
+  };
+
+  // A tee or basket dragged on the map, to fix a poor GPS save.
+  const movePoint = (target: 'tee' | 'basket', coordinate: { latitude: number; longitude: number }) => {
+    if (!selectedCourse) return;
+    const point = placedPoint(coordinate.latitude, coordinate.longitude, Date.now());
+    updateCourseLayout(selectedCourse.id, selectedCourse.layoutId, (layout) => {
+      const layouts = fullHoleLayouts(layout);
+      layouts[builderHole - 1] = { ...(layouts[builderHole - 1] ?? { tee: null, basket: null }), [target]: point };
+      return { ...layout, layouts };
+    });
+    setGpsMessage(`${target === 'tee' ? 'Tee box' : 'Basket'} moved on the map.`);
   };
 
   const saveCoursePoint = async (target: 'tee' | 'basket') => {
@@ -166,14 +179,14 @@ export const HoleWizardScreen = () => {
       <View style={styles.wizardProgress}><View><Text style={styles.editorHoleName}>HOLE {String(builderHole).padStart(2, '0')} OF {String(selectedCourse?.holes ?? 0).padStart(2, '0')}</Text><Text style={[styles.mapProgress, styles.wizardMappedCount]}>{mappedHoleCount}/{selectedCourse?.holes ?? 0} MAPPED</Text></View>{selectedCourse && <Pressable onPress={() => deleteHole(selectedCourse, builderHole, () => setBuilderHole(Math.max(1, builderHole - 1)))} accessibilityRole="button" accessibilityLabel={`Delete hole ${builderHole}`} style={styles.deleteHoleButton}><Text style={styles.deleteButtonText}>DELETE HOLE</Text></Pressable>}</View>
       <View style={styles.satelliteFrame} onLayout={(event) => setMapViewportWidth(event.nativeEvent.layout.width)}>
         {mapRegion ? <MapView style={styles.satelliteMap} mapType="satellite" region={mapRegion} onRegionChangeComplete={setMapRegion} showsUserLocation={locationAllowed} showsMyLocationButton={false}>
-          {editorHoleLayout?.tee && <Marker coordinate={editorHoleLayout.tee} title={`Hole ${builderHole} tee box`} description={`GPS accuracy ${editorHoleLayout.tee.accuracy ?? 'unknown'} meters`} pinColor="#1d684c" />}
+          {editorHoleLayout?.tee && <Marker testID="tee-marker" coordinate={editorHoleLayout.tee} title={`Hole ${builderHole} tee box`} description={editorHoleLayout.tee.accuracy === null ? 'Placed on the map' : `GPS accuracy ${editorHoleLayout.tee.accuracy ?? 'unknown'} meters`} pinColor="#1d684c" draggable onDragEnd={(event) => movePoint('tee', event.nativeEvent.coordinate)} />}
           {editorHoleLayout?.basket && <BasketCircles basket={editorHoleLayout.basket} />}
-          {editorHoleLayout?.basket && <Marker coordinate={editorHoleLayout.basket} title={`Hole ${builderHole} basket`} description={`GPS accuracy ${editorHoleLayout.basket.accuracy ?? 'unknown'} meters`} pinColor="#d77d42" />}
+          {editorHoleLayout?.basket && <Marker testID="basket-marker" coordinate={editorHoleLayout.basket} title={`Hole ${builderHole} basket`} description={editorHoleLayout.basket.accuracy === null ? 'Placed on the map' : `GPS accuracy ${editorHoleLayout.basket.accuracy ?? 'unknown'} meters`} pinColor="#d77d42" draggable onDragEnd={(event) => movePoint('basket', event.nativeEvent.coordinate)} />}
           {editorHoleLayout?.tee && editorHoleLayout.basket && <Polyline coordinates={[editorHoleLayout.tee, editorHoleLayout.basket]} strokeColor="#ffffff" strokeWidth={2} lineDashPattern={[6, 4]} />}
         </MapView> : <View style={styles.mapUnavailable}><Text style={styles.mapUnavailableTitle}>{mapLoading ? 'Finding your location…' : 'Map location unavailable'}</Text><Text style={styles.mapUnavailableText}>{gpsMessage || 'Enable location access to open the satellite map.'}</Text><Pressable onPress={recenterSatelliteMap} style={styles.recenterButton}><Text style={styles.recenterButtonText}>TRY AGAIN</Text></Pressable></View>}
         {mapRegion && <><View pointerEvents="none" style={styles.satelliteBadge}><Text style={styles.satelliteBadgeText}>SATELLITE</Text></View><Pressable onPress={recenterSatelliteMap} style={styles.recenterButton}><Text style={styles.recenterButtonText}>◎ RECENTER</Text></Pressable><View pointerEvents="none" style={styles.mapScaleBadge}><View style={[styles.mapScaleRule, { width: scaleBarWidth }]} /><Text style={styles.mapScaleLabel}>{scaleBarFeet} FT</Text><Text style={styles.mapScaleWidth}>VIEW ≈{Math.round(visibleMapWidthFeet)} FT WIDE</Text></View></>}
       </View>
-      <Text style={styles.mapInstruction}>Walk to each point. Save your GPS position when the blue location dot is at the tee or basket.</Text>
+      <Text style={styles.mapInstruction}>Walk to each point. Save your GPS position when the blue location dot is at the tee or basket. To fix a poor save, press and hold the tee or basket on the map and drag it.</Text>
       <View style={styles.captureButtons}>
         <Pressable onPress={() => saveCoursePoint('tee')} disabled={savingGpsTarget !== null} style={[styles.captureButton, editorHoleLayout?.tee && styles.captureButtonSaved, savingGpsTarget === 'tee' && styles.disabledButton]}><Text style={styles.captureButtonLabel}>TEE BOX</Text><Text style={styles.captureButtonValue}>{savingGpsTarget === 'tee' ? 'SAVING GPS…' : editorHoleLayout?.tee ? 'UPDATE LOCATION' : 'SAVE LOCATION'}</Text><Text style={styles.captureButtonCoords}>{formatSavedPoint(editorHoleLayout?.tee)}</Text></Pressable>
         <Pressable onPress={() => saveCoursePoint('basket')} disabled={savingGpsTarget !== null} style={[styles.captureButton, editorHoleLayout?.basket && styles.captureButtonSaved, savingGpsTarget === 'basket' && styles.disabledButton]}><Text style={styles.captureButtonLabel}>BASKET</Text><Text style={styles.captureButtonValue}>{savingGpsTarget === 'basket' ? 'SAVING GPS…' : editorHoleLayout?.basket ? 'UPDATE LOCATION' : 'SAVE LOCATION'}</Text><Text style={styles.captureButtonCoords}>{formatSavedPoint(editorHoleLayout?.basket)}</Text></Pressable>

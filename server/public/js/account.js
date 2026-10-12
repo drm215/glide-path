@@ -1,7 +1,7 @@
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
-import { discStats, discThrows, quality, roundLayouts } from './round-stats.js';
+import { discStats, discThrows, moveThrow, placedPoint, quality, roundLayouts } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -10,6 +10,8 @@ let token = null;
 try { token = localStorage.getItem(TOKEN_KEY); } catch { /* storage unavailable: stay signed out */ }
 let user = null;
 let data = null;
+// The newest server version downloaded, so a save only brings back what changed since.
+let syncCursor = 0;
 
 const saveToken = (value) => {
   token = value;
@@ -100,7 +102,8 @@ const renderOverview = () => {
   );
 };
 
-const renderRound = (round) => {
+// `hole` and `editing` keep the map where it was after a throw is moved.
+const renderRound = (round, { hole, editing = false } = {}) => {
   const score = roundScore(round);
   const layout = layoutFor(round);
   const course = courseFor(round);
@@ -108,6 +111,27 @@ const renderRound = (round) => {
   const holes = roundHoles(round);
   const scorecard = fromHtml(scorecardHtml(round.shots, holes)) ?? el('div', {});
   const mapEl = el('div', { class: 'map', role: 'img', 'aria-label': 'Satellite map of the selected hole and its throws' });
+  // Throws can be dragged to where they really landed, unless the round is still being played
+  // (the phone playing it owns it until it ends).
+  const moveStatus = el('p', { class: 'status', 'aria-live': 'polite' });
+  const moveNote = el('p', { class: 'map-note', hidden: !editing }, 'Drag a throw to where it really landed. Its distance and the next throw’s are re-measured and saved to your account.');
+  const moveButton = round.inProgress ? null : el('button', { class: 'button secondary', type: 'button', 'aria-pressed': String(editing), onclick: () => setMoving(moveButton.getAttribute('aria-pressed') !== 'true') }, 'Move throws');
+  const setMoving = (on) => {
+    moveButton.setAttribute('aria-pressed', String(on));
+    moveNote.hidden = !on;
+    shown?.setEditing(on);
+  };
+  const onMoveThrow = async (movedHole, index, latitude, longitude) => {
+    const positions = round.shots.flatMap((shot, position) => (shot.hole === movedHole ? [position] : []));
+    moveStatus.textContent = 'Saving…';
+    try {
+      const saved = await saveRecord('rounds', { ...round, shots: moveThrow(round.shots, positions[index], latitude, longitude, layout?.layouts?.[movedHole - 1]?.tee) });
+      keepScroll(() => renderRound(saved, { hole: movedHole, editing: true }));
+    } catch (error) {
+      moveStatus.textContent = `Couldn’t save the move: ${error.message}`;
+      shown?.setEditing(true);
+    }
+  };
   setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, [formatDate(roundDate(round)), round.mode === 'Practice' ? 'Practice' : null, round.inProgress ? 'In progress' : null].filter(Boolean).join(' · ')),
@@ -120,6 +144,7 @@ const renderRound = (round) => {
     mapEl,
     el('p', { class: 'map-note' }, 'Tap a hole in the scorecard above to see where each throw landed.'),
     throwLegend(),
+    moveButton ? el('div', { class: 'map-edit' }, moveButton, moveNote, moveStatus) : null,
     renderRoundSummary(round.shots, holes),
     el('h2', {}, 'Throw by throw'),
     score.holes.map((item) => [
@@ -128,7 +153,9 @@ const renderRound = (round) => {
       el('ol', { class: 'throws' }, item.shots.map((shot) => el('li', {}, throwDetail(shot)))),
     ]),
   );
-  const shown = setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard);
+  const shown = setUpRoundMap(mapEl, round.shots, layout?.layouts ?? [], scorecard, { firstHole: hole, onMoveThrow });
+  if (!shown) moveButton?.remove();
+  else if (editing) shown.setEditing(true);
   // The 3D view can add the other rounds played on the same course layout, starting with this one.
   const sameLayout = data.rounds
     .filter((other) => other.clientId === round.clientId || (!other.inProgress && courseFor(other) && courseFor(other) === course && (other.layoutId ?? MAIN_LAYOUT_ID) === (round.layoutId ?? MAIN_LAYOUT_ID)))
@@ -321,10 +348,11 @@ const renderDiscThrows = (disc, types, includePractice) => {
   render();
 };
 
-const renderCourse = (course) => {
+// `layoutIndex` and `editing` keep the view where it was after a tee or basket is moved.
+const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
   const layouts = layoutsOf(course);
   const mapEl = el('div', { class: 'map tall', role: 'img', 'aria-label': 'Satellite map of the course' });
-  const panels = layouts.map((layout, index) => el('section', { 'data-layout-panel': index, hidden: index > 0 },
+  const panels = layouts.map((layout, index) => el('section', { 'data-layout-panel': index, hidden: index !== layoutIndex },
     layouts.length > 1 ? el('h2', {}, `${layout.name} layout`) : null,
     el('table', {},
       el('thead', {}, el('tr', {}, ['HOLE', 'PAR', 'DISTANCE'].map((heading) => el('th', {}, heading)))),
@@ -332,9 +360,36 @@ const renderCourse = (course) => {
         el('td', {}, String(holeIndex + 1).padStart(2, '0')), el('td', {}, hole.par ?? '—'),
         el('td', {}, hole.tee && hole.basket ? `${Math.round(feetBetween(hole.tee, hole.basket))} ft` : '—')))))));
   const tabs = layouts.length > 1
-    ? el('div', { class: 'tabs', role: 'group', 'aria-label': 'Layouts' }, layouts.map((layout, index) => el('button', { type: 'button', 'aria-pressed': String(index === 0), onclick: () => show(index) }, layout.name)))
+    ? el('div', { class: 'tabs', role: 'group', 'aria-label': 'Layouts' }, layouts.map((layout, index) => el('button', { type: 'button', 'aria-pressed': String(index === layoutIndex), onclick: () => show(index) }, layout.name)))
     : null;
   const place = [course.details?.city, course.details?.state].filter(Boolean).join(', ');
+  // Tees and baskets can be dragged to fix a poor GPS save. It changes the course for every round
+  // played on it (and, when published, for everyone who added it from the directory).
+  let shownIndex = layoutIndex;
+  const moveStatus = el('p', { class: 'status', 'aria-live': 'polite' });
+  const moveNote = el('p', { class: 'map-note', hidden: !editing }, `Drag a tee or basket to where it really is. It’s saved to your account and changes the course for every round played on it${course.published ? ', and for everyone who added it from the course directory' : ''}.`);
+  const moveButton = el('button', { class: 'button secondary', type: 'button', 'aria-pressed': String(editing), onclick: () => setMoving(moveButton.getAttribute('aria-pressed') !== 'true') }, 'Move tees and baskets');
+  const setMoving = (on) => {
+    moveButton.setAttribute('aria-pressed', String(on));
+    moveNote.hidden = !on;
+    show(shownIndex, { refit: false });
+  };
+  const onMove = async (hole, kind, latitude, longitude) => {
+    const point = placedPoint(latitude, longitude, Date.now());
+    const movePoint = (holeLayouts) => holeLayouts.map((item, index) => (index === hole - 1 ? { ...item, [kind]: point } : item));
+    const layoutId = layouts[shownIndex].id;
+    const edited = layoutId === MAIN_LAYOUT_ID
+      ? { ...course, layouts: movePoint(course.layouts) }
+      : { ...course, extraLayouts: course.extraLayouts.map((extra) => (extra.id === layoutId ? { ...extra, layouts: movePoint(extra.layouts) } : extra)) };
+    moveStatus.textContent = 'Saving…';
+    try {
+      const saved = await saveRecord('courses', edited);
+      keepScroll(() => renderCourse(saved, { layoutIndex: shownIndex, editing: true }));
+    } catch (error) {
+      moveStatus.textContent = `Couldn’t save the move: ${error.message}`;
+      show(shownIndex, { refit: false });
+    }
+  };
   setChildren(signedInEl,
     back(),
     el('div', { class: 'eyebrow' }, ['Your course', place].filter(Boolean).join(' · ')),
@@ -344,20 +399,25 @@ const renderCourse = (course) => {
       : 'Private. Publish it from Course builder in the app to list it in the directory.'),
     tabs,
     mapEl,
+    el('div', { class: 'map-edit' }, moveButton, moveNote, moveStatus),
     panels,
   );
   const map = satelliteMap(mapEl);
   let drawn = null;
-  const show = (index) => {
+  const show = (index, { refit = true } = {}) => {
+    shownIndex = index;
     panels.forEach((panel, panelIndex) => { panel.hidden = panelIndex !== index; });
     tabs?.querySelectorAll('button').forEach((button, buttonIndex) => button.setAttribute('aria-pressed', String(buttonIndex === index)));
     if (!map) return;
     drawn?.group.remove();
-    drawn = drawHoles(map, layouts[index].layouts);
-    if (!fitTo(map, drawn.bounds)) map.setView([39.8, -98.6], 3);
+    drawn = drawHoles(map, layouts[index].layouts, { onMove: moveButton.getAttribute('aria-pressed') === 'true' ? onMove : undefined });
+    if (refit && !fitTo(map, drawn.bounds)) map.setView([39.8, -98.6], 3);
   };
-  if (!map) mapEl.remove();
-  show(0);
+  if (!map) {
+    mapEl.remove();
+    moveButton.parentElement.remove();
+  }
+  show(layoutIndex);
 };
 
 // One course's holes, by layout: how often each was played, and the average and best scores from
@@ -516,7 +576,30 @@ const downloadAll = async () => {
     all.bag = page.bag ?? all.bag;
     ({ cursor, more } = page);
   }
-  return all;
+  return { ...all, cursor };
+};
+
+// Uploads one edited course or round through sync, as the app does: the newest edit wins, and
+// phones pick it up on their next sync. `kind` is 'courses' or 'rounds'. Returns the saved record.
+const saveRecord = async (kind, record) => {
+  const edited = { ...record, updatedAt: Math.max(Date.now(), record.updatedAt + 1) };
+  const page = await api('/api/sync', { method: 'POST', token, body: { cursor: syncCursor, [kind]: [edited] } });
+  syncCursor = page.cursor;
+  // The reply has everything changed since the last download, this edit included.
+  for (const list of ['courses', 'rounds']) {
+    for (const item of page[list]) {
+      const rest = data[list].filter((existing) => existing.clientId !== item.clientId);
+      data[list] = item.deleted ? rest : [...rest, item];
+    }
+  }
+  return data[kind].find((item) => item.clientId === record.clientId) ?? edited;
+};
+
+// Redraws a view after a save without jumping back to the top of the page.
+const keepScroll = (render) => {
+  const top = window.scrollY;
+  render();
+  window.scrollTo(0, top);
 };
 
 const load = async () => {
@@ -528,6 +611,7 @@ const load = async () => {
     user = me.user;
     // A full download includes deletion markers; only live records are shown.
     data = { courses: synced.courses.filter((item) => !item.deleted), rounds: synced.rounds.filter((item) => !item.deleted), bag: synced.bag };
+    syncCursor = synced.cursor;
     route();
   } catch (error) {
     if (error.status === 401) {

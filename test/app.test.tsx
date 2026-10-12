@@ -509,6 +509,32 @@ test('a round is scored against the par it was played with, not a changed course
   expect(screen.queryByText('-1')).toBeNull();
 });
 
+test("a throw dragged on a past round's map moves there, and its hole is remeasured", async () => {
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
+  await renderApp(`/rounds/${pastRound.id}`);
+  await fireEvent.press(await screen.findByLabelText('Show map for hole 1'));
+  // The drive was logged about 73 ft short of the basket; drop it 30 ft short instead.
+  const drive = await screen.findByTestId('throw-marker-1-1');
+  await testing.act(async () => { drive.props.onDragEnd({ nativeEvent: { coordinate: { latitude: 40.001 - 30 / 364_000, longitude: -75 } } }); });
+  await waitFor(() => {
+    const [round] = stored<SessionArchive[]>(KEYS.history)!;
+    expect(round.shots[0]).toMatchObject({ latitude: 40.001 - 30 / 364_000, accuracy: null });
+    expect(Math.abs(round.shots[0].feet - 335)).toBeLessThanOrEqual(2);
+    // The putt is now measured from the moved drive.
+    expect(Math.abs(round.shots[1].feet - 30)).toBeLessThanOrEqual(1);
+    expect(round.updatedAt).toBeGreaterThan(pastRound.updatedAt!);
+  });
+});
+
+test('a tee dragged on the hole map is saved as placed by hand', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove] });
+  await renderApp('/courses/map');
+  const tee = await screen.findByTestId('tee-marker');
+  await testing.act(async () => { tee.props.onDragEnd({ nativeEvent: { coordinate: { latitude: 40.0001, longitude: -75.0001 } } }); });
+  expect(await screen.findByText('Tee box moved on the map.')).toBeTruthy();
+  await waitFor(() => expect(stored<Course[]>(KEYS.courses)![0].layouts![0].tee).toMatchObject({ latitude: 40.0001, longitude: -75.0001, accuracy: null }));
+});
+
 test('a link to a round opens its summary, and its back button goes to the rounds list', async () => {
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   await renderApp(`/rounds/${pastRound.id}`);

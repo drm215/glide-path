@@ -3,7 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { roundShareUrl } from '../../lib/api';
-import { holeBreakdown, roundLayouts } from '../../lib/round-stats';
+import { holeBreakdown, moveThrow, roundLayouts } from '../../lib/round-stats';
 import { courseLayouts, withExistingLayout } from '../../lib/layouts';
 import type { Shot } from '../../lib/types';
 import { GREEN, styles } from '../theme';
@@ -21,7 +21,7 @@ import { backTo, go, openHole3d, openHoleHistory } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const RoundDetailScreen = () => {
-  const { account, courses, deleteRound, history, resumeSession, setRoundShared } = useApp();
+  const { account, courses, deleteRound, history, resumeSession, setRoundShared, updateSessionShots } = useApp();
   const [expandedHole, setExpandedHole] = useState<number | null>(null);
   const [editingThrow, setEditingThrow] = useState<ThrowTarget | null>(null);
   const roundDetailScrollRef = useRef<ScrollView>(null);
@@ -63,6 +63,14 @@ export const RoundDetailScreen = () => {
     if (opening && scrollToSection && offset !== undefined) roundDetailScrollRef.current?.scrollTo({ y: Math.max(0, offset - 8), animated: true });
   };
 
+  // A throw dragged on the map: it moves there, and its hole's distances are remeasured.
+  const moveThrowTo = (shot: Shot, coordinate: { latitude: number; longitude: number }) => {
+    if (!viewedSession) return;
+    const index = viewedSession.shots.indexOf(shot);
+    if (index < 0) return;
+    updateSessionShots(viewedSession.id, (list) => moveThrow(list, index, coordinate.latitude, coordinate.longitude, viewedCourse?.layouts?.[shot.hole - 1]?.tee));
+  };
+
   const renderRoundHoleMap = (holeNumber: number, holeShots: Shot[]) => {
     const layout = viewedCourse?.layouts?.[holeNumber - 1];
     const throws = holeShots.flatMap((shot, index) => shot.latitude !== undefined && shot.longitude !== undefined ? [{ index, shot, coordinate: { latitude: shot.latitude, longitude: shot.longitude } }] : []);
@@ -76,7 +84,8 @@ export const RoundDetailScreen = () => {
         {layout?.tee && <Marker coordinate={layout.tee} title={`Hole ${holeNumber} tee box`} pinColor="#1d684c" />}
         {layout?.basket && <BasketCircles basket={layout.basket} />}
         {layout?.basket && <Marker coordinate={layout.basket} title={`Hole ${holeNumber} basket`} pinColor="#d77d42" />}
-        {throws.map((item) => <Marker key={`${item.index}-${item.coordinate.latitude}`} coordinate={item.coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} title={`Throw ${item.index + 1}`} description={formatThrowDetail(item.shot)}><View style={[styles.shotMarker, item.shot.lie === 'OB' && styles.obMarker]}><Text style={styles.shotPinText}>{item.index + 1}</Text></View></Marker>)}
+        {/* Press and hold a throw to drag it where it really landed; its hole is remeasured. */}
+        {throws.map((item) => <Marker key={`${item.index}-${item.coordinate.latitude}-${item.coordinate.longitude}`} testID={`throw-marker-${holeNumber}-${item.index + 1}`} coordinate={item.coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} title={`Throw ${item.index + 1}`} description={formatThrowDetail(item.shot)} draggable onDragEnd={(event) => moveThrowTo(item.shot, event.nativeEvent.coordinate)}><View style={[styles.shotMarker, item.shot.lie === 'OB' && styles.obMarker]}><Text style={styles.shotPinText}>{item.index + 1}</Text></View></Marker>)}
       </MapView>
       {!viewedCourse && <View pointerEvents="none" style={styles.boardCaption}><Text style={styles.boardCaptionText}>COURSE OR LAYOUT DELETED · NO TEE OR BASKET</Text></View>}
     </View>;
@@ -123,7 +132,7 @@ export const RoundDetailScreen = () => {
         {viewedSession.mode === 'Practice' && <Text style={styles.mapInstruction}>Practice session</Text>}
         <StatsSummary title="Round summary" rounds={[{ shots: viewedSession.shots, layouts: viewedLayouts }]} />
         <Text style={[styles.sectionTitle, styles.throwByThrowTitle]}>Throw by throw</Text>
-        <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it.</Text>
+        <Text style={styles.mapInstruction}>Tap a hole to see where each throw was logged, or a throw to edit or delete it. On a hole’s map, press and hold a throw to drag it where it really landed.</Text>
         {viewedHoles.map((item) => <View key={item.hole} style={styles.roundHole} onLayout={(event) => { holeSectionOffsets.current[item.hole] = event.nativeEvent.layout.y; }}>
           <Pressable onPress={() => toggleRoundHoleMap(item.hole)} style={styles.roundHoleHeader} accessibilityRole="button" accessibilityState={{ expanded: expandedHole === item.hole }}>
             <Text style={styles.roundHoleTitle}>Hole {String(item.hole).padStart(2, '0')} <Text style={styles.roundHoleMapToggle}>{expandedHole === item.hole ? '− MAP' : '+ MAP'}</Text></Text>

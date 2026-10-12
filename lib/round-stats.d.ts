@@ -1,5 +1,5 @@
 // Types for round-stats.js, the stats code shared with the website.
-import type { HoleLayout, Shot } from './types';
+import type { GpsPoint, HoleLayout, Shot } from './types';
 
 export type GroupStats = { label: string; count: number; averageFeet: number | null; longestFeet: number | null; averageQuality: number | null };
 
@@ -91,3 +91,8 @@ export declare function discThrows<R extends StatsRound>(rounds: R[], disc: stri
 
 export declare function parsToSave(shots: Pick<Shot, 'hole'>[], layouts?: StatsRound['layouts'], saved?: (number | null)[]): (number | null)[] | undefined;
 export declare function roundLayouts(layouts: StatsRound['layouts'] | undefined, pars: (number | null)[] | undefined): (HoleLayout | null | undefined)[];
+
+type Point = { latitude: number; longitude: number };
+export declare function remeasureHole(shots: Shot[], hole: number, tee: Point | null | undefined): Shot[];
+export declare function placedPoint(latitude: number, longitude: number, now: number): GpsPoint;
+export declare function moveThrow(shots: Shot[], index: number, latitude: number, longitude: number, tee: Point | null | undefined): Shot[];

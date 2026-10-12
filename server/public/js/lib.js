@@ -102,14 +102,30 @@ export const satelliteMap = (container) => {
 
 const cssColor = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+// A tee or basket that can be dragged to a new spot (when editing a course).
+const holePin = (point, kind, hole, onMove) => L.marker(latLng(point), {
+  draggable: true,
+  title: `Drag to move hole ${hole}'s ${kind}`,
+  // Anchored at its top-left corner; the pin centres itself on the point (see .hole-pin in styles.css).
+  icon: L.divIcon({ className: '', html: `<div class="hole3d-pin hole-pin ${kind}">${kind === 'tee' ? `Tee ${hole}` : `Basket ${hole}`}</div>`, iconSize: null, iconAnchor: [0, 0] }),
+}).on('dragend', (event) => {
+  const { lat, lng } = event.target.getLatLng();
+  onMove(hole, kind, lat, lng);
+});
+
 // Draws each mapped hole's tee, basket and tee-to-basket line; returns the layer and its bounds.
-export const drawHoles = (map, layouts, { only } = {}) => {
+// With `onMove`, the tee and basket are pins that can be dragged: onMove(hole, 'tee' | 'basket',
+// latitude, longitude) runs when one is dropped.
+export const drawHoles = (map, layouts, { only, onMove } = {}) => {
   const group = L.layerGroup();
   const bounds = [];
   layouts.forEach((layout, index) => {
     const hole = index + 1;
     if (!layout || (only !== undefined && hole !== only)) return;
-    if (layout.tee) {
+    if (layout.tee && onMove) {
+      holePin(layout.tee, 'tee', hole, onMove).addTo(group);
+      bounds.push(latLng(layout.tee));
+    } else if (layout.tee) {
       L.circleMarker(latLng(layout.tee), { radius: 7, color: '#fff', weight: 2, fillColor: '#1d684c', fillOpacity: 1 })
         .bindTooltip(`${hole}`, { permanent: true, direction: 'top', offset: [0, -8], className: 'hole-label' })
         .bindPopup(`Hole ${hole} tee${layout.par ? ` · par ${layout.par}` : ''}`)
@@ -119,9 +135,12 @@ export const drawHoles = (map, layouts, { only } = {}) => {
     if (layout.basket) {
       // C1 (10 m) and C2 (20 m) putting circles.
       [20, 10].forEach((radius) => L.circle(latLng(layout.basket), { radius, color: '#fff', weight: 1.5, opacity: 0.8, fillColor: '#fff', fillOpacity: 0.08, interactive: false }).addTo(group));
-      L.circleMarker(latLng(layout.basket), { radius: 6, color: '#fff', weight: 2, fillColor: '#d77d42', fillOpacity: 1 })
-        .bindPopup(`Hole ${hole} basket`)
-        .addTo(group);
+      if (onMove) holePin(layout.basket, 'basket', hole, onMove).addTo(group);
+      else {
+        L.circleMarker(latLng(layout.basket), { radius: 6, color: '#fff', weight: 2, fillColor: '#d77d42', fillOpacity: 1 })
+          .bindPopup(`Hole ${hole} basket`)
+          .addTo(group);
+      }
       bounds.push(latLng(layout.basket));
     }
     if (layout.tee && layout.basket) {
@@ -169,8 +188,9 @@ export const segmentLabels = (shots, tee) => throwSegments(shots, tee)
     `${shot.feet > 0 ? shot.feet : Math.round(feetBetween(from, to))} ft`,
   ]);
 
-// Numbered throw markers joined from the tee, as in the app.
-export const drawThrows = (map, shots, tee) => {
+// Numbered throw markers joined from the tee, as in the app. With `onMove`, the markers can be
+// dragged: onMove(index, latitude, longitude) runs when one is dropped (`index` into `shots`).
+export const drawThrows = (map, shots, tee, { onMove } = {}) => {
   const group = L.layerGroup();
   const bounds = tee ? [latLng(tee)] : [];
   // Lines first, so markers and labels draw on top of them.
@@ -182,11 +202,18 @@ export const drawThrows = (map, shots, tee) => {
     if (shot.latitude === undefined || shot.longitude === undefined) return;
     const point = [shot.latitude, shot.longitude];
     bounds.push(point);
-    L.marker(point, {
+    const marker = L.marker(point, {
       icon: L.divIcon({ className: '', html: `<div class="${throwMarkerClass(shot)}">${index + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
-      title: `Throw ${index + 1}`,
+      title: onMove ? `Drag to move throw ${index + 1}` : `Throw ${index + 1}`,
+      draggable: Boolean(onMove),
     // Disc names are user text, so the popup gets a text node rather than an HTML string.
     }).bindPopup(el('span', {}, `Throw ${index + 1}: ${throwDetail(shot)}`)).addTo(group);
+    if (onMove) {
+      marker.on('dragend', (event) => {
+        const { lat, lng } = event.target.getLatLng();
+        onMove(index, lat, lng);
+      });
+    }
   });
   for (const [midpoint, text] of segmentLabels(shots, tee)) {
     // Text is built from numbers only, so it's safe as HTML.
@@ -228,9 +255,11 @@ export const fitTo = (map, bounds, fallbackZoom = 18) => {
 };
 
 // Shows one hole of a round at a time: its tee and basket plus each logged throw.
-// Rows or cells with data-hole under `rowsRoot` switch the hole. Returns { map, first } (the
-// hole shown first), or null when there's no map to show.
-export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) => {
+// Rows or cells with data-hole under `rowsRoot` switch the hole. `firstHole` picks the hole shown
+// first. With `onMoveThrow`, setEditing(true) makes the throws draggable: onMoveThrow(hole, index,
+// latitude, longitude) runs when one is dropped (`index` among that hole's throws). Returns
+// { map, first, hole(), setEditing }, or null when there's no map to show.
+export const setUpRoundMap = (container, shots, layouts, rowsRoot = document, { firstHole, onMoveThrow } = {}) => {
   const map = satelliteMap(container);
   if (!map) {
     container?.remove();
@@ -238,19 +267,23 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
   }
   const holes = [...new Set(shots.map((shot) => shot.hole))].sort((a, b) => a - b);
   let layers = [];
+  let current = null;
+  let editing = false;
 
   const showHole = (hole) => {
+    current = hole;
     layers.forEach((layer) => layer.remove());
     const layout = layouts[hole - 1];
     const course = drawHoles(map, layouts, { only: hole });
-    const throws = drawThrows(map, shots.filter((shot) => shot.hole === hole), layout?.tee ?? null);
+    const onMove = editing && onMoveThrow ? (index, latitude, longitude) => onMoveThrow(hole, index, latitude, longitude) : undefined;
+    const throws = drawThrows(map, shots.filter((shot) => shot.hole === hole), layout?.tee ?? null, { onMove });
     layers = [course.group, throws.group];
     rowsRoot.querySelectorAll('[data-hole]').forEach((row) => row.classList.toggle('active', Number(row.dataset.hole) === hole));
     if (!fitTo(map, [...course.bounds, ...throws.bounds])) map.setView([39.8, -98.6], 3);
   };
 
   // Open on the first hole that has anything to draw.
-  const first = holes.find((hole) => layouts[hole - 1]?.tee || shots.some((shot) => shot.hole === hole && shot.latitude !== undefined));
+  const first = holes.includes(firstHole) ? firstHole : holes.find((hole) => layouts[hole - 1]?.tee || shots.some((shot) => shot.hole === hole && shot.latitude !== undefined));
   if (first === undefined) {
     container.remove();
     return null;
@@ -262,5 +295,9 @@ export const setUpRoundMap = (container, shots, layouts, rowsRoot = document) =>
     showHole(Number(row.dataset.hole));
     container.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
-  return { map, first };
+  const setEditing = (on) => {
+    editing = on;
+    showHole(current);
+  };
+  return { map, first, hole: () => current, setEditing };
 };

@@ -1,4 +1,5 @@
 // Round data helpers shared by the app and its tests. Pure functions only.
+import { remeasureHole } from './round-stats.js';
 import type { Disc, DiscInfo, GpsPoint, HoleLayout, Shot, ThrowStyle, ThrowType } from './types';
 
 type Point = Pick<GpsPoint, 'latitude' | 'longitude'>;
@@ -12,18 +13,8 @@ const feetBetween = (a: Point, b: Point) => {
   return 2 * EARTH_RADIUS_FEET * Math.asin(Math.sqrt(h));
 };
 
-// Throw distances are measured from the previous logged lie (or the tee), so moving or
-// removing a throw changes the distances after it. Throws without a position are left alone.
-export const remeasureHole = (list: Shot[], holeNumber: number, tee: Point | null | undefined): Shot[] => {
-  let previous: Point | null = tee ?? null;
-  return list.map((shot) => {
-    if (shot.hole !== holeNumber || shot.latitude === undefined || shot.longitude === undefined) return shot;
-    const point = { latitude: shot.latitude, longitude: shot.longitude };
-    const feet = previous ? Math.max(1, Math.round(feetBetween(previous, point))) : 0;
-    previous = point;
-    return feet === shot.feet ? shot : { ...shot, feet };
-  });
-};
+// Remeasuring is shared with the website.
+export { remeasureHole };
 
 // Throws that went in are recorded at the hole's basket. Rounds logged before that rule were
 // placed wherever the player stood; this moves them and remeasures those holes.
