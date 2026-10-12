@@ -807,10 +807,67 @@ test('signing in to a different account asks first, and cancelling stays signed 
   expect(await SecureStore.getItemAsync('glide-path-token')).toBeNull();
 });
 
+// A copy of a published course, taken at version 10 and not edited since.
+const steeleCopy: Course = {
+  id: 'copy-1', name: 'Steele Creek', holes: 1, layouts: [{ tee: null, basket: null }],
+  sourceUid: 'pub-steele', sourceUpdatedAt: 10, sourceSyncedAt: 50, updatedAt: 50,
+};
+const steelePublished = {
+  uid: 'pub-steele', name: 'Steele Creek', holes: 2, details: {}, mappedBy: 'Pat', mappedHoles: 2, par: 6, parHoles: 2, distanceFeet: 700, updatedAt: 20,
+  layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }, { tee: point(41.002, -75), basket: point(41.003, -75), par: 3 }],
+};
+
+test("a copied course takes its publisher's updates when the app opens, keeping its rounds", async () => {
+  const requests = mockServer({
+    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
+    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
+  });
+  await seed({ [KEYS.courses]: [steeleCopy], [KEYS.history]: [{ ...pastRound, courseId: 'copy-1', courseName: 'Steele Creek', pars: [3] }] });
+  await renderApp();
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Course updated', expect.stringContaining('Steele Creek was updated by the person who published it')));
+  expect(requests[0].body).toEqual({ uids: ['pub-steele'] });
+  await waitFor(() => {
+    const [course] = stored<Course[]>(KEYS.courses)!;
+    // The same course, so its rounds stay linked; now with both holes.
+    expect(course).toMatchObject({ id: 'copy-1', holes: 2, sourceUpdatedAt: 20 });
+    expect(course.layouts?.map((layout) => layout.par)).toEqual([3, 3]);
+    expect(course.updatedAt).toBe(course.sourceSyncedAt);
+  });
+});
+
+test('a copied course edited on the phone no longer takes updates', async () => {
+  // Edited after it was copied (updatedAt past sourceSyncedAt): it no longer follows.
+  const edited = { ...steeleCopy, updatedAt: 60 };
+  const requests = mockServer({
+    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
+    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
+  });
+  await seed({ [KEYS.courses]: [edited] });
+  await renderApp('/courses');
+  expect(await screen.findByText(/You’ve changed your copy, so it no longer takes updates/)).toBeTruthy();
+  expect(requests).toEqual([]);
+  expect(stored<Course[]>(KEYS.courses)![0].holes).toBe(1);
+});
+
+test('a copied course is not updated while a round is being played', async () => {
+  const requests = mockServer({
+    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
+    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
+  });
+  // Following, but a round is being played on it: nothing is checked until it ends.
+  await seed({
+    [KEYS.courses]: [steeleCopy],
+    [KEYS.round]: { shots: [{ x: 0.5, y: 0.5, feet: 200, disc: 'Buzzz', type: 'Drive', hole: 1, lie: 'Fairway' }], hole: 1, mode: 'Round', courseId: 'copy-1', active: true },
+  });
+  await renderApp('/courses');
+  expect(await screen.findByText(/It takes updates when the person who published it changes it/)).toBeTruthy();
+  expect(requests).toEqual([]);
+});
+
 test('finds a published course and adds it to my courses', async () => {
   mockServer({
     '/api/public/courses': () => ({ courses: [{ uid: 'pub-1', name: 'Oak Run', holes: 1, city: 'Media', state: 'PA', mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, layoutCount: 1 }] }),
-    '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: { city: 'Media' }, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300 } }),
+    '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: { city: 'Media' }, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, updatedAt: 77 } }),
   });
   await renderApp();
   await press(await screen.findByText('Find courses').then(() => 'Find courses'));
@@ -818,5 +875,8 @@ test('finds a published course and adds it to my courses', async () => {
   await press('SEARCH');
   await press(await screen.findByText('Oak Run').then(() => 'Oak Run'));
   await press(await screen.findByText('ADD TO MY COURSES').then(() => 'ADD TO MY COURSES'));
-  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.find((course) => course.name === 'Oak Run')).toMatchObject({ sourceUid: 'pub-1' }));
+  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.find((course) => course.name === 'Oak Run')).toMatchObject({ sourceUid: 'pub-1', sourceUpdatedAt: 77 }));
+  // Unedited since it was copied, so it follows the publisher's updates.
+  const copy = stored<Course[]>(KEYS.courses)!.find((course) => course.name === 'Oak Run')!;
+  expect(copy.updatedAt).toBe(copy.sourceSyncedAt);
 });

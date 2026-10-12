@@ -30,7 +30,7 @@ export const courseTotals = (layouts: Layout[]) => {
 type PublicCourseRow = {
   uid: string; name: string; hole_count: number; city: string | null; state: string | null; latitude: number | null;
   longitude: number | null; layouts: Layout[]; details: Record<string, string | undefined>; display_name: string; distance_miles?: number | null;
-  layout_name: string | null; extra_layouts: ExtraLayout[];
+  layout_name: string | null; extra_layouts: ExtraLayout[]; updated_at?: string;
 };
 
 export type CourseSearch = { query?: string; near?: { latitude: number; longitude: number }; limit: number };
@@ -80,7 +80,7 @@ export const searchPublishedCourses = async (db: Queryable, search: CourseSearch
 export const getPublishedCourse = async (db: Queryable, uid: string) => {
   const { rows } = await db.query<PublicCourseRow>(
     `SELECT c.uid, c.name, c.hole_count, c.city, c.state, c.latitude, c.longitude, c.layouts, c.details, u.display_name,
-            c.layout_name, c.extra_layouts
+            c.layout_name, c.extra_layouts, c.updated_at
      FROM courses c JOIN users u ON u.id = c.owner_id
      WHERE c.uid = $1 AND c.published AND NOT c.deleted`,
     [uid],
@@ -96,8 +96,20 @@ export const getPublishedCourse = async (db: Queryable, uid: string) => {
     extraLayouts: row.extra_layouts.map((layout) => ({ ...layout, ...courseTotals(layout.layouts) })),
     details: row.details,
     mappedBy: row.display_name,
+    // The publisher's last edit; copies in the app compare it to know when to update.
+    updatedAt: Number(row.updated_at),
     ...courseTotals(row.layouts),
   };
+};
+
+// When each of these published courses last changed, for copies in the app to check in one
+// request. Courses that are unpublished or deleted are left out.
+export const getPublishedCourseVersions = async (db: Queryable, uids: string[]) => {
+  const { rows } = await db.query<{ uid: string; updated_at: string }>(
+    'SELECT uid, updated_at FROM courses WHERE uid = ANY($1::uuid[]) AND published AND NOT deleted',
+    [uids],
+  );
+  return rows.map((row) => ({ uid: row.uid, updatedAt: Number(row.updated_at) }));
 };
 
 type SharedRoundRow = {

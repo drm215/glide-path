@@ -69,6 +69,8 @@ export type PublicCourse = {
   uid: string; name: string; holes: number; layouts: HoleLayout[]; details: CourseDetails; mappedBy: string;
   mappedHoles: number; par: number | null; parHoles: number; distanceFeet: number;
   layoutName?: string; extraLayouts?: CourseLayout[];
+  // The publisher's last edit; servers from before this don't send it.
+  updatedAt?: number;
 };
 
 export const searchCourses = (query: string, near?: { latitude: number; longitude: number }) => {
@@ -79,6 +81,10 @@ export const searchCourses = (query: string, near?: { latitude: number; longitud
 };
 
 export const getPublicCourse = (uid: string) => request<{ course: PublicCourse }>('GET', `/api/public/courses/${encodeURIComponent(uid)}`);
+
+// When each published course last changed (unpublished or deleted ones are left out).
+export const getCourseVersions = (uids: string[]) =>
+  request<{ versions: { uid: string; updatedAt: number }[] }>('POST', '/api/public/course-versions', { body: { uids } });
 
 export const courseShareUrl = (uid: string) => `${API_URL}/c/${uid}`;
 

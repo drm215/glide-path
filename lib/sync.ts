@@ -173,7 +173,10 @@ const courseFromRecord = (record: CourseRecord, local?: Course): Course => ({
   extraLayouts: record.extraLayouts ?? [],
   uid: record.uid,
   updatedAt: record.updatedAt,
+  // The link to a published course is kept on this phone only.
   sourceUid: local?.sourceUid,
+  sourceUpdatedAt: local?.sourceUpdatedAt,
+  sourceSyncedAt: local?.sourceSyncedAt,
 });
 
 // Applies server changes to local courses: the newest edit wins, and equal edits are our

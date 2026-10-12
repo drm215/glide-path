@@ -1,5 +1,6 @@
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { courseShareUrl } from '../../lib/api';
+import { followsPublisher } from '../../lib/course-updates';
 import { MAIN_LAYOUT_ID, courseLayouts } from '../../lib/layouts';
 import { GREEN, styles } from '../theme';
 import { PAR_OPTIONS } from '../constants';
@@ -39,6 +40,9 @@ export const CourseBuilderScreen = () => {
             ? <Switch value={Boolean(selectedCourse.published)} onValueChange={(published) => setCoursePublished(selectedCourse.id, published)} trackColor={{ true: GREEN }} accessibilityLabel="Publish to course directory" />
             : <Pressable onPress={() => go('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
         </View>
+        {selectedBaseCourse?.sourceUid ? <Text style={[styles.courseItemMeta, styles.sourceNote]}>{followsPublisher(selectedBaseCourse)
+          ? 'Added from the course directory. It takes updates when the person who published it changes it, until you edit it here.'
+          : 'Added from the course directory. You’ve changed your copy, so it no longer takes updates from the person who published it.'}</Text> : null}
         {account && selectedCourse.published && selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
         {hasMultipleLayouts && <Text style={styles.courseItemMeta}>Stats for the {selectedCourse.layoutLabel} layout</Text>}
         {selectedCourseStats && <View style={styles.courseStatsGrid}>

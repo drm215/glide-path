@@ -409,6 +409,8 @@ export const styles = StyleSheet.create({
   holeGridLegend: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 14 },
   holeGridLegendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 12, marginBottom: 4 },
   holeGridLegendText: { color: MUTED, fontSize: 10, marginLeft: 5 },
+  // A course copied from the directory: whether it still follows its publisher's updates.
+  sourceNote: { marginBottom: 10 },
   // Disc stats: a card per disc with its distance figures and a quality bar.
   discCard: { borderRadius: 9, borderWidth: 1, borderColor: '#26302b', backgroundColor: '#101412', padding: 12, marginBottom: 10 },
   discCardHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },

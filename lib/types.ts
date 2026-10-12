@@ -44,6 +44,10 @@ export type Course = { id: string; name: string; holes: number; layouts?: HoleLa
   uid?: string;
   // Set on courses downloaded from the public directory.
   sourceUid?: string;
+  // The published version this copy has (the publisher's edit time), and when it last took it.
+  // A copy follows its publisher's updates until it's edited here (updatedAt past sourceSyncedAt).
+  sourceUpdatedAt?: number;
+  sourceSyncedAt?: number;
 };
 
 // A deleted course, remembered until the deletion has synced.

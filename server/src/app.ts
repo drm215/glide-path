@@ -12,7 +12,7 @@ import { forgotPasswordRequest, loginRequest, registerRequest, resetPasswordRequ
 import type { Db } from './db.ts';
 import type { Mailer } from './mailer.ts';
 import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.ts';
-import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
+import { getPublishedCourse, getPublishedCourseVersions, getSharedRound, searchPublishedCourses } from './public.ts';
 import { runSync } from './sync.ts';
 
 type AppOptions = {
@@ -235,6 +235,12 @@ export const createApp = ({
       return;
     }
     res.json({ course });
+  });
+
+  // Copies of published courses in the app ask here whether their publisher changed them.
+  app.post('/api/public/course-versions', async (req, res) => {
+    const { uids } = z.object({ uids: z.array(z.uuid()).max(200) }).parse(req.body);
+    res.json({ versions: uids.length ? await getPublishedCourseVersions(db, uids) : [] });
   });
 
   app.get('/api/public/rounds/:token', async (req, res) => {

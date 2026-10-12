@@ -212,6 +212,22 @@ describe('Glide Path API', () => {
       assert.equal(detail.body.course.layouts.length, 2);
     });
 
+    test("reports when published courses last changed, for copies to check their publisher's updates", async () => {
+      const token = await server.register('versions@example.com', 'Publisher');
+      const synced = await server.request('POST', '/api/sync', {
+        token,
+        body: { courses: [course({ clientId: 'v1', name: 'Shown', published: true, updatedAt: 111 }), course({ clientId: 'v2', name: 'Hidden', published: false, updatedAt: 222 })] },
+      });
+      const uid = (name: string) => synced.body.courses.find((item: { name: string }) => item.name === name).uid;
+      const detail = await server.request('GET', `/api/public/courses/${uid('Shown')}`);
+      assert.equal(detail.body.course.updatedAt, 111);
+
+      const versions = await server.request('POST', '/api/public/course-versions', { body: { uids: [uid('Shown'), uid('Hidden'), '00000000-0000-4000-8000-000000000000'] } });
+      assert.equal(versions.status, 200);
+      assert.deepEqual(versions.body.versions, [{ uid: uid('Shown'), updatedAt: 111 }], 'unpublished and unknown courses are left out');
+      assert.equal((await server.request('POST', '/api/public/course-versions', { body: { uids: ['not-a-uuid'] } })).status, 400);
+    });
+
     test('hides unpublished and unknown courses', async () => {
       const token = await server.register('hidden@example.com');
       const synced = await server.request('POST', '/api/sync', { token, body: { courses: [course({ published: false })] } });

@@ -5,13 +5,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type SetStateAction } from 'react';
 import { Alert, AppState } from 'react-native';
-import { ApiError, syncWithServer, type PublicCourse } from '../../lib/api';
+import { ApiError, getCourseVersions, getPublicCourse, syncWithServer, type PublicCourse } from '../../lib/api';
+import { followsPublisher, hasNewerVersion, publisherContent, updatedFromPublisher } from '../../lib/course-updates';
 import { MAIN_LAYOUT_ID, courseLayouts, layoutDisplayName, updateLayoutIn, withExistingLayout, withLayout, type CourseView } from '../../lib/layouts';
 import { parsToSave } from '../../lib/round-stats';
 import { placeMadeThrowsAtBasket } from '../../lib/rounds';
 import { buildSyncRequest, clearSentTombstones, countPendingChanges, initialBagUpdatedAt, mergeCourses, mergeRounds, sendInBatches, type SyncAccount, type SyncData } from '../../lib/sync';
-import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, HoleLayout, SessionArchive, Shot, ThrowStyle, Tombstone } from '../../lib/types';
-import { ACTIVE_SESSION_ID, LEGACY_DEFAULT_DISCS, SYNC_DEBOUNCE_MS } from '../constants';
+import type { Course, CourseDetails, CourseLayout, Disc, DiscInfo, SessionArchive, Shot, ThrowStyle, Tombstone } from '../../lib/types';
+import { ACTIVE_SESSION_ID, COURSE_UPDATE_CHECK_MS, LEGACY_DEFAULT_DISCS, SYNC_DEBOUNCE_MS } from '../constants';
 import { errorMessage, formatSessionDate } from '../format';
 import { isGpsPoint } from '../geo';
 import { backTo, go, openHoleMapping, openRound } from '../navigation';
@@ -320,10 +321,56 @@ const useAppState = () => {
     if (loaded && account?.token) runSyncRef.current();
   }, [loaded, account?.token]);
 
-  // Sync whenever the app comes back to the foreground.
+  // Courses copied from the directory take their publisher's updates: checked on opening and on
+  // coming back to the foreground, at most every COURSE_UPDATE_CHECK_MS. Edited copies don't follow,
+  // and nothing changes while a round is being played, so its holes can't shift under the player.
+  const lastCourseCheck = useRef(0);
+  const latestCourses = useRef(courses);
+  useEffect(() => {
+    latestCourses.current = courses;
+  });
+  const checkCourseUpdates = async () => {
+    const roundInProgress = () => latestSession.current.shots.length > 0;
+    const following = latestCourses.current.filter(followsPublisher);
+    if (!following.length || roundInProgress() || nowMs() - lastCourseCheck.current < COURSE_UPDATE_CHECK_MS) return;
+    lastCourseCheck.current = nowMs();
+    try {
+      const { versions } = await getCourseVersions([...new Set(following.map((course) => course.sourceUid!))]);
+      const newer = versions.filter((version) => following.some((course) => course.sourceUid === version.uid && hasNewerVersion(course, version.updatedAt)));
+      const sources = (await Promise.all(newer.map((version) => getPublicCourse(version.uid).then((result) => result.course, () => null))))
+        .filter((source): source is PublicCourse => source !== null);
+      if (!sources.length || roundInProgress()) return;
+      // Checked again against the latest courses: one may have been edited while this was loading.
+      const stamp = nowMs();
+      const updates = new Map(latestCourses.current.flatMap((course) => {
+        const source = sources.find((item) => item.uid === course.sourceUid);
+        return source?.updatedAt !== undefined && followsPublisher(course) && hasNewerVersion(course, source.updatedAt) ? [[course.id, updatedFromPublisher(course, source, stamp)] as const] : [];
+      }));
+      if (!updates.size) return;
+      setCourses((current) => current.map((course) => (updates.get(course.id) && followsPublisher(course) ? updates.get(course.id)! : course)));
+      const names = [...updates.values()].map((course) => course.name);
+      Alert.alert(
+        names.length === 1 ? 'Course updated' : 'Courses updated',
+        `${names.join(', ')} ${names.length === 1 ? 'was' : 'were'} updated by the person who published ${names.length === 1 ? 'it' : 'them'} in the course directory. Rounds you’ve already played keep the pars they were played with.`,
+      );
+    } catch {
+      // Offline, or the server is waking up: the next check tries again.
+    }
+  };
+  const checkCourseUpdatesRef = useRef(checkCourseUpdates);
+  useEffect(() => {
+    checkCourseUpdatesRef.current = checkCourseUpdates;
+  });
+  useEffect(() => {
+    if (loaded) checkCourseUpdatesRef.current();
+  }, [loaded]);
+
+  // Sync whenever the app comes back to the foreground, and check copied courses for updates.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') runSyncRef.current();
+      if (state !== 'active') return;
+      runSyncRef.current();
+      checkCourseUpdatesRef.current();
     });
     return () => subscription.remove();
   }, []);
@@ -604,19 +651,16 @@ const useAppState = () => {
     return true;
   };
 
-  // Copies a published course into this phone's courses as a new, private course.
+  // Copies a published course into this phone's courses as a new, private course, which then
+  // follows its publisher's updates until it's edited here (see lib/course-updates.ts).
   const addPublicCourse = (source: PublicCourse) => {
-    const layouts: HoleLayout[] = Array.from({ length: source.holes }, (_, index) => {
-      const layout = source.layouts[index];
-      return { tee: layout?.tee ?? null, basket: layout?.basket ?? null, par: layout?.par };
-    });
-    const { address, street, city, state, phone, email, website, notes } = source.details;
-    const extraLayouts = (source.extraLayouts ?? []).map(({ id, name, holes, layouts: holeLayouts }) => ({ id, name, holes, layouts: holeLayouts }));
+    const stamp = nowMs();
     const course: Course = {
-      id: newSessionId(), name: source.name, holes: source.holes, layouts, layoutName: source.layoutName, extraLayouts,
-      address, street, city, state, phone, email, website, notes, sourceUid: source.uid,
+      id: newSessionId(), ...publisherContent(source),
+      sourceUid: source.uid, sourceUpdatedAt: source.updatedAt, sourceSyncedAt: stamp, updatedAt: stamp,
     };
-    updateCourses((current) => [...current, course]);
+    // Not updateCourses: its fresh edit time would count as an edit and stop the copy following.
+    setCourses((current) => [...current, course]);
     setSelectedCourseId(course.id);
     setSelectedLayoutId(MAIN_LAYOUT_ID);
     Alert.alert('Course added', `${source.name} is now in your courses and selected for your next round.`);
