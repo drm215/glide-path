@@ -13,10 +13,14 @@ export const HomeScreen = () => {
   // The course whose layouts the round picker is showing; null while choosing the course.
   const [roundPickerCourseId, setRoundPickerCourseId] = useState<string | null>(null);
 
-  // Starting a round asks for the course, then the layout when the course has more than one.
+  // Starting a round asks for the course (one played before, one you edit, or one found in the
+  // directory), then the layout when the course has more than one.
   const startRound = () => {
     if (!courses.length) {
-      Alert.alert('Create a course first', 'Add a course in Course Builder before starting a round.');
+      Alert.alert('Find a course first', 'Search for the course you’re playing, then start your round.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Find a course', onPress: () => go('FindCourses') },
+      ]);
       return;
     }
     setRoundPickerCourseId(null);
@@ -45,10 +49,10 @@ export const HomeScreen = () => {
       </Pressable>}
       <View style={styles.menuOptions}>
         <Pressable onPress={() => go('CourseBuilder')} style={styles.menuItem}>
-          <Text style={styles.menuNumber}>01</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Course builder</Text><Text style={styles.menuSubtitle}>Create and choose your courses</Text></View><Text style={styles.menuArrow}>›</Text>
+          <Text style={styles.menuNumber}>01</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Course builder</Text><Text style={styles.menuSubtitle}>Create courses and edit ones you own</Text></View><Text style={styles.menuArrow}>›</Text>
         </Pressable>
         <Pressable onPress={() => go('FindCourses')} style={styles.menuItem}>
-          <Text style={styles.menuNumber}>02</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Find courses</Text><Text style={styles.menuSubtitle}>Search courses other players have mapped</Text></View><Text style={styles.menuArrow}>›</Text>
+          <Text style={styles.menuNumber}>02</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Find courses</Text><Text style={styles.menuSubtitle}>Search every course to play</Text></View><Text style={styles.menuArrow}>›</Text>
         </Pressable>
         <Pressable onPress={() => go('BagBuilder')} style={styles.menuItem}>
           <Text style={styles.menuNumber}>03</Text><View style={styles.menuItemCopy}><Text style={styles.menuTitle}>Bag builder</Text><Text style={styles.menuSubtitle}>Add and select your discs</Text></View><Text style={styles.menuArrow}>›</Text>
@@ -89,7 +93,9 @@ export const HomeScreen = () => {
                   })}
               </ScrollView>
               <View style={styles.editFooter}>
-                {pickerCourse ? <Pressable onPress={() => setRoundPickerCourseId(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable> : <View />}
+                {pickerCourse
+                  ? <Pressable onPress={() => setRoundPickerCourseId(null)} style={styles.sheetFooterButton}><Text style={styles.undoText}>‹ BACK</Text></Pressable>
+                  : <Pressable onPress={() => { setRoundPickerOpen(false); go('FindCourses'); }} style={styles.sheetFooterButton} accessibilityRole="button"><Text style={styles.undoText}>FIND A COURSE ›</Text></Pressable>}
                 <Pressable onPress={() => setRoundPickerOpen(false)} style={styles.sheetFooterButton}><Text style={styles.undoText}>CANCEL</Text></Pressable>
               </View>
             </>;

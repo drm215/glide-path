@@ -59,10 +59,24 @@ beforeEach(() => {
   alertSpy = jest.spyOn((require('react-native') as { Alert: AlertStatic }).Alert, 'alert');
 });
 
+// Glide Path needs an account, so every test starts signed in (tests about signing in sign out
+// first), with a server that answers sync and nothing else unless a test says so.
+const SIGNED_IN = { user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' }, cursor: 0, pushedThrough: Number.MAX_SAFE_INTEGER };
+const EMPTY_SYNC = () => ({ cursor: 1, more: false, courses: [], rounds: [], bag: null });
+
 beforeEach(async () => {
   // The storage mock is shared across reloads (setup.ts), so empty it.
   await AsyncStorage.clear();
+  await seed({ [KEYS.sync]: SIGNED_IN });
+  await SecureStore.setItemAsync('glide-path-token', 'token-1');
+  mockServer({ '/api/sync': EMPTY_SYNC });
 });
+
+// For the tests about signing in.
+const signOutFirst = async () => {
+  await AsyncStorage.removeItem(KEYS.sync);
+  await SecureStore.deleteItemAsync('glide-path-token');
+};
 
 afterEach(async () => {
   await cleanup();
@@ -547,6 +561,8 @@ test('deleting a course keeps a course added while its confirmation was open', a
   mockServer({
     '/api/public/courses': () => ({ courses: [{ uid: 'pub-1', name: 'Oak Run', holes: 1, city: 'Media', state: 'PA', mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, layoutCount: 1 }] }),
     '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: {}, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300 } }),
+    '/api/courses/pub-1/play': () => null,
+    '/api/sync': EMPTY_SYNC,
   });
   await seed({ [KEYS.courses]: [cedarGrove] });
   await renderApp();
@@ -558,7 +574,7 @@ test('deleting a course keeps a course added while its confirmation was open', a
   await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove or PA'), 'Oak');
   await press('SEARCH');
   await press(await screen.findByText('Oak Run').then(() => 'Oak Run'));
-  await press(await screen.findByText('ADD TO MY COURSES').then(() => 'ADD TO MY COURSES'));
+  await press(await screen.findByText('PLAY THIS COURSE').then(() => 'PLAY THIS COURSE'));
   await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.map((course) => course.name)).toEqual(['Cedar Grove', 'Oak Run']));
   await pressAlertButton('Delete course');
   await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.map((course) => course.name)).toEqual(['Oak Run']));
@@ -763,18 +779,27 @@ test('deleting a past round removes it from history', async () => {
   await waitFor(() => expect(stored(KEYS.history)).toEqual([]));
 });
 
+test('the app asks you to sign in before anything else', async () => {
+  await signOutFirst();
+  await renderApp();
+  expect(await screen.findByText('Sign in.')).toBeTruthy();
+  expect(screen.queryByText('Ready when you are.')).toBeNull();
+});
+
 test('signing in uploads this phone’s data and keeps the token in the keychain', async () => {
+  await signOutFirst();
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [pastRound] });
   const requests = mockServer({
     '/api/auth/login': () => ({ token: 'token-1', user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' } }),
     '/api/sync': () => ({ cursor: 3, more: false, courses: [], rounds: [], bag: null }),
   });
   await renderApp();
-  await fireEvent.press(await screen.findByLabelText('Sign in'));
+  await screen.findByText('Sign in.');
   await fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'pat@example.com');
   await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'long enough');
   await press('SIGN IN');
-  expect(await screen.findByText('Your account.')).toBeTruthy();
+  // Signed in, the app opens.
+  expect(await screen.findByText('Ready when you are.')).toBeTruthy();
   await waitFor(() => expect(requests.some((request) => request.path === '/api/sync')).toBe(true));
   const upload = requests.find((request) => request.path === '/api/sync')!.body as { courses: { clientId: string }[]; rounds: { clientId: string }[] };
   expect(upload.courses.map((course) => course.clientId)).toEqual(['course-1']);
@@ -826,12 +851,13 @@ test('a round in progress on another device is tagged in Rounds and left out of 
 });
 
 test('signing in to a different account asks first, and cancelling stays signed out', async () => {
+  await signOutFirst();
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.lastAccount]: { id: 'u1', email: 'old@example.com', pushedThrough: 10 } });
   const requests = mockServer({
     '/api/auth/login': () => ({ token: 'token-2', user: { id: 'u2', email: 'new@example.com', displayName: 'New' } }),
   });
   await renderApp();
-  await fireEvent.press(await screen.findByLabelText('Sign in'));
+  await screen.findByText('Sign in.');
   await fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'new@example.com');
   await fireEvent.changeText(screen.getByPlaceholderText('Password'), 'long enough');
   // Signing in waits on the question, so answer it as soon as it's asked.
@@ -843,76 +869,79 @@ test('signing in to a different account asks first, and cancelling stays signed 
   expect(await SecureStore.getItemAsync('glide-path-token')).toBeNull();
 });
 
-// A copy of a published course, taken at version 10 and not edited since.
-const steeleCopy: Course = {
-  id: 'copy-1', name: 'Steele Creek', holes: 1, layouts: [{ tee: null, basket: null }],
-  sourceUid: 'pub-steele', sourceUpdatedAt: 10, sourceSyncedAt: 50, updatedAt: 50,
-};
-const steelePublished = {
-  uid: 'pub-steele', name: 'Steele Creek', holes: 2, details: {}, mappedBy: 'Pat', mappedHoles: 2, par: 6, parHoles: 2, distanceFeet: 700, updatedAt: 20,
-  layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }, { tee: point(41.002, -75), basket: point(41.003, -75), par: 3 }],
-};
-
-test("a copied course takes its publisher's updates when the app opens, keeping its rounds", async () => {
+test("a course's owners and admins invite others by email, as an owner or admin", async () => {
+  const editors = [{ userId: 'u1', displayName: 'Pat', email: 'pat@example.com', role: 'owner', creator: true }];
   const requests = mockServer({
-    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
-    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
+    '/api/sync': EMPTY_SYNC,
+    '/api/courses/pub-cedar/editors': (body) => {
+      if (body) editors.push({ userId: 'm1', displayName: 'Sam', email: (body as { email: string }).email, role: (body as { role: string }).role, creator: false });
+      return { editors };
+    },
   });
-  await seed({ [KEYS.courses]: [steeleCopy], [KEYS.history]: [{ ...pastRound, courseId: 'copy-1', courseName: 'Steele Creek', pars: [3] }] });
-  await renderApp();
-  await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Course updated', expect.stringContaining('Steele Creek was updated by the person who published it')));
-  expect(requests[0].body).toEqual({ uids: ['pub-steele'] });
+  await seed({ [KEYS.courses]: [{ ...cedarGrove, uid: 'pub-cedar' }] });
+  await renderApp('/courses');
+  expect(await screen.findByText('Owners and admins')).toBeTruthy();
+  expect(await screen.findByText('Pat · Owner (created it) · pat@example.com')).toBeTruthy();
+  await fireEvent.changeText(screen.getByLabelText('Email to invite'), 'sam@example.com');
+  await press('INVITE');
+  expect(await screen.findByText('Sam · Admin · sam@example.com')).toBeTruthy();
+  expect(requests.some((request) => request.path === '/api/courses/pub-cedar/editors' && (request.body as { role?: string })?.role === 'admin')).toBe(true);
+});
+
+test('a course you only play is not in Course builder, but is there to start a round on', async () => {
+  const played: Course = { ...cedarGrove, id: 'shared-pub-cedar', uid: 'pub-cedar', role: 'player', createdBy: 'David' };
+  await seed({ [KEYS.courses]: [played] });
+  await renderApp('/courses');
+  expect(await screen.findByText(/None yet\. Create one/)).toBeTruthy();
+  expect(screen.queryByText('Cedar Grove')).toBeNull();
+});
+
+test('a duplicate course combines into the other: its holes, layouts and rounds move over', async () => {
+  const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 3, timestamp });
+  // David's Steele Creek, which this account was made an admin of.
+  const davids: Course = {
+    id: 'shared-pub-steele', uid: 'pub-steele', role: 'admin', createdBy: 'David', name: 'Steele Creek', holes: 1, updatedAt: 5,
+    layouts: [{ tee: gps(40, 10), basket: gps(40.001, 10), par: 3 }], layoutName: 'Short tees',
+    extraLayouts: [{ id: 'layout-long', name: 'Long tees', holes: 1, layouts: [{ tee: null, basket: null }] }],
+  };
+  // The one this account mapped itself, with the long tees (under a different layout id).
+  const mine: Course = {
+    id: 'mine-1', name: 'Steele Creek', holes: 1, updatedAt: 6, layoutName: 'Short tees', layouts: [{ tee: null, basket: null, par: 3 }],
+    extraLayouts: [{ id: 'layout-mine', name: 'long tees', holes: 2, layouts: [{ tee: gps(41, 20), basket: gps(41.001, 20), par: 4 }, { tee: gps(41.01, 20), basket: gps(41.011, 20), par: 3 }] }],
+  };
+  const myRound: SessionArchive = { ...pastRound, id: '1727500000000', courseId: 'mine-1', courseName: 'Steele Creek', layoutId: 'layout-mine' };
+  await seed({ [KEYS.courses]: [davids, mine], [KEYS.history]: [myRound] });
+  await renderApp('/courses');
+  // Select this account's own one, the second in the list.
+  await screen.findAllByText('Steele Creek');
+  await fireEvent.press(screen.getAllByText('Steele Creek')[1]);
+  await fireEvent.press(await screen.findByLabelText('Combine into the other Steele Creek'));
+  await pressAlertButton('Combine');
   await waitFor(() => {
-    const [course] = stored<Course[]>(KEYS.courses)!;
-    // The same course, so its rounds stay linked; now with both holes.
-    expect(course).toMatchObject({ id: 'copy-1', holes: 2, sourceUpdatedAt: 20 });
-    expect(course.layouts?.map((layout) => layout.par)).toEqual([3, 3]);
-    expect(course.updatedAt).toBe(course.sourceSyncedAt);
+    const courses = stored<Course[]>(KEYS.courses)!;
+    expect(courses.map((course) => course.id)).toEqual(['shared-pub-steele']);
+    const long = courses[0].extraLayouts![0];
+    expect(long).toMatchObject({ id: 'layout-long', holes: 2 });
+    expect(long.layouts.map((hole) => hole.tee?.latitude)).toEqual([41, 41.01]);
+    // The round moved to David's course and its matching layout.
+    expect(stored<SessionArchive[]>(KEYS.history)![0]).toMatchObject({ courseId: 'shared-pub-steele', layoutId: 'layout-long' });
   });
 });
 
-test('a copied course edited on the phone no longer takes updates', async () => {
-  // Edited after it was copied (updatedAt past sourceSyncedAt): it no longer follows.
-  const edited = { ...steeleCopy, updatedAt: 60 };
+test('finds a course and plays it: the live course, not a copy', async () => {
   const requests = mockServer({
-    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
-    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
-  });
-  await seed({ [KEYS.courses]: [edited] });
-  await renderApp('/courses');
-  expect(await screen.findByText(/You’ve changed your copy, so it no longer takes updates/)).toBeTruthy();
-  expect(requests).toEqual([]);
-  expect(stored<Course[]>(KEYS.courses)![0].holes).toBe(1);
-});
-
-test('a copied course is not updated while a round is being played', async () => {
-  const requests = mockServer({
-    '/api/public/course-versions': () => ({ versions: [{ uid: 'pub-steele', updatedAt: 20 }] }),
-    '/api/public/courses/pub-steele': () => ({ course: steelePublished }),
-  });
-  // Following, but a round is being played on it: nothing is checked until it ends.
-  await seed({
-    [KEYS.courses]: [steeleCopy],
-    [KEYS.round]: { shots: [{ x: 0.5, y: 0.5, feet: 200, disc: 'Buzzz', type: 'Drive', hole: 1, lie: 'Fairway' }], hole: 1, mode: 'Round', courseId: 'copy-1', active: true },
-  });
-  await renderApp('/courses');
-  expect(await screen.findByText(/It takes updates when the person who published it changes it/)).toBeTruthy();
-  expect(requests).toEqual([]);
-});
-
-test('finds a published course and adds it to my courses', async () => {
-  mockServer({
+    '/api/sync': EMPTY_SYNC,
     '/api/public/courses': () => ({ courses: [{ uid: 'pub-1', name: 'Oak Run', holes: 1, city: 'Media', state: 'PA', mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, layoutCount: 1 }] }),
     '/api/public/courses/pub-1': () => ({ course: { uid: 'pub-1', name: 'Oak Run', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }], details: { city: 'Media' }, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 300, updatedAt: 77 } }),
+    '/api/courses/pub-1/play': () => null,
   });
   await renderApp();
   await press(await screen.findByText('Find courses').then(() => 'Find courses'));
   await fireEvent.changeText(screen.getByPlaceholderText('e.g. Cedar Grove or PA'), 'Oak');
   await press('SEARCH');
   await press(await screen.findByText('Oak Run').then(() => 'Oak Run'));
-  await press(await screen.findByText('ADD TO MY COURSES').then(() => 'ADD TO MY COURSES'));
-  await waitFor(() => expect((stored<Course[]>(KEYS.courses))?.find((course) => course.name === 'Oak Run')).toMatchObject({ sourceUid: 'pub-1', sourceUpdatedAt: 77 }));
-  // Unedited since it was copied, so it follows the publisher's updates.
-  const copy = stored<Course[]>(KEYS.courses)!.find((course) => course.name === 'Oak Run')!;
-  expect(copy.updatedAt).toBe(copy.sourceSyncedAt);
+  await press(await screen.findByText('PLAY THIS COURSE').then(() => 'PLAY THIS COURSE'));
+  await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.find((course) => course.name === 'Oak Run')).toMatchObject({ id: 'shared-pub-1', uid: 'pub-1', role: 'player', createdBy: 'Sam' }));
+  expect(requests.some((request) => request.path === '/api/courses/pub-1/play')).toBe(true);
+  expect(await screen.findByText('IN YOUR COURSES ✓')).toBeTruthy();
 });

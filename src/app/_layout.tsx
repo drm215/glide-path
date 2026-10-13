@@ -4,12 +4,14 @@ import { Image, Pressable, Text, View, useWindowDimensions } from 'react-native'
 import { HoldPressable } from '../components/HoldPressable';
 import { initialsFor } from '../format';
 import { backTo, go, PATHS } from '../navigation';
+import { AccountScreen } from '../screens/AccountScreen';
 import { AppProvider, useApp } from '../state/AppState';
 import { PAPER, styles } from '../theme';
 
 // The brand bar and account button above every screen, and the status bar below the round and stats.
 const Shell = () => {
-  const { account, shots } = useApp();
+  const { account, loaded, shots } = useApp();
+  const signInRequired = loaded && !account;
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const onRound = pathname === PATHS.Round;
@@ -32,10 +34,16 @@ const Shell = () => {
           </Button>
         </View>
         <View style={styles.stack}>
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: PAPER } }}>
-            {/* A stray swipe mustn't leave a round; its buttons need a hold for the same reason. */}
-            <Stack.Screen name="round" options={{ gestureEnabled: false }} />
-          </Stack>
+          {/* Glide Path needs an account: courses are shared by everyone, and rounds sync. Until one
+              is signed in, the account screen covers the app, which stays mounted (hidden) so it
+              keeps its place. */}
+          <View style={[styles.stack, signInRequired && styles.hidden]}>
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: PAPER } }}>
+              {/* A stray swipe mustn't leave a round; its buttons need a hold for the same reason. */}
+              <Stack.Screen name="round" options={{ gestureEnabled: false }} />
+            </Stack>
+          </View>
+          {signInRequired && <AccountScreen required />}
         </View>
         {onRound || pathname === PATHS.Insights ? <View style={styles.bottomBar}><Text style={styles.bottomStatus}><View style={styles.statusDot} /> SESSION SAVED LOCALLY</Text><Text style={styles.bottomCount}>{shots.length} THROWS</Text></View> : null}
       </View>

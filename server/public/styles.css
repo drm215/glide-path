@@ -234,3 +234,8 @@ a.disc-card:hover { border-color: var(--green); }
 .leaflet-marker-draggable { cursor: grab; }
 /* A draggable tee or basket pin, centred on its point whatever its label's width. */
 .hole-pin { white-space: nowrap; transform: translate(-50%, -50%); }
+
+/* Sharing a course with other accounts. */
+.sharing { margin: 8px 0 18px; }
+.sharing .members .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 4px; }
+.sharing .members .button { height: 36px; padding: 0 12px; }

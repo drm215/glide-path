@@ -28,6 +28,9 @@ const layoutsOf = (course) => [
   { id: MAIN_LAYOUT_ID, name: course.layoutName || 'Main', holes: course.holes, layouts: course.layouts },
   ...(course.extraLayouts ?? []),
 ];
+// Whether this account can change a course: one it created (its own role, or none yet) or is an
+// owner or admin of. Everyone else only plays it.
+const canEdit = (course) => course.role !== 'player';
 const courseFor = (round) => data.courses.find((course) => course.clientId === round.courseClientId);
 const layoutFor = (round) => {
   const course = courseFor(round);
@@ -62,14 +65,14 @@ const back = () => el('p', {}, el('a', { href: '#' }, '‹ All rounds and course
 
 const renderOverview = () => {
   const rounds = [...data.rounds].sort((a, b) => roundDate(b) - roundDate(a));
-  const courses = [...data.courses].sort((a, b) => a.name.localeCompare(b.name));
+  const courses = data.courses.filter(canEdit).sort((a, b) => a.name.localeCompare(b.name));
   setChildren(signedInEl,
     el('div', { class: 'eyebrow' }, 'Signed in as'),
     el('h1', {}, user.displayName),
     el('p', { class: 'meta' }, user.email),
     el('div', { class: 'stats' },
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'ROUNDS'), el('div', { class: 'value' }, rounds.length)),
-      el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES'), el('div', { class: 'value' }, courses.length)),
+      el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES YOU EDIT'), el('div', { class: 'value' }, courses.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'DISCS IN BAG'), el('div', { class: 'value' }, data.bag?.discs.length ?? 0))),
     rounds.length ? el('p', { class: 'links' }, el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')) : null,
     el('h2', {}, 'Rounds'),
@@ -85,17 +88,18 @@ const renderOverview = () => {
           el('span', { class: 'name' }, `${score.total}`, score.toPar === null ? null : el('span', { class: toParClass(score.toPar) }, ` ${formatToPar(score.toPar)}`))));
       }))
       : el('p', { class: 'meta' }, 'No rounds yet. Rounds appear here after you end them in the app and it syncs.'),
-    el('h2', {}, 'Courses'),
+    el('h2', {}, 'Courses you can edit'),
+    el('p', { class: 'meta' }, 'Every course is public: anyone can find and play it on the courses page. These are the ones you created or were made an owner or admin of.'),
     courses.length
       ? el('ul', { class: 'results' }, courses.map((course) => el('li', {}, el('a', { href: `#course/${encodeURIComponent(course.clientId)}` },
         el('span', {},
           el('span', { class: 'name' }, course.name),
           el('span', { class: 'sub' }, [
             layoutsOf(course).length > 1 ? plural(layoutsOf(course).length, 'layout') : plural(course.holes, 'hole'),
-            course.published ? 'Published' : 'Private',
+            course.createdBy ? `${course.role === 'owner' ? 'Owner' : 'Admin'} · created by ${course.createdBy}` : 'You created it',
           ].join(' · '))),
         el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')))))
-      : el('p', { class: 'meta' }, 'No synced courses yet.'),
+      : el('p', { class: 'meta' }, 'None yet. Create one in the app, or ask an owner of a course to make you an admin.'),
     el('div', { class: 'links' },
       el('button', { class: 'button secondary', type: 'button', onclick: signOut }, 'Sign out'),
       el('button', { class: 'button danger', type: 'button', onclick: deleteAccount }, 'Delete account')),
@@ -348,6 +352,50 @@ const renderDiscThrows = (disc, types, includePractice) => {
   render();
 };
 
+// A course's owners and admins, for one of them: they edit it, invite others as owners or admins
+// by email, and remove them (its creator always stays an owner).
+const courseEditors = (course) => {
+  const list = el('ul', { class: 'results members' });
+  const status = el('p', { class: 'status', 'aria-live': 'polite' });
+  const emailInput = el('input', { type: 'email', id: 'invite-email', placeholder: 'their@email.com', autocomplete: 'off', 'aria-label': 'Email to invite' });
+  const roleSelect = el('select', { 'aria-label': 'Invite as' }, el('option', { value: 'admin' }, 'Admin'), el('option', { value: 'owner' }, 'Owner'));
+  const path = `/api/courses/${encodeURIComponent(course.uid)}/editors`;
+  const show = (editors) => setChildren(list, editors.map((editor) => el('li', {},
+    el('span', { class: 'row' },
+      el('span', {},
+        el('span', { class: 'name' }, editor.displayName),
+        el('span', { class: 'sub' }, [editor.role === 'owner' ? 'Owner' : 'Admin', editor.creator ? 'created it' : null, editor.email].filter(Boolean).join(' · '))),
+      editor.creator ? null : el('button', { class: 'button danger', type: 'button', onclick: () => remove(editor) }, 'Remove')))));
+  const remove = async (editor) => {
+    status.textContent = '';
+    try {
+      await api(`${path}/${encodeURIComponent(editor.userId)}`, { method: 'DELETE', token });
+      show((await api(path, { token })).editors);
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+  const invite = async (event) => {
+    event.preventDefault();
+    if (!emailInput.value.trim()) return;
+    status.textContent = 'Inviting…';
+    try {
+      show((await api(path, { method: 'POST', token, body: { email: emailInput.value.trim(), role: roleSelect.selectedOptions?.[0]?.value ?? roleSelect.value } })).editors);
+      emailInput.value = '';
+      status.textContent = '';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+  api(path, { token }).then((result) => show(result.editors), () => { status.textContent = 'Couldn’t load this course’s owners and admins.'; });
+  return el('section', { class: 'sharing' },
+    el('h2', {}, 'Owners and admins'),
+    el('p', { class: 'meta' }, 'Owners and admins can map and edit this course, invite others, and delete it. Invite them by the email they use for Glide Path.'),
+    list,
+    el('form', { class: 'search', onsubmit: invite }, emailInput, roleSelect, el('button', { class: 'button', type: 'submit' }, 'Invite')),
+    status);
+};
+
 // `layoutIndex` and `editing` keep the view where it was after a tee or basket is moved.
 const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
   const layouts = layoutsOf(course);
@@ -367,7 +415,7 @@ const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
   // played on it (and, when published, for everyone who added it from the directory).
   let shownIndex = layoutIndex;
   const moveStatus = el('p', { class: 'status', 'aria-live': 'polite' });
-  const moveNote = el('p', { class: 'map-note', hidden: !editing }, `Drag a tee or basket to where it really is. It’s saved to your account and changes the course for every round played on it${course.published ? ', and for everyone who added it from the course directory' : ''}.`);
+  const moveNote = el('p', { class: 'map-note', hidden: !editing }, 'Drag a tee or basket to where it really is. It’s saved at once, for everyone who plays this course.');
   const moveButton = el('button', { class: 'button secondary', type: 'button', 'aria-pressed': String(editing), onclick: () => setMoving(moveButton.getAttribute('aria-pressed') !== 'true') }, 'Move tees and baskets');
   const setMoving = (on) => {
     moveButton.setAttribute('aria-pressed', String(on));
@@ -392,14 +440,14 @@ const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
   };
   setChildren(signedInEl,
     back(),
-    el('div', { class: 'eyebrow' }, ['Your course', place].filter(Boolean).join(' · ')),
+    el('div', { class: 'eyebrow' }, [course.createdBy ? `Created by ${course.createdBy}` : 'Your course', place].filter(Boolean).join(' · ')),
     el('h1', {}, course.name),
-    el('p', { class: 'meta' }, course.published && course.uid
-      ? el('a', { href: `/c/${encodeURIComponent(course.uid)}` }, 'Published: view its public page')
-      : 'Private. Publish it from Course builder in the app to list it in the directory.'),
+    course.uid ? el('p', { class: 'meta' }, el('a', { href: `/c/${encodeURIComponent(course.uid)}` }, 'View its public page')) : null,
+    canEdit(course) && course.uid ? courseEditors(course) : null,
     tabs,
     mapEl,
-    el('div', { class: 'map-edit' }, moveButton, moveNote, moveStatus),
+    // Only its owners and admins can move its tees and baskets.
+    canEdit(course) ? el('div', { class: 'map-edit' }, moveButton, moveNote, moveStatus) : null,
     panels,
   );
   const map = satelliteMap(mapEl);
@@ -415,7 +463,7 @@ const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
   };
   if (!map) {
     mapEl.remove();
-    moveButton.parentElement.remove();
+    moveButton.parentElement?.remove();
   }
   show(layoutIndex);
 };
@@ -657,7 +705,7 @@ function signOut() {
 }
 
 async function deleteAccount() {
-  if (!confirm('Delete your Glide Path account? This permanently deletes everything synced to it, including published courses and shared round links. Data on your phone is kept.')) return;
+  if (!confirm('Delete your Glide Path account? This permanently deletes your account, your rounds and shared round links. Courses you created pass to another owner or admin; any without one are deleted for everyone. Data on your phone is kept.')) return;
   try {
     await api('/api/me', { method: 'DELETE', token });
     signOut();

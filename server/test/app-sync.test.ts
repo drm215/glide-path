@@ -348,6 +348,110 @@ describe('app sync against the API', () => {
     }
   });
 
+  test('anyone can play a course; only its owners and admins edit it', async () => {
+    const ownerToken = await server.register('owner@example.com', 'David');
+    const friendToken = await server.register('friend@example.com', 'Sam');
+    const longTees = { id: 'layout-long', name: '9 holes, long tees', holes: 1, layouts: [{ tee: null, basket: null }] };
+    const phone = newDevice(ownerToken, { ...emptyData(), courses: [course('course-1', { name: 'Steele Creek', published: false, extraLayouts: [longTees], updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const uid = phone.data.courses[0].uid!;
+    assert.equal((await server.request('GET', `/api/public/courses/${uid}`)).status, 200, 'public, though the app sent it unpublished');
+
+    // A player: playing it brings it to their devices, naming who created it.
+    assert.equal((await server.request('POST', `/api/courses/${uid}/play`, { token: friendToken })).status, 204);
+    const friend = newDevice(friendToken);
+    await syncDevice(server, friend);
+    const [steele] = friend.data.courses;
+    assert.deepEqual([steele.id, steele.role, steele.createdBy, steele.name], [`shared-${uid}`, 'player', 'David', 'Steele Creek']);
+    assert.equal((await server.request('GET', `/api/courses/${uid}/editors`, { token: friendToken })).status, 404, "players don't manage it");
+    assert.equal((await server.request('POST', `/api/courses/${uid}/editors`, { token: friendToken, body: { email: 'friend@example.com', role: 'owner' } })).status, 404);
+
+    // A player's edits are ignored.
+    const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp });
+    const mapped = (timestamp: number) => Array.from({ length: 9 }, (_, index) => ({ tee: gps(41 + index / 100, timestamp), basket: gps(41.001 + index / 100, timestamp), par: 3 }));
+    friend.data.courses = [{ ...steele, extraLayouts: [{ ...longTees, holes: 9, layouts: mapped(tick()) }], updatedAt: tick() }];
+    await syncDevice(server, friend);
+    await syncDevice(server, phone);
+    assert.equal(phone.data.courses[0].extraLayouts?.[0].holes, 1, "a player can't change it");
+
+    // Invited as an admin by email, their mapping goes in.
+    const invited = await server.request('POST', `/api/courses/${uid}/editors`, { token: ownerToken, body: { email: 'Friend@Example.com ', role: 'admin' } });
+    assert.equal(invited.status, 200, JSON.stringify(invited.body));
+    assert.deepEqual(invited.body.editors.map((editor: { displayName: string; role: string; creator: boolean }) => [editor.displayName, editor.role, editor.creator]), [['David', 'owner', true], ['Sam', 'admin', false]]);
+    assert.equal((await server.request('POST', `/api/courses/${uid}/editors`, { token: ownerToken, body: { email: 'nobody@example.com', role: 'admin' } })).status, 404);
+    await syncDevice(server, friend);
+    assert.equal(friend.data.courses[0].role, 'admin');
+    friend.data.courses = [{ ...friend.data.courses[0], extraLayouts: [{ ...longTees, holes: 9, layouts: mapped(tick()) }], updatedAt: tick() }];
+    // And a round there, shared, finds the course.
+    friend.data.history = [session('friend-round', { courseId: `shared-${uid}`, courseName: 'Steele Creek', shared: true, updatedAt: tick() })];
+    await syncDevice(server, friend);
+    await syncDevice(server, phone);
+    assert.equal(phone.data.courses[0].extraLayouts?.[0].holes, 9, "an admin's mapping reaches the owner");
+    const round = await server.request('GET', `/api/public/rounds/${friend.data.history[0].shareToken}`);
+    assert.equal(round.body.round.courseUid, uid);
+
+    // An admin can't remove its creator; removing the admin leaves them a player.
+    const creatorId = invited.body.editors[0].userId;
+    const friendId = invited.body.editors[1].userId;
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}/editors/${creatorId}`, { token: friendToken })).status, 400);
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}/editors/${friendId}`, { token: ownerToken })).status, 204);
+    await syncDevice(server, friend);
+    assert.equal(friend.data.courses[0].role, 'player');
+
+    // A player deleting it on their phone only stops playing it.
+    friend.data = { ...friend.data, courses: [], deletedCourses: [{ clientId: `shared-${uid}`, updatedAt: tick() }] };
+    await syncDevice(server, friend);
+    await syncDevice(server, phone);
+    assert.equal(phone.data.courses.length, 1, 'still there for its owner');
+    assert.equal((await server.request('GET', `/api/public/courses/${uid}`)).status, 200);
+  });
+
+  test('a course an older app copied from the directory is merged back into the original, with its rounds', async () => {
+    const ownerToken = await server.register('original@example.com', 'David');
+    const copierToken = await server.register('copier@example.com', 'Sam');
+    const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp });
+    const longTees = { id: 'layout-long', name: 'Long tees', holes: 1, layouts: [{ tee: null, basket: null }] };
+    const phone = newDevice(ownerToken, { ...emptyData(), courses: [course('course-1', { name: 'Steele Creek', extraLayouts: [longTees], updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const uid = phone.data.courses[0].uid!;
+
+    // The copy (made by an older app, which remembered where it came from) mapped the long tees,
+    // and a round was played on it.
+    const mappedAt = tick();
+    const copy = course('copy-1', {
+      name: 'Steele Creek', sourceUid: uid, updatedAt: mappedAt,
+      extraLayouts: [{ ...longTees, holes: 2, layouts: [{ tee: gps(41, mappedAt), basket: gps(41.001, mappedAt), par: 4 }, { tee: gps(41.01, mappedAt), basket: gps(41.011, mappedAt), par: 3 }] }],
+    });
+    const copier = newDevice(copierToken, { ...emptyData(), courses: [copy], history: [session('copy-round', { courseId: 'copy-1', courseName: 'Steele Creek', updatedAt: tick() })] });
+    await syncDevice(server, copier);
+    // The copy is gone from the copier's courses; the original is there instead, and the round moved to it.
+    assert.deepEqual(copier.data.courses.map((item) => [item.id, item.role]), [[`shared-${uid}`, 'player']]);
+    assert.equal(copier.data.history[0].courseId, `shared-${uid}`);
+    await syncDevice(server, phone);
+    const [original] = phone.data.courses;
+    assert.equal(original.extraLayouts?.[0].holes, 2, "the copy's mapping went into the original");
+    assert.equal(original.extraLayouts?.[0].layouts[0].tee?.latitude, 41);
+  });
+
+  test("deleting an account hands its courses to another owner or admin, so their players keep them", async () => {
+    const leaverToken = await server.register('leaver@example.com', 'Leaver');
+    const heirToken = await server.register('heir@example.com', 'Heir');
+    const phone = newDevice(leaverToken, { ...emptyData(), courses: [course('kept', { name: 'Kept Park', updatedAt: tick() }), course('alone', { name: 'Lonely Woods', updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const uid = (name: string) => phone.data.courses.find((item) => item.name === name)!.uid!;
+    await server.request('POST', `/api/courses/${uid('Kept Park')}/editors`, { token: leaverToken, body: { email: 'heir@example.com', role: 'admin' } });
+    const heir = newDevice(heirToken);
+    await syncDevice(server, heir);
+    assert.equal(heir.data.courses[0].id, `shared-${uid('Kept Park')}`);
+
+    assert.equal((await server.request('DELETE', '/api/me', { token: leaverToken })).status, 204);
+    await syncDevice(server, heir);
+    // The same course, under the id the heir already knew it by, now theirs to own.
+    assert.deepEqual(heir.data.courses.map((item) => [item.id, item.role, item.createdBy]), [[`shared-${uid('Kept Park')}`, 'owner', undefined]]);
+    assert.equal((await server.request('GET', `/api/public/courses/${uid('Kept Park')}`)).body.course.mappedBy, 'Heir');
+    assert.equal((await server.request('GET', `/api/public/courses/${uid('Lonely Woods')}`)).status, 404, 'a course with no one else goes with the account');
+  });
+
   test('long text is clipped instead of failing the sync', async () => {
     const token = await server.register('long@example.com');
     const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { notes: 'x'.repeat(9000), name: 'y'.repeat(500), updatedAt: tick() })] });

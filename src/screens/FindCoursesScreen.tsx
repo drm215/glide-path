@@ -9,7 +9,16 @@ import { shareLink } from '../links';
 import { useApp } from '../state/AppState';
 
 export const FindCoursesScreen = () => {
-  const { addPublicCourse, courses, setLocationAllowed } = useApp();
+  const { courses, playPublicCourse, setLocationAllowed } = useApp();
+  const [playError, setPlayError] = useState('');
+  const play = async (course: PublicCourse) => {
+    setPlayError('');
+    try {
+      await playPublicCourse(course);
+    } catch (error) {
+      setPlayError(errorMessage(error, 'Could not reach the server. Try again when you’re online.'));
+    }
+  };
   const [findQuery, setFindQuery] = useState('');
   const [findResults, setFindResults] = useState<PublicCourseSummary[] | null>(null);
   const [findBusy, setFindBusy] = useState(false);
@@ -74,9 +83,10 @@ export const FindCoursesScreen = () => {
           {courseAddressLine(publicCourse.details) ? <Text style={styles.menuIntroCopy}>{courseAddressLine(publicCourse.details)}</Text> : null}
         </View>
         {publicCourse.details.notes?.trim() ? <><Text style={styles.fieldLabel}>INFO TO KNOW</Text><Text style={styles.roundCourseNotes}>{publicCourse.details.notes.trim()}</Text></> : null}
-        {courses.some((course) => course.sourceUid === publicCourse.uid || course.uid === publicCourse.uid)
+        {courses.some((course) => course.uid === publicCourse.uid)
           ? <View style={[styles.primaryButton, styles.disabledButton]}><Text style={styles.primaryButtonText}>IN YOUR COURSES ✓</Text></View>
-          : <Pressable onPress={() => addPublicCourse(publicCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>ADD TO MY COURSES</Text></Pressable>}
+          : <Pressable onPress={() => play(publicCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>PLAY THIS COURSE</Text></Pressable>}
+        {playError ? <Text style={styles.authError}>{playError}</Text> : null}
         <Pressable onPress={() => shareLink(`${publicCourse.name} on Glide Path:`, courseShareUrl(publicCourse.uid))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable>
       </> : <>
         <View style={styles.builderPanel}>

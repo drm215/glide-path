@@ -12,7 +12,8 @@ import { forgotPasswordRequest, loginRequest, registerRequest, resetPasswordRequ
 import type { Db } from './db.ts';
 import type { Mailer } from './mailer.ts';
 import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.ts';
-import { getPublishedCourse, getPublishedCourseVersions, getSharedRound, searchPublishedCourses } from './public.ts';
+import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
+import { AccessError, addEditor, handOverCourses, listEditors, playCourse, removeEditor } from './access.ts';
 import { runSync } from './sync.ts';
 
 type AppOptions = {
@@ -212,9 +213,43 @@ export const createApp = ({
 
   // Apple requires apps with accounts to offer account deletion. Cascades to courses, rounds and bag.
   app.delete('/api/me', requireUser, async (req, res) => {
-    await db.query('DELETE FROM users WHERE id = $1', [(req as AuthedRequest).user.id]);
+    const userId = (req as AuthedRequest).user.id;
+    // Courses it created pass to another owner or admin first, since others play them.
+    await db.transaction(async (tx) => {
+      await handOverCourses(tx, userId);
+      await tx.query('DELETE FROM users WHERE id = $1', [userId]);
+    });
     res.status(204).end();
   });
+
+  // Course owners and admins, and playing a course (see access.ts).
+  const courseRoute = (handler: (req: Request, res: Response, uid: string, userId: string) => Promise<void>) => async (req: Request, res: Response) => {
+    const uid = z.uuid().safeParse(req.params.uid);
+    try {
+      if (!uid.success) throw new AccessError(404, 'Course not found.');
+      await handler(req, res, uid.data, (req as AuthedRequest).user.id);
+    } catch (error) {
+      if (!(error instanceof AccessError)) throw error;
+      res.status(error.status).json({ error: error.message });
+    }
+  };
+  app.get('/api/courses/:uid/editors', requireUser, courseRoute(async (_req, res, uid, userId) => {
+    res.json(await listEditors(db, uid, userId));
+  }));
+  app.post('/api/courses/:uid/editors', requireUser, courseRoute(async (req, res, uid, userId) => {
+    const { email, role } = z.object({ email: z.string().trim().min(1).max(254), role: z.enum(['owner', 'admin']) }).parse(req.body);
+    res.json(await addEditor(db, uid, userId, email, role, Date.now()));
+  }));
+  app.delete('/api/courses/:uid/editors/:editorId', requireUser, courseRoute(async (req, res, uid, userId) => {
+    const editorId = z.uuid().safeParse(req.params.editorId);
+    if (!editorId.success) throw new AccessError(404, 'Not found.');
+    await removeEditor(db, uid, userId, editorId.data, Date.now());
+    res.status(204).end();
+  }));
+  app.post('/api/courses/:uid/play', requireUser, courseRoute(async (_req, res, uid, userId) => {
+    await playCourse(db, uid, userId, Date.now());
+    res.status(204).end();
+  }));
 
   app.post('/api/sync', requireUser, async (req, res) => {
     const input = syncRequest.parse(req.body);
@@ -235,12 +270,6 @@ export const createApp = ({
       return;
     }
     res.json({ course });
-  });
-
-  // Copies of published courses in the app ask here whether their publisher changed them.
-  app.post('/api/public/course-versions', async (req, res) => {
-    const { uids } = z.object({ uids: z.array(z.uuid()).max(200) }).parse(req.body);
-    res.json({ versions: uids.length ? await getPublishedCourseVersions(db, uids) : [] });
   });
 
   app.get('/api/public/rounds/:token', async (req, res) => {

@@ -73,7 +73,9 @@ syncedData.rounds.push({
 
 const accountApi: FetchHandler = (path) => (path === '/api/me'
   ? { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat' } }
-  : syncedData);
+  : path.endsWith('/editors')
+    ? { editors: [{ userId: 'x', displayName: 'Pat', email: 'pat@example.com', role: 'owner', creator: true }, { userId: 'm1', displayName: 'Sam', email: 'sam@example.com', role: 'admin', creator: false }] }
+    : syncedData);
 
 describe('website pages in a browser', () => {
   const accountHtml = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
@@ -126,7 +128,8 @@ describe('website pages in a browser', () => {
     const text = document.getElementById('signed-in')!.textContent ?? '';
     assert.match(text, /Pat/);
     assert.match(text, /Cedar Grove/);
-    assert.match(text, /2 layouts · Private/);
+    assert.match(text, /Courses you can edit/);
+    assert.match(text, /Cedar Grove2 layouts · You created it/);
     assertNoRenderingLeaks(text);
   });
 
@@ -338,6 +341,9 @@ describe('website pages in a browser', () => {
     const text = view.textContent ?? '';
     assertNoRenderingLeaks(text);
     assert.match(text, /Blue tees layout/);
+    // Its owners and admins, with the creator (who can't be removed) first.
+    assert.match(text, /Owners and admins/);
+    assert.match(view.querySelector('.sharing .members')?.textContent ?? '', /^PatOwner · created it · pat@example\.comSamAdmin · sam@example\.comRemove$/);
     assert.equal(view.querySelectorAll('section[data-layout-panel]').length, 2);
     assert.match(text, /365 ft/);
   });

@@ -177,7 +177,7 @@ describe('Glide Path API', () => {
   });
 
   describe('public courses', () => {
-    test('lists only published courses, with search, distance, and totals', async () => {
+    test('lists every course, with search, distance, and totals', async () => {
       const token = await server.register('mapper@example.com', 'Course Mapper');
       await server.request('POST', '/api/sync', {
         token,
@@ -193,7 +193,7 @@ describe('Glide Path API', () => {
       const search = await server.request('GET', '/api/public/courses?q=park');
       const names = search.body.courses.map((item: { name: string }) => item.name);
       assert.ok(names.includes('Published Park'));
-      assert.ok(!names.includes('Private Park'));
+      assert.ok(names.includes('Private Park'), 'every course is public, whatever an older app sends');
 
       const published = search.body.courses.find((item: { name: string }) => item.name === 'Published Park');
       assert.equal(published.mappedBy, 'Course Mapper');
@@ -212,26 +212,20 @@ describe('Glide Path API', () => {
       assert.equal(detail.body.course.layouts.length, 2);
     });
 
-    test("reports when published courses last changed, for copies to check their publisher's updates", async () => {
+    test('a course reports when it was last edited', async () => {
       const token = await server.register('versions@example.com', 'Publisher');
-      const synced = await server.request('POST', '/api/sync', {
-        token,
-        body: { courses: [course({ clientId: 'v1', name: 'Shown', published: true, updatedAt: 111 }), course({ clientId: 'v2', name: 'Hidden', published: false, updatedAt: 222 })] },
-      });
-      const uid = (name: string) => synced.body.courses.find((item: { name: string }) => item.name === name).uid;
-      const detail = await server.request('GET', `/api/public/courses/${uid('Shown')}`);
+      const synced = await server.request('POST', '/api/sync', { token, body: { courses: [course({ clientId: 'v1', name: 'Shown', updatedAt: 111 })] } });
+      const detail = await server.request('GET', `/api/public/courses/${synced.body.courses[0].uid}`);
       assert.equal(detail.body.course.updatedAt, 111);
-
-      const versions = await server.request('POST', '/api/public/course-versions', { body: { uids: [uid('Shown'), uid('Hidden'), '00000000-0000-4000-8000-000000000000'] } });
-      assert.equal(versions.status, 200);
-      assert.deepEqual(versions.body.versions, [{ uid: uid('Shown'), updatedAt: 111 }], 'unpublished and unknown courses are left out');
-      assert.equal((await server.request('POST', '/api/public/course-versions', { body: { uids: ['not-a-uuid'] } })).status, 400);
     });
 
-    test('hides unpublished and unknown courses', async () => {
+    test('hides deleted and unknown courses', async () => {
       const token = await server.register('hidden@example.com');
       const synced = await server.request('POST', '/api/sync', { token, body: { courses: [course({ published: false })] } });
-      assert.equal((await server.request('GET', `/api/public/courses/${synced.body.courses[0].uid}`)).status, 404);
+      const uid = synced.body.courses[0].uid;
+      assert.equal((await server.request('GET', `/api/public/courses/${uid}`)).status, 200, 'every course is public');
+      await server.request('POST', '/api/sync', { token, body: { courses: [course({ deleted: true, updatedAt: 9_000 })] } });
+      assert.equal((await server.request('GET', `/api/public/courses/${uid}`)).status, 404);
       assert.equal((await server.request('GET', '/api/public/courses/not-a-uuid')).status, 404);
     });
 
@@ -253,7 +247,7 @@ describe('Glide Path API', () => {
       assert.equal(view.status, 200);
       assert.equal(view.body.round.playedBy, 'Sharer');
       assert.equal(view.body.round.layouts.length, 2);
-      assert.equal(view.body.round.courseUid, null, 'unpublished course is not linked');
+      assert.equal(view.body.round.courseUid, shared.body.courses[0].uid, 'its course is linked (every course is public)');
 
       const edited = await server.request('POST', '/api/sync', { token, body: { rounds: [round({ shared: true, updatedAt: 3000 })] } });
       assert.equal(edited.body.rounds[0].shareToken, shareToken, 'token survives edits');

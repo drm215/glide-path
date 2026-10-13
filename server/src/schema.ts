@@ -63,6 +63,26 @@ ALTER TABLE rounds ADD COLUMN IF NOT EXISTS pars jsonb;
 -- signs out every existing session.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 0;
 
+-- Every course is public. Each account other than its creator that plays or edits a course has
+-- a row here: role 'owner' or 'admin' (they edit it, like its creator) or 'player'. Their devices
+-- sync the course. A removed row stays, marked removed, so their next sync drops the course;
+-- version (from sync_version) is when the row last changed, for their sync cursors.
+CREATE TABLE IF NOT EXISTS course_access (
+  course_uid uuid NOT NULL REFERENCES courses(uid) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role text NOT NULL CHECK (role IN ('owner', 'admin', 'player')),
+  removed boolean NOT NULL DEFAULT false,
+  updated_at bigint NOT NULL,
+  version bigint NOT NULL DEFAULT nextval('sync_version'),
+  PRIMARY KEY (course_uid, user_id)
+);
+CREATE INDEX IF NOT EXISTS course_access_user ON course_access (user_id, version);
+-- A copy an older app made from the directory, merged back into its original: the id (client_id,
+-- or shared-<uid>) rounds that still name the copy are moved to.
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS merged_into text;
+-- Courses used to be private unless published; now every course is public.
+UPDATE courses SET published = true WHERE NOT published AND NOT deleted;
+
 CREATE TABLE IF NOT EXISTS bags (
   owner_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   discs jsonb NOT NULL DEFAULT '[]',

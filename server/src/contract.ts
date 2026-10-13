@@ -49,6 +49,9 @@ export const courseRecord = z.object({
   // The server's edit time of the version the device edited (see course-merge.ts); older apps
   // don't send it.
   baseUpdatedAt: z.number().int().nonnegative().optional(),
+  // Set on a course an older app copied from the directory: the course it was copied from, which
+  // the copy is merged back into (see sync.ts).
+  sourceUid: z.string().max(100).optional(),
   name: z.string().min(1).max(200),
   holes: z.number().int().min(1).max(100),
   layouts: z.array(holeLayout).max(100),

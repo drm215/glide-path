@@ -6,7 +6,7 @@ import { errorMessage, formatSyncTime } from '../format';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { useApp } from '../state/AppState';
 
-export const AccountScreen = () => {
+export const AccountScreen = ({ required = false }: { required?: boolean } = {}) => {
   const { account, finishSignIn, pendingChanges, runSync, setCourses, setHistory, setSyncError, signOutLocally, syncError, syncing } = useApp();
   // 'forgot' asks for the email to send a reset code to; 'reset' takes the code and a new password.
   const [authMode, setAuthMode] = useState<'signIn' | 'register' | 'forgot' | 'reset'>('signIn');
@@ -118,7 +118,7 @@ export const AccountScreen = () => {
     const token = account.token;
     Alert.alert(
       'Delete your account?',
-      'This permanently deletes your Glide Path account and everything synced to it, including published courses and shared round links. Data on this phone is kept.',
+      'This permanently deletes your Glide Path account, your rounds and shared round links. Courses you created pass to another owner or admin; any without one are deleted for everyone. Data on this phone is kept.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -140,7 +140,8 @@ export const AccountScreen = () => {
   };
 
   return <>
-    <ScreenHeading eyebrow="SYNC & SHARING" title={account ? 'Your account.' : 'Sign in.'} />
+    {/* `required`: shown in place of the app until someone signs in, so there's nowhere to go back to. */}
+    <ScreenHeading eyebrow={required ? 'WELCOME TO GLIDE PATH' : 'SYNC & SHARING'} title={account ? 'Your account.' : 'Sign in.'} back={required ? null : undefined} />
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       {account ? <>
         <View style={styles.menuIntro}>
@@ -160,8 +161,8 @@ export const AccountScreen = () => {
         <Pressable onPress={confirmDeleteAccount} style={styles.endSessionButton}><Text style={styles.endSessionText}>DELETE ACCOUNT</Text></Pressable>
       </> : <>
         <View style={styles.menuIntro}>
-          <Text style={styles.menuIntroLabel}>BACK UP AND SHARE</Text>
-          <Text style={styles.menuIntroCopy}>Sign in to back up your courses, rounds and bag, keep them in sync across devices, publish courses to the directory, and share rounds. Glide Path keeps working offline and syncs when you’re back online.</Text>
+          <Text style={styles.menuIntroLabel}>ONE COURSE MAP FOR EVERYONE</Text>
+          <Text style={styles.menuIntroCopy}>Glide Path needs an account. Every course is shared: find any course to play, and map the ones you create or are made an owner or admin of. Your rounds and bag sync across your devices and to the website. Glide Path keeps working offline and syncs when you’re back online.</Text>
         </View>
         {syncError ? <Text style={styles.authError}>{syncError}</Text> : null}
         {authMode === 'signIn' || authMode === 'register' ? <View style={[styles.typeRow, styles.authTabs]}>

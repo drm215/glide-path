@@ -45,12 +45,13 @@ export type Course = { id: string; name: string; holes: number; layouts?: HoleLa
   // The server's edit time of the version this copy was last synced with. Sent with edits, so the
   // server knows whether the device saw other devices' changes (if not, it merges them).
   serverUpdatedAt?: number;
-  // Set on courses downloaded from the public directory.
+  // Every course is public. A course someone else created has id shared-<uid> here and their name
+  // in createdBy. role is this account's: owner or admin (can edit it) or player (can only play it).
+  createdBy?: string;
+  role?: 'owner' | 'admin' | 'player';
+  // Set on copies older versions of the app made from the directory: the course copied. The server
+  // merges such a copy back into it on the next sync.
   sourceUid?: string;
-  // The published version this copy has (the publisher's edit time), and when it last took it.
-  // A copy follows its publisher's updates until it's edited here (updatedAt past sourceSyncedAt).
-  sourceUpdatedAt?: number;
-  sourceSyncedAt?: number;
 };
 
 // A deleted course, remembered until the deletion has synced.

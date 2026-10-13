@@ -10,6 +10,7 @@ export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#000000', alignItems: 'center' },
   // Holds the current screen between the brand bar and the bottom bar.
   stack: { flex: 1 },
+  hidden: { display: 'none' },
   appFrame: { flex: 1, width: '100%', maxWidth: 560, backgroundColor: PAPER, paddingTop: 48 },
   appFrameCompact: { paddingTop: 38 },
   topline: { height: 46, marginHorizontal: 23, flexDirection: 'row', alignItems: 'center' },
@@ -409,6 +410,12 @@ export const styles = StyleSheet.create({
   holeGridLegend: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 14 },
   holeGridLegendItem: { flexDirection: 'row', alignItems: 'center', marginRight: 12, marginBottom: 4 },
   holeGridLegendText: { color: MUTED, fontSize: 10, marginLeft: 5 },
+  // Sharing a course with other accounts, and combining duplicate courses.
+  sharingSection: { marginTop: 4, marginBottom: 14 },
+  sharingMember: { flexDirection: 'row', alignItems: 'center', minHeight: 40, borderBottomWidth: 1, borderBottomColor: '#26302b' },
+  sharingAdd: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  sharingAddButton: { marginLeft: 8, marginRight: 0, marginBottom: 0, height: 44 },
+  combineButton: { alignSelf: 'flex-start', marginTop: 4 },
   // A course copied from the directory: whether it still follows its publisher's updates.
   sourceNote: { marginBottom: 10 },
   // Disc stats: a card per disc with its distance figures and a quality bar.

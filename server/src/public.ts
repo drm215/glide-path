@@ -102,16 +102,6 @@ export const getPublishedCourse = async (db: Queryable, uid: string) => {
   };
 };
 
-// When each of these published courses last changed, for copies in the app to check in one
-// request. Courses that are unpublished or deleted are left out.
-export const getPublishedCourseVersions = async (db: Queryable, uids: string[]) => {
-  const { rows } = await db.query<{ uid: string; updated_at: string }>(
-    'SELECT uid, updated_at FROM courses WHERE uid = ANY($1::uuid[]) AND published AND NOT deleted',
-    [uids],
-  );
-  return rows.map((row) => ({ uid: row.uid, updatedAt: Number(row.updated_at) }));
-};
-
 type SharedRoundRow = {
   course_name: string; mode: string; shots: unknown[]; updated_at: string; display_name: string; layout_id: string | null; pars: (number | null)[] | null;
   layouts: Layout[] | null; hole_count: number | null; course_uid: string | null; course_published: boolean | null;
@@ -133,7 +123,9 @@ export const getSharedRound = async (db: Queryable, shareToken: string) => {
             c.layouts, c.hole_count, c.uid AS course_uid, c.published AS course_published, c.layout_name, c.extra_layouts
      FROM rounds r
      JOIN users u ON u.id = r.owner_id
-     LEFT JOIN courses c ON c.owner_id = r.owner_id AND c.client_id = r.course_client_id AND NOT c.deleted
+     -- The course it was played on: the player's own, or one shared with them (as shared-<uid>).
+     LEFT JOIN courses c ON NOT c.deleted AND ((c.owner_id = r.owner_id AND c.client_id = r.course_client_id)
+       OR r.course_client_id = 'shared-' || c.uid)
      WHERE r.share_token = $1 AND r.shared AND NOT r.deleted`,
     [shareToken],
   );

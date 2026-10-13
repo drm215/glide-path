@@ -1,49 +1,55 @@
-import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { courseShareUrl } from '../../lib/api';
-import { followsPublisher } from '../../lib/course-updates';
+import { duplicatesOf } from '../../lib/course-combine';
+import { canEditCourse } from '../../lib/public-course';
 import { MAIN_LAYOUT_ID, courseLayouts } from '../../lib/layouts';
-import { GREEN, styles } from '../theme';
+import type { Course } from '../../lib/types';
+import { styles } from '../theme';
 import { PAR_OPTIONS } from '../constants';
 import { formatElevation } from '../format';
 import { courseStats, holeDistanceFeet, holeElevationFeet } from '../geo';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { CourseDetailsFields } from '../components/CourseDetailsFields';
+import { CourseEditors } from '../components/CourseEditors';
 import { LayoutsEditor } from '../components/LayoutsEditor';
 import { shareLink } from '../links';
-import { go } from '../navigation';
 import { useApp } from '../state/AppState';
 
 export const CourseBuilderScreen = () => {
-  const { account, addHoleToCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, pendingChanges, selectedBaseCourse, selectedCourse, selectedCourseId, setCoursePublished, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse } = useApp();
+  const { addHoleToCourse, combineCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, selectedBaseCourse, selectedCourse, selectedCourseId, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse } = useApp();
+  // The courses this account can change: ones it created, or is an owner or admin of.
+  const editable = courses.filter(canEditCourse);
+  const editing = selectedBaseCourse && canEditCourse(selectedBaseCourse) ? selectedBaseCourse : undefined;
+  // Two courses that are really the same one: this one's holes, layouts and rounds go into the
+  // other, and this one is deleted.
+  const confirmCombine = (source: Course, target: Course) => Alert.alert(
+    `Combine into the other ${target.name}?`,
+    `Its holes and layouts are added to ${target.createdBy ? `the one ${target.createdBy} created` : 'your other one'} (where both have a tee or basket, the more recently saved one is kept), its rounds move there, and this one is deleted for everyone.`,
+    [{ text: 'Cancel', style: 'cancel' }, { text: 'Combine', onPress: () => combineCourse(source, target) }],
+  );
   const selectedCourseStats = selectedCourse ? courseStats(selectedCourse) : null;
 
   const mappedHoleCount = selectedCourse?.layouts?.filter((layout) => layout.tee && layout.basket).length ?? 0;
 
   return <>
-    <ScreenHeading eyebrow="YOUR COURSES" title="Course builder." />
+    <ScreenHeading eyebrow="COURSES YOU CAN EDIT" title="Course builder." />
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <Pressable onPress={startNewCourse} style={[styles.primaryButton, styles.newCourseButton]} accessibilityRole="button"><Text style={styles.primaryButtonText}>+ NEW COURSE</Text></Pressable>
-      <Text style={styles.builderHint}>Name it, add its details and layouts, then map each layout’s holes.</Text>
-      <Text style={styles.builderSectionTitle}>Your courses</Text>
-      {courses.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { if (course.id !== selectedCourseId) setSelectedLayoutId(MAIN_LAYOUT_ID); setSelectedCourseId(course.id); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{courseLayouts(course).length > 1 ? `${courseLayouts(course).length} layouts` : `${course.holes} holes`} · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
-      {selectedBaseCourse && selectedCourse && <View style={styles.mapEditor}>
-        <LayoutsEditor base={selectedBaseCourse} view={selectedCourse} />
+      <Text style={styles.builderHint}>Every course is public: anyone can find and play it. Name it, add its details and layouts, then map each layout’s holes.</Text>
+      <Text style={styles.builderSectionTitle}>Courses you can edit</Text>
+      {!editable.length && <Text style={styles.mapInstruction}>None yet. Create one, or ask an owner of a course to make you an admin.</Text>}
+      {editable.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { if (course.id !== selectedCourseId) setSelectedLayoutId(MAIN_LAYOUT_ID); setSelectedCourseId(course.id); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{courseLayouts(course).length > 1 ? `${courseLayouts(course).length} layouts` : `${course.holes} holes`} · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
+      {editing && selectedCourse && <View style={styles.mapEditor}>
+        <LayoutsEditor base={editing} view={selectedCourse} />
       </View>}
-      {selectedCourse && <View style={styles.mapEditor}>
+      {editing && selectedCourse && <View style={styles.mapEditor}>
         <Text style={styles.builderSectionTitle}>Course details</Text>
-        <View style={styles.toggleRow}>
-          <View style={styles.toggleCopy}>
-            <Text style={styles.courseItemName}>Publish to course directory</Text>
-            <Text style={styles.courseItemMeta}>{!account ? 'Sign in to publish this course.' : selectedCourse.published ? (selectedCourse.uid && !pendingChanges ? 'Anyone can find this course, its details, and its tee and basket positions.' : 'Publishing on next sync…') : 'Only you can see this course.'}</Text>
-          </View>
-          {account
-            ? <Switch value={Boolean(selectedCourse.published)} onValueChange={(published) => setCoursePublished(selectedCourse.id, published)} trackColor={{ true: GREEN }} accessibilityLabel="Publish to course directory" />
-            : <Pressable onPress={() => go('Account')} style={styles.courseLink}><Text style={styles.courseLinkText}>SIGN IN</Text></Pressable>}
-        </View>
-        {selectedBaseCourse?.sourceUid ? <Text style={[styles.courseItemMeta, styles.sourceNote]}>{followsPublisher(selectedBaseCourse)
-          ? 'Added from the course directory. It takes updates when the person who published it changes it, until you edit it here.'
-          : 'Added from the course directory. You’ve changed your copy, so it no longer takes updates from the person who published it.'}</Text> : null}
-        {account && selectedCourse.published && selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
+        {editing.createdBy ? <Text style={[styles.courseItemMeta, styles.sourceNote]}>Created by {editing.createdBy}. You’re {editing.role === 'owner' ? 'an owner' : 'an admin'}.</Text> : null}
+        <CourseEditors course={editing} />
+        {duplicatesOf(editing, courses).map((other) => <Pressable key={other.id} onPress={() => confirmCombine(editing, other)} style={[styles.courseLink, styles.combineButton]} accessibilityRole="button" accessibilityLabel={`Combine into the other ${other.name}`}>
+          <Text style={styles.courseLinkText}>COMBINE INTO {other.createdBy ? `THE ONE ${other.createdBy.toUpperCase()} CREATED` : `YOUR OTHER ${other.name.toUpperCase()}`}</Text>
+        </Pressable>)}
+        {selectedCourse.uid ? <Pressable onPress={() => shareLink(`${selectedCourse.name} on Glide Path:`, courseShareUrl(selectedCourse.uid!))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable> : null}
         {hasMultipleLayouts && <Text style={styles.courseItemMeta}>Stats for the {selectedCourse.layoutLabel} layout</Text>}
         {selectedCourseStats && <View style={styles.courseStatsGrid}>
           <View style={styles.courseStat}><Text style={styles.statLabel}>HOLES</Text><Text style={styles.courseStatValue}>{selectedCourseStats.holes}</Text><Text style={styles.courseStatNote}>{selectedCourseStats.mappedHoles} mapped</Text></View>

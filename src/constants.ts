@@ -3,8 +3,6 @@ import type { Disc, Lie, ThrowStyle, ThrowType } from '../lib/types';
 
 // Wait this long after the last edit before syncing, so a burst of edits uploads once.
 export const SYNC_DEBOUNCE_MS = 4_000;
-// How often courses copied from the directory check for their publisher's updates, at most.
-export const COURSE_UPDATE_CHECK_MS = 15 * 60_000;
 export const DISCIT_API_URL = 'https://discit-api.fly.dev/disc';
 export const DISC_SEARCH_MIN_CHARS = 2;
 export const DISC_SEARCH_MAX_RESULTS = 12;
