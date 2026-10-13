@@ -125,7 +125,7 @@ const renderRound = (round, { hole, editing = false } = {}) => {
     const positions = round.shots.flatMap((shot, position) => (shot.hole === movedHole ? [position] : []));
     moveStatus.textContent = 'Saving…';
     try {
-      const saved = await saveRecord('rounds', { ...round, shots: moveThrow(round.shots, positions[index], latitude, longitude, layout?.layouts?.[movedHole - 1]?.tee) });
+      const saved = await saveRecord('rounds', { ...round, shots: moveThrow(round.shots, positions[index], latitude, longitude, layout?.layouts?.[movedHole - 1]?.tee) }, () => { moveStatus.textContent = 'Waiting for the server to wake up…'; });
       keepScroll(() => renderRound(saved, { hole: movedHole, editing: true }));
     } catch (error) {
       moveStatus.textContent = `Couldn’t save the move: ${error.message}`;
@@ -383,7 +383,7 @@ const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
       : { ...course, extraLayouts: course.extraLayouts.map((extra) => (extra.id === layoutId ? { ...extra, layouts: movePoint(extra.layouts) } : extra)) };
     moveStatus.textContent = 'Saving…';
     try {
-      const saved = await saveRecord('courses', edited);
+      const saved = await saveRecord('courses', edited, () => { moveStatus.textContent = 'Waiting for the server to wake up…'; });
       keepScroll(() => renderCourse(saved, { layoutIndex: shownIndex, editing: true }));
     } catch (error) {
       moveStatus.textContent = `Couldn’t save the move: ${error.message}`;
@@ -581,11 +581,34 @@ const downloadAll = async () => {
 
 // Uploads one edited course or round through sync, as the app does: the newest edit wins, and
 // phones pick it up on their next sync. `kind` is 'courses' or 'rounds'. Returns the saved record.
-const saveRecord = async (kind, record) => {
+const SAVE_RETRY_DELAYS_MS = [3_000, 10_000, 20_000, 30_000, 30_000];
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A save that gets no answer (fetch rejects, Safari's "Load failed") or a gateway error is usually
+// the free server waking from sleep or restarting for an update, so it's tried again for about a
+// minute and a half. `onRetry` can say so meanwhile. Other errors the server answers with aren't
+// retried.
+const sendSave = async (body, onRetry) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await api('/api/sync', { method: 'POST', token, body });
+    } catch (error) {
+      // No answer, or the host's "starting up" gateway errors.
+      const waking = error.status === undefined || [502, 503, 504].includes(error.status);
+      if (!waking || attempt >= SAVE_RETRY_DELAYS_MS.length) {
+        throw waking ? new Error('Couldn’t reach the server. Check your connection and try again.') : error;
+      }
+      onRetry?.();
+      await wait(SAVE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+};
+
+const saveRecord = async (kind, record, onRetry) => {
   // Courses say which server version they were edited from, so a newer save from a phone is
-  // merged in rather than overwritten.
+  // merged in rather than overwritten. The same edit time on every attempt makes a retry harmless.
   const edited = { ...record, updatedAt: Math.max(Date.now(), record.updatedAt + 1), ...(kind === 'courses' ? { baseUpdatedAt: record.updatedAt } : {}) };
-  const page = await api('/api/sync', { method: 'POST', token, body: { cursor: syncCursor, [kind]: [edited] } });
+  const page = await sendSave({ cursor: syncCursor, [kind]: [edited] }, onRetry);
   syncCursor = page.cursor;
   // The reply has everything changed since the last download, this edit included.
   for (const list of ['courses', 'rounds']) {
