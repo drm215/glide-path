@@ -46,6 +46,9 @@ const extraLayout = z.object({
 
 export const courseRecord = z.object({
   ...syncMeta,
+  // The server's edit time of the version the device edited (see course-merge.ts); older apps
+  // don't send it.
+  baseUpdatedAt: z.number().int().nonnegative().optional(),
   name: z.string().min(1).max(200),
   holes: z.number().int().min(1).max(100),
   layouts: z.array(holeLayout).max(100),

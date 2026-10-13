@@ -582,7 +582,9 @@ const downloadAll = async () => {
 // Uploads one edited course or round through sync, as the app does: the newest edit wins, and
 // phones pick it up on their next sync. `kind` is 'courses' or 'rounds'. Returns the saved record.
 const saveRecord = async (kind, record) => {
-  const edited = { ...record, updatedAt: Math.max(Date.now(), record.updatedAt + 1) };
+  // Courses say which server version they were edited from, so a newer save from a phone is
+  // merged in rather than overwritten.
+  const edited = { ...record, updatedAt: Math.max(Date.now(), record.updatedAt + 1), ...(kind === 'courses' ? { baseUpdatedAt: record.updatedAt } : {}) };
   const page = await api('/api/sync', { method: 'POST', token, body: { cursor: syncCursor, [kind]: [edited] } });
   syncCursor = page.cursor;
   // The reply has everything changed since the last download, this edit included.

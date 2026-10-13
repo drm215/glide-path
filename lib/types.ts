@@ -42,6 +42,9 @@ export type Course = { id: string; name: string; holes: number; layouts?: HoleLa
   published?: boolean;
   // Server id, assigned on first sync; used for public course links.
   uid?: string;
+  // The server's edit time of the version this copy was last synced with. Sent with edits, so the
+  // server knows whether the device saw other devices' changes (if not, it merges them).
+  serverUpdatedAt?: number;
   // Set on courses downloaded from the public directory.
   sourceUid?: string;
   // The published version this copy has (the publisher's edit time), and when it last took it.

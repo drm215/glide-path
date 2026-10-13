@@ -28,7 +28,7 @@ export type SyncData = {
 };
 
 type CourseRecord = {
-  clientId: string; updatedAt: number; deleted?: boolean; name: string; holes: number;
+  clientId: string; updatedAt: number; deleted?: boolean; name: string; holes: number; baseUpdatedAt?: number;
   layouts: HoleLayout[]; details: CourseDetails; published: boolean; uid?: string;
   layoutName?: string; extraLayouts?: CourseLayout[];
 };
@@ -87,6 +87,7 @@ const courseToRecord = (course: Course): CourseRecord => {
       notes: clip(course.notes, 5000),
     },
     published: Boolean(course.published),
+    baseUpdatedAt: course.serverUpdatedAt,
   };
 };
 
@@ -173,6 +174,7 @@ const courseFromRecord = (record: CourseRecord, local?: Course): Course => ({
   extraLayouts: record.extraLayouts ?? [],
   uid: record.uid,
   updatedAt: record.updatedAt,
+  serverUpdatedAt: record.updatedAt,
   // The link to a published course is kept on this phone only.
   sourceUid: local?.sourceUid,
   sourceUpdatedAt: local?.sourceUpdatedAt,
@@ -180,7 +182,7 @@ const courseFromRecord = (record: CourseRecord, local?: Course): Course => ({
 });
 
 // Applies server changes to local courses: the newest edit wins, and equal edits are our
-// own upload coming back, which only needs the server-assigned uid.
+// own upload coming back, which only needs the server-assigned uid and version.
 export const mergeCourses = (current: Course[], remote: CourseRecord[]): Course[] => {
   let next = current;
   for (const record of remote) {
@@ -193,8 +195,9 @@ export const mergeCourses = (current: Course[], remote: CourseRecord[]): Course[
       next = [...next, courseFromRecord(record)];
     } else if (editTime(local) < record.updatedAt) {
       next = next.map((course) => (course === local ? courseFromRecord(record, local) : course));
-    } else if (editTime(local) === record.updatedAt && local.uid !== record.uid) {
-      next = next.map((course) => (course === local ? { ...local, uid: record.uid } : course));
+    } else if (editTime(local) === record.updatedAt && (local.uid !== record.uid || local.serverUpdatedAt !== record.updatedAt)) {
+      // Our own upload coming back: note the uid and that this is now the server's version.
+      next = next.map((course) => (course === local ? { ...local, uid: record.uid, serverUpdatedAt: record.updatedAt } : course));
     }
   }
   return next;

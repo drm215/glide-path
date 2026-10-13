@@ -175,8 +175,13 @@ const useAppState = () => {
       });
       read<Record<Disc, DiscInfo>>(BAG_DETAILS_KEY, setBagDetails);
       read<Record<Disc, number>>(BAG_WEIGHTS_KEY, setBagWeights);
-      if (fixMadeThrows) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
-      if (token) read<Omit<SyncAccount, 'token'>>(SYNC_KEY, (value) => setAccount({ ...value, token }));
+      // One-time: send everything again on the next sync. Before the server merged course saves, a
+      // device's edits could be turned away when another device had saved the course more recently,
+      // and they were never sent again; now they're merged in.
+      const resendAll = !migrations.resendForCourseMerge;
+      if (token) read<Omit<SyncAccount, 'token'>>(SYNC_KEY, (value) => setAccount({ ...value, token, ...(resendAll ? { pushedThrough: 0 } : {}) }));
+      if (resendAll) migrations = { ...migrations, resendForCourseMerge: true };
+      if (fixMadeThrows || resendAll) AsyncStorage.setItem(MIGRATIONS_KEY, JSON.stringify({ ...migrations, madeThrowsAtBasket: true })).catch(() => undefined);
       read<LastAccount>(LAST_ACCOUNT_KEY, (value) => { lastAccount.current = value; });
       read<Settings>(SETTINGS_KEY, (value) => { if (value.dimRound !== undefined) setDimRound(value.dimRound); });
       let meta: { bagUpdatedAt?: number; deletedCourses?: Tombstone[]; deletedRounds?: Tombstone[] } = {};

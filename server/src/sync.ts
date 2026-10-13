@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Queryable } from './db.ts';
 import type { BagRecord, CourseRecord, RoundRecord } from './contract.ts';
+import { mergeCourseRecords, sameCourse } from './course-merge.ts';
 
 export const newShareToken = () => randomBytes(12).toString('base64url');
 
@@ -22,8 +23,43 @@ const coursePosition = (course: CourseRecord) => {
   return point ? { latitude: point.latitude, longitude: point.longitude } : { latitude: null, longitude: null };
 };
 
-// Each upsert only replaces the stored row when the incoming edit is newer (last write wins).
-const upsertCourse = (tx: Queryable, ownerId: string, course: CourseRecord) => {
+// The stored course as a sync record, for merging.
+const courseFromRow = (row: CourseRow): CourseRecord => ({
+  clientId: row.client_id,
+  updatedAt: Number(row.updated_at),
+  deleted: row.deleted,
+  name: row.name,
+  holes: row.hole_count,
+  layouts: row.layouts,
+  layoutName: row.layout_name ?? undefined,
+  extraLayouts: row.extra_layouts,
+  details: row.details,
+  published: row.published,
+});
+
+// A course save made on top of the stored version replaces it; one made on top of an older
+// version is merged with it (see course-merge.ts), so no device's mapping is lost. A result that
+// differs from what the device sent is saved with an edit time past both, so every device takes
+// it, the sender included.
+const upsertCourse = async (tx: Queryable, ownerId: string, { baseUpdatedAt, ...incoming }: CourseRecord) => {
+  const { rows } = await tx.query<CourseRow>('SELECT * FROM courses WHERE owner_id = $1 AND client_id = $2 FOR UPDATE', [ownerId, incoming.clientId]);
+  if (!rows[0]) return writeCourse(tx, ownerId, incoming);
+  const stored = courseFromRow(rows[0]);
+  if (baseUpdatedAt !== undefined && baseUpdatedAt >= stored.updatedAt) {
+    // The device saw the stored version. Its save stands, even with a clock that runs behind.
+    if (sameCourse(incoming, stored)) return;
+    return writeCourse(tx, ownerId, { ...incoming, updatedAt: Math.max(incoming.updatedAt, stored.updatedAt + 1) });
+  }
+  const merged = mergeCourseRecords(stored, incoming);
+  if (stored.updatedAt >= incoming.updatedAt && sameCourse(merged, stored)) return;
+  const updatedAt = incoming.updatedAt > stored.updatedAt && sameCourse(merged, incoming)
+    ? incoming.updatedAt
+    : Math.max(stored.updatedAt, incoming.updatedAt) + 1;
+  return writeCourse(tx, ownerId, { ...merged, updatedAt });
+};
+
+// Each write only replaces the stored row when its edit time is newer.
+const writeCourse = (tx: Queryable, ownerId: string, course: CourseRecord) => {
   const position = coursePosition(course);
   return tx.query(
     `INSERT INTO courses (owner_id, client_id, name, hole_count, details, layouts, published, city, state, latitude, longitude, updated_at, deleted, layout_name, extra_layouts)

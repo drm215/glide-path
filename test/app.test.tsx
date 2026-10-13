@@ -783,6 +783,16 @@ test('signing in uploads this phone’s data and keeps the token in the keychain
   await waitFor(() => expect(stored(KEYS.lastAccount)).toMatchObject({ id: 'u1', email: 'pat@example.com' }));
 });
 
+test('after updating, the app sends its courses once more, so edits the server turned away get merged', async () => {
+  const requests = mockServer({ '/api/sync': () => ({ cursor: 1, more: false, courses: [], rounds: [], bag: null }) });
+  // Everything here counts as already sent (pushedThrough is past every edit).
+  await seed({ [KEYS.courses]: [cedarGrove], [KEYS.sync]: { user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' }, cursor: 5, pushedThrough: 10_000 } });
+  await SecureStore.setItemAsync('glide-path-token', 'token-1');
+  await renderApp();
+  type Upload = { courses: { clientId: string }[] };
+  await waitFor(() => expect(requests.some((request) => (request.body as Upload).courses.some((item) => item.clientId === 'course-1'))).toBe(true));
+});
+
 test('a round in progress uploads while it is being played, marked in progress', async () => {
   const requests = mockServer({ '/api/sync': () => ({ cursor: 1, more: false, courses: [], rounds: [], bag: null }) });
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.bag]: ['Buzzz'], [KEYS.sync]: { user: { id: 'u1', email: 'pat@example.com', displayName: 'Pat' }, cursor: 0, pushedThrough: 0 } });

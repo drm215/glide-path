@@ -321,6 +321,33 @@ describe('app sync against the API', () => {
     assert.deepEqual(orphaned.body.round.layouts, []);
   });
 
+  test('holes mapped on a device holding an older copy are merged in, not dropped, after another device saved the course', async () => {
+    const token = await server.register('steele@example.com', 'Mapper');
+    const longTees = { id: 'layout-long', name: '9 holes, long tees', holes: 1, layouts: [{ tee: null, basket: null }] };
+    const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { name: 'Steele Creek', extraLayouts: [longTees], updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const tablet = newDevice(token);
+    await syncDevice(server, tablet);
+
+    // The tablet maps the long tees...
+    const mappedAt = tick();
+    const gps = (latitude: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp: mappedAt });
+    const mapped = Array.from({ length: 9 }, (_, index) => ({ tee: gps(41 + index / 100), basket: gps(41.001 + index / 100), par: 3 }));
+    tablet.data.courses = [{ ...tablet.data.courses[0], extraLayouts: [{ ...longTees, holes: 9, layouts: mapped }], updatedAt: mappedAt }];
+    // ...but before it syncs, the phone (which hasn't seen that) adds a note and syncs: a newer save.
+    phone.data.courses = [{ ...phone.data.courses[0], notes: '$2 per car to enter the park.', updatedAt: tick() }];
+    await syncDevice(server, phone);
+    // The tablet's older save used to be turned away; now it's merged, and both devices get the result.
+    await syncDevice(server, tablet);
+    await syncDevice(server, phone);
+    for (const device of [phone, tablet]) {
+      const [steele] = device.data.courses;
+      assert.equal(steele.notes, '$2 per car to enter the park.');
+      assert.equal(steele.extraLayouts?.[0].holes, 9);
+      assert.equal(steele.extraLayouts?.[0].layouts.filter((layout) => layout.tee && layout.basket).length, 9);
+    }
+  });
+
   test('long text is clipped instead of failing the sync', async () => {
     const token = await server.register('long@example.com');
     const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { notes: 'x'.repeat(9000), name: 'y'.repeat(500), updatedAt: tick() })] });
