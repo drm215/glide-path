@@ -85,6 +85,8 @@ ALTER TABLE courses ADD COLUMN IF NOT EXISTS merged_into text;
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS merged_into_uid uuid;
 -- Site admins can edit every course and manage accounts.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;
+-- The first site admin. Only while the site has none, so it never overrides the Admin page.
+UPDATE users SET is_admin = true WHERE email = 'drm215@proton.me' AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin);
 -- Courses used to have owners and admins with the same rights; they're all owners now.
 UPDATE course_access SET role = 'owner' WHERE role = 'admin';
 -- Courses used to be private unless published; now every course is public.
