@@ -88,6 +88,7 @@ const accountApi: FetchHandler = (path) => (path === '/api/me'
 
 describe('website pages in a browser', () => {
   const accountHtml = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
+  const adminHtml = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
 
   test('My rounds: signed out shows the sign-in form', async () => {
     const { document } = await loadPage(accountHtml, 'account.js');
@@ -138,7 +139,7 @@ describe('website pages in a browser', () => {
     assert.match(text, /Pat/);
     assert.match(text, /Cedar Grove/);
     assert.match(text, /Courses you own/);
-    assert.equal(document.querySelector('a[href="#admin"]'), null, 'no Admin link for someone who isn’t one');
+    assert.equal((document.querySelector('[data-admin-link]') as unknown as { hidden: boolean }).hidden, true, 'no Admin link for someone who isn’t one');
     assert.ok(document.querySelector('a[href="#edit/u1"]'), 'a course opens in the editor');
     assert.match(text, /Cedar Grove2 layouts · You created it/);
     assertNoRenderingLeaks(text);
@@ -380,24 +381,75 @@ describe('website pages in a browser', () => {
     assert.match(view.textContent ?? '', /Hole 2 is par 5\./);
   });
 
-  test('My rounds: site admins get the Admin page, with every course and account', async () => {
+  test('My rounds: the course editor moves a layout in from another course', async () => {
+    const longTees = { id: 'long', name: 'Long tees', holes: 1, layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 4 }] };
+    const moves: unknown[] = [];
+    const api: FetchHandler = (path, init) => {
+      if (path.startsWith('/api/public/courses?q=')) {
+        return { courses: [{ uid: 'u1', name: 'Cedar Grove', holes: 2, layoutCount: 2, mappedBy: 'Pat' }, { uid: 'u2', name: 'Cedar Grove', city: 'Media', state: 'PA', holes: 1, layoutCount: 2, mappedBy: 'Luke' }] };
+      }
+      if (path === '/api/courses/u2') {
+        return { course: { uid: 'u2', name: 'Cedar Grove', holes: 1, layouts: [{ tee: null, basket: null }], extraLayouts: [longTees], createdBy: 'Luke', updatedAt: 1 }, canEdit: true, role: 'owner', isAdmin: false };
+      }
+      if (path === '/api/courses/u1/layouts/move') {
+        moves.push(JSON.parse(init!.body!));
+        const loaded = editorCourse();
+        return { ...loaded, course: { ...loaded.course, extraLayouts: [...loaded.course.extraLayouts, longTees] }, layoutId: 'long', movedRounds: 2 };
+      }
+      return accountApi(path, init);
+    };
+    Object.assign(globalThis, { confirm: () => true });
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api });
+    await navigate('#edit/u1');
+    const view = document.getElementById('signed-in')!;
+    const Event = (globalThis as unknown as { window: { Event: typeof globalThis.Event } }).window.Event;
+
+    (view.querySelector('[aria-label="Course to move a layout from"]') as unknown as { value: string }).value = 'cedar';
+    view.querySelector('[aria-label="Course to move a layout from"]')!.closest('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    await settle();
+    const found = [...view.querySelectorAll('.results button.row')];
+    assert.deepEqual(found.map((button) => button.textContent), ['Cedar GroveMedia, PA · mapped by Luke · 2 layouts›'], 'not this course itself');
+    found[0].dispatchEvent(new Event('click'));
+    await settle();
+    assert.deepEqual([...view.querySelectorAll('[aria-label="Layout to move"] option')].map((option) => option.textContent), ['Main · 1 hole, 0 mapped', 'Long tees · 1 hole, 1 mapped']);
+    assert.deepEqual([...view.querySelectorAll('[aria-label="Where it goes"] option')].map((option) => option.textContent), ['As a new layout', 'In place of Main', 'In place of Blue tees']);
+    for (const option of view.querySelectorAll('[aria-label="Layout to move"] option')) option.toggleAttribute('selected', option.getAttribute('value') === 'long');
+    [...view.querySelectorAll('button')].find((button) => button.textContent === 'Move layout')!.dispatchEvent(new Event('click'));
+    await settle();
+
+    assert.deepEqual(moves, [{ sourceUid: 'u2', layoutId: 'long' }]);
+    assert.equal(view.querySelector('[aria-label="Layouts"] button[aria-pressed="true"]')?.textContent, 'Long tees', 'shows the moved layout');
+    assert.match(view.textContent ?? '', /Layout moved here, with 2 rounds played on it\./);
+  });
+
+  test('Admin: site admins get the Admin page, with every course and account', async () => {
     const api: FetchHandler = (path, init) => {
       if (path === '/api/me') return { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat', isAdmin: true } };
       if (path.startsWith('/api/admin/courses')) return { courses: [{ uid: 'u9', name: 'Steele Creek', city: 'Bristol', state: 'TN', holes: 9, layouts: 2, createdBy: 'David', rounds: 4, players: 2 }] };
       if (path.startsWith('/api/admin/users')) return { users: [{ id: 'y', email: 'sam@example.com', displayName: 'Sam', isAdmin: false, createdAt: Date.UTC(2026, 9, 1), courses: 1, rounds: 3 }] };
       return accountApi(path, init);
     };
-    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api });
-    assert.ok(document.querySelector('a[href="#admin"]'), 'admins see the Admin link');
-    await navigate('#admin');
-    const view = document.getElementById('signed-in')!;
+    const myRounds = await loadPage(accountHtml, 'account.js', { token: 't', api });
+    assert.equal((myRounds.document.querySelector('[data-admin-link]') as unknown as { hidden: boolean }).hidden, false, 'admins see Admin in the menu');
+    assert.equal(myRounds.document.querySelector('a[href="#admin"]'), null, 'and not in My rounds');
+
+    const { document } = await loadPage(adminHtml, 'admin-page.js', { token: 't', api });
+    const view = document.getElementById('admin')!;
     assertNoRenderingLeaks(view.textContent ?? '');
     assert.match(view.textContent ?? '', /Steele CreekBristol, TN · created by David · 2 layouts · 4 rounds · 2 other players/);
-    assert.ok(view.querySelector('a[href="#edit/u9"]'), 'each course opens in the editor');
+    assert.ok(view.querySelector('a[href="/account#edit/u9"]'), 'each course opens in the editor');
     const tab = (label: string) => [...view.querySelectorAll('[aria-label="Admin sections"] button')].find((button) => button.textContent === label)!;
     tab('Accounts').dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
     await settle();
     assert.match(view.textContent ?? '', /Samsam@example\.com · joined .* · 1 course · 3 roundsMake adminDelete/);
+  });
+
+  test('Admin: anyone else is told it’s only for site admins', async () => {
+    const signedOut = await loadPage(adminHtml, 'admin-page.js');
+    assert.match(signedOut.document.getElementById('admin')!.textContent ?? '', /Sign in with a site admin account/);
+    const { document } = await loadPage(adminHtml, 'admin-page.js', { token: 't', api: accountApi });
+    assert.match(document.getElementById('admin')!.textContent ?? '', /only for site admins/);
+    assert.equal((document.querySelector('[data-admin-link]') as unknown as { hidden: boolean }).hidden, true);
   });
 
   describe('shared round page', () => {

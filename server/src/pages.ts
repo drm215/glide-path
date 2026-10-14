@@ -70,11 +70,12 @@ ${maps ? '<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">\n' : ''}<li
 <body>
 <header class="site-header"><div class="wrap">
   <a class="brand" href="/"><img class="brand-logo" src="/logo-mark.webp" alt="" width="30" height="30"><span class="brand-name">GLIDE PATH</span></a>
-  <nav class="site-nav"><a href="/"${nav === 'courses' ? ' aria-current="page"' : ''}>Courses</a><a href="/account"${nav === 'account' ? ' aria-current="page"' : ''}>My rounds</a></nav>
+  <nav class="site-nav"><a href="/"${nav === 'courses' ? ' aria-current="page"' : ''}>Courses</a><a href="/account"${nav === 'account' ? ' aria-current="page"' : ''}>My rounds</a><a href="/admin" data-admin-link hidden>Admin</a></nav>
 </div></header>
 <main class="wrap">${body}</main>
 <footer class="site-footer"><div class="wrap"><span>Glide Path · disc golf course mapping and round logging</span><a href="/privacy">Privacy</a></div></footer>
-${data === undefined ? '' : `<script type="application/json" id="page-data">${embedJson(data)}</script>\n`}${maps ? '<script src="/js/config.js"></script>\n<script src="/vendor/leaflet/leaflet.js"></script>\n' : ''}${script ? `<script type="module" src="${script}"></script>\n` : ''}</body>
+${data === undefined ? '' : `<script type="application/json" id="page-data">${embedJson(data)}</script>\n`}${maps ? '<script src="/js/config.js"></script>\n<script src="/vendor/leaflet/leaflet.js"></script>\n' : ''}${script ? `<script type="module" src="${script}"></script>\n` : ''}<script type="module" src="/js/nav-check.js"></script>
+</body>
 </html>`;
 
 export const renderNotFoundPage = (what: string) => renderShell({

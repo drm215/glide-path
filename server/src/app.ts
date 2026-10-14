@@ -15,7 +15,7 @@ import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.t
 import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
 import { AccessError, addOwner, listOwners, playCourse, removeOwner } from './access.ts';
 import { combineCourses, deleteAccount, listAllCourses, listUsers, requireAdmin, setAdmin } from './admin.ts';
-import { courseForEditor, deleteCourse, saveCourse } from './courses.ts';
+import { courseForEditor, deleteCourse, moveLayout, saveCourse } from './courses.ts';
 import { runSync } from './sync.ts';
 
 type AppOptions = {
@@ -260,6 +260,11 @@ export const createApp = ({
     const uid = courseUid(req);
     await db.transaction((tx) => deleteCourse(tx, uid, userId, Date.now()));
     res.status(204).end();
+  }));
+  app.post('/api/courses/:uid/layouts/move', requireUser, accessRoute(async (req, res, userId) => {
+    const uid = courseUid(req);
+    const move = z.object({ sourceUid: z.uuid(), layoutId: z.string().min(1).max(100), replaceLayoutId: z.string().min(1).max(100).optional() }).parse(req.body);
+    res.json(await db.transaction((tx) => moveLayout(tx, uid, userId, move, Date.now())));
   }));
   app.get('/api/courses/:uid/owners', requireUser, accessRoute(async (req, res, userId) => {
     res.json(await listOwners(db, courseUid(req), userId));

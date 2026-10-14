@@ -1,4 +1,4 @@
-// Site admins' page in My rounds: every course (each opens in the course editor), every account
+// Site admins' page (/admin): every course (each opens in the course editor), every account
 // (making or removing admins, deleting accounts), and combining two courses that are the same
 // place. See server/src/admin.ts.
 import { api, el, formatDate, plural, setChildren } from './lib.js';
@@ -17,7 +17,7 @@ const coursesTab = (token) => {
     try {
       const { courses } = await api(`/api/admin/courses?q=${encodeURIComponent(query)}`, { token });
       status.textContent = courses.length ? '' : 'No courses match.';
-      setChildren(list, courses.map((course) => el('li', {}, el('a', { href: `#edit/${encodeURIComponent(course.uid)}` },
+      setChildren(list, courses.map((course) => el('li', {}, el('a', { href: `/account#edit/${encodeURIComponent(course.uid)}` },
         el('span', {},
           el('span', { class: 'name' }, course.name),
           el('span', { class: 'sub' }, [
@@ -99,7 +99,7 @@ const combineTab = (token) => {
     status.textContent = 'Combining…';
     try {
       const { uid } = await api('/api/admin/combine', { method: 'POST', token, body: { sourceUid, targetUid } });
-      location.hash = `#edit/${encodeURIComponent(uid)}`;
+      location.href = `/account#edit/${encodeURIComponent(uid)}`;
     } catch (error) {
       status.textContent = error.message;
     }
@@ -112,7 +112,7 @@ const combineTab = (token) => {
     status);
 };
 
-export const renderAdmin = (root, { token, me, back }) => {
+export const renderAdmin = (root, { token, me }) => {
   const panels = { courses: coursesTab(token), accounts: accountsTab(token, me), combine: combineTab(token) };
   const content = el('div', {});
   const tabs = el('div', { class: 'tabs', role: 'group', 'aria-label': 'Admin sections' },
@@ -125,7 +125,6 @@ export const renderAdmin = (root, { token, me, back }) => {
     }, label)));
   setChildren(content, panels.courses);
   setChildren(root,
-    back,
     el('div', { class: 'eyebrow' }, 'Site admin'),
     el('h1', {}, 'Admin'),
     el('p', { class: 'meta' }, 'Site admins can edit or delete any course, choose its owners, combine duplicates, and manage accounts.'),

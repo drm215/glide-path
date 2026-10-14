@@ -1,8 +1,8 @@
 // The website's course editor, for a course's owners and site admins: its details, layouts,
-// holes and pars, its tees and baskets (dragged, or placed by clicking the map), its owners, and
-// deleting it. Each change saves at once (PUT /api/courses/:uid); a phone's newer save is merged
+// holes and pars, its tees and baskets (dragged, or placed by clicking the map), moving a layout
+// in from another course, its owners, and deleting it. Each change saves at once (PUT /api/courses/:uid); a phone's newer save is merged
 // in on the server rather than overwritten, and phones pick the change up on their next sync.
-import { api, drawHoles, el, satelliteMap, setChildren } from './lib.js';
+import { api, drawHoles, el, plural, satelliteMap, setChildren } from './lib.js';
 import { holeLength, holeRise, riseText, setUpCourseHoles } from './course-holes.js';
 import { placedPoint } from './round-stats.js';
 
@@ -190,6 +190,11 @@ const showEditor = (root, { course, canEdit, isAdmin, role, uid, token, back, on
     addHole,
     el('h2', {}, 'Layouts'),
     layoutTools,
+    moveLayoutSection(uid, token, layouts, (result) => {
+      const moved = layoutsOf(result.course).findIndex((item) => item.id === result.layoutId);
+      showEditor(root, { ...result, uid, token, back, onDeleted, state: { layoutIndex: Math.max(0, moved), message: `Layout moved here${result.movedRounds ? `, with ${plural(result.movedRounds, 'round')} played on it` : ''}.` } });
+      window.scrollTo(0, 0);
+    }),
     el('h2', {}, 'Details'),
     details,
     ownersSection(uid, token),
@@ -261,5 +266,85 @@ const ownersSection = (uid, token) => {
     el('p', { class: 'meta' }, 'Owners can edit this course, add and remove owners, and delete it. Add them by the email they use for Glide Path.'),
     list,
     el('form', { class: 'search', onsubmit: add }, emailInput, el('button', { class: 'button', type: 'submit' }, 'Add owner')),
+    status);
+};
+
+const mappedCount = (holes) => holes.filter((hole) => hole.tee && hole.basket).length;
+
+// Moving a layout here from another course (one this account can also edit), e.g. when the same
+// place was mapped twice: as a new layout, or in place of one of this course's. Its holes and the
+// rounds played on it come across, and it leaves the other course (a main layout is copied, since
+// a course can't be without one). See moveLayout in server/src/courses.ts.
+const moveLayoutSection = (uid, token, targetLayouts, onMoved) => {
+  const status = el('p', { class: 'status', 'aria-live': 'polite' });
+  const results = el('ul', { class: 'results' });
+  const picker = el('div', {});
+  const searchInput = el('input', { type: 'search', placeholder: 'Course name or place', 'aria-label': 'Course to move a layout from' });
+
+  const pick = async (sourceUid) => {
+    status.textContent = 'Loading its layouts…';
+    setChildren(picker);
+    try {
+      const { course: source, canEdit } = await api(`/api/courses/${encodeURIComponent(sourceUid)}`, { token });
+      if (!canEdit) { status.textContent = `You can only move a layout from a course you own. Ask an owner of ${source.name} to add you.`; return; }
+      status.textContent = '';
+      const sourceLayouts = layoutsOf(source);
+      const layoutSelect = el('select', { 'aria-label': 'Layout to move' }, sourceLayouts.map((item) => el('option', { value: item.id },
+        `${item.name} · ${plural(item.layouts.length, 'hole')}, ${mappedCount(item.layouts)} mapped`)));
+      const intoSelect = el('select', { 'aria-label': 'Where it goes' },
+        el('option', { value: '' }, 'As a new layout'),
+        targetLayouts.map((item) => el('option', { value: item.id }, `In place of ${item.name}`)));
+      const move = async () => {
+        const layoutId = layoutSelect.value;
+        const moving = sourceLayouts.find((item) => item.id === layoutId);
+        const replacing = targetLayouts.find((item) => item.id === intoSelect.value);
+        const from = layoutId === MAIN_LAYOUT_ID ? `It’s ${source.name}’s main layout, so it stays there too.` : `It leaves ${source.name}.`;
+        if (!confirm(`Move ${moving.name} here${replacing ? `, replacing ${replacing.name}’s holes` : ''}? Rounds played on it come with it. ${from}`)) return;
+        status.textContent = 'Moving…';
+        try {
+          onMoved(await api(`/api/courses/${encodeURIComponent(uid)}/layouts/move`, {
+            method: 'POST', token, body: { sourceUid, layoutId, ...(replacing ? { replaceLayoutId: replacing.id } : {}) },
+          }));
+        } catch (error) {
+          status.textContent = `Couldn’t move it: ${error.message}`;
+        }
+      };
+      setChildren(picker,
+        el('h3', {}, `From ${source.name}`),
+        el('div', { class: 'editor-form' },
+          el('label', {}, 'Layout', layoutSelect),
+          el('label', {}, 'Put it here', intoSelect),
+          el('button', { class: 'button', type: 'button', onclick: move }, 'Move layout')));
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+
+  const search = async (event) => {
+    event.preventDefault();
+    const query = searchInput.value.trim();
+    if (!query) return;
+    status.textContent = 'Searching…';
+    setChildren(picker);
+    try {
+      const { courses } = await api(`/api/public/courses?q=${encodeURIComponent(query)}`);
+      const others = courses.filter((item) => item.uid !== uid);
+      status.textContent = others.length ? '' : 'No other courses match.';
+      setChildren(results, others.map((item) => el('li', {}, el('button', { class: 'row', type: 'button', onclick: () => { setChildren(results); pick(item.uid); } },
+        el('span', {},
+          el('span', { class: 'name' }, item.name),
+          el('span', { class: 'sub' }, [[item.city, item.state].filter(Boolean).join(', ') || null, `mapped by ${item.mappedBy}`, item.layoutCount > 1 ? plural(item.layoutCount, 'layout') : plural(item.holes, 'hole')].filter(Boolean).join(' · '))),
+        el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')))));
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+
+  return el('section', {},
+    el('h2', {}, 'Move a layout here'),
+    el('p', { class: 'meta' }, 'For a layout mapped on another copy of this course. Its holes, tees, baskets and pars come here, with the rounds played on it. You need to own both courses.'),
+    el('form', { class: 'search', onsubmit: search }, searchInput, el('button', { class: 'button secondary', type: 'submit' }, 'Find course')),
+    results,
+    picker,
     status);
 };

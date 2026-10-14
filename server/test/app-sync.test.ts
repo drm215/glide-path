@@ -536,6 +536,55 @@ describe('app sync against the API', () => {
     assert.equal((await server.request('GET', '/api/me', { token: samToken })).status, 401);
   });
 
+  test('owners of two courses move a layout, and its rounds, from one to the other', async () => {
+    const davidToken = await server.register('move-david@example.com', 'Move David');
+    const lukeToken = await server.register('move-luke@example.com', 'Move Luke');
+    const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp });
+    // Two Steele Creeks: David's (short tees), and Luke's (short tees too, plus long tees and rounds on both).
+    const david = newDevice(davidToken, { ...emptyData(), courses: [course('d1', {
+      name: 'Steele Creek', layoutName: 'Short tees', layouts: [{ tee: gps(40, 5), basket: gps(40.001, 5), par: 3 }], holes: 1, updatedAt: tick(),
+    })] });
+    const luke = newDevice(lukeToken, { ...emptyData(), courses: [course('l1', {
+      name: 'Steele Creek', layoutName: 'Short tees', layouts: [{ tee: gps(40, 6), basket: gps(40.001, 6), par: 3 }], holes: 1,
+      extraLayouts: [{ id: 'long', name: 'Long tees', holes: 2, layouts: [{ tee: gps(41, 9), basket: gps(41.001, 9), par: 4 }, { tee: gps(41.01, 9), basket: gps(41.011, 9), par: 3 }] }], updatedAt: tick(),
+    })], history: [
+      session('luke-long', { courseId: 'l1', courseName: 'Steele Creek', layoutId: 'long', updatedAt: tick() }),
+      session('luke-short', { courseId: 'l1', courseName: 'Steele Creek', updatedAt: tick() }),
+    ] });
+    await syncDevice(server, david);
+    await syncDevice(server, luke);
+    const davidUid = david.data.courses[0].uid!;
+    const lukeUid = luke.data.courses[0].uid!;
+    const move = (token: string, body: object) => server.request('POST', `/api/courses/${davidUid}/layouts/move`, { token, body });
+
+    assert.equal((await move(davidToken, { sourceUid: lukeUid, layoutId: 'long' })).status, 403, 'David doesn’t own Luke’s');
+    assert.equal((await move(lukeToken, { sourceUid: lukeUid, layoutId: 'long' })).status, 403, 'Luke doesn’t own David’s');
+    assert.equal((await server.request('POST', `/api/courses/${lukeUid}/owners`, { token: lukeToken, body: { email: 'move-david@example.com' } })).status, 200);
+
+    // Long tees go across as a new layout, with Luke's round on them; Luke gets David's course to play.
+    const moved = await move(davidToken, { sourceUid: lukeUid, layoutId: 'long' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.deepEqual([moved.body.layoutId, moved.body.movedRounds], ['long', 1]);
+    await syncDevice(server, david);
+    await syncDevice(server, luke);
+    const long = david.data.courses[0].extraLayouts!;
+    assert.deepEqual(long.map((layout) => [layout.id, layout.name, layout.holes, layout.layouts[1]?.tee?.latitude]), [['long', 'Long tees', 2, 41.01]]);
+    const lukeCourses = Object.fromEntries(luke.data.courses.map((item) => [item.id, item]));
+    assert.deepEqual(lukeCourses.l1.extraLayouts, [], 'it left Luke’s course');
+    assert.equal(lukeCourses[`shared-${davidUid}`]?.role, 'player');
+    const lukeRounds = Object.fromEntries(luke.data.history.map((round) => [round.id, round]));
+    assert.deepEqual([lukeRounds['luke-long'].courseId, lukeRounds['luke-long'].layoutId], [`shared-${davidUid}`, 'long']);
+    assert.equal(lukeRounds['luke-short'].courseId, 'l1', 'rounds on other layouts stay');
+
+    // A main layout is copied in place of one of David's, and its rounds follow; Luke's course keeps it.
+    const replaced = await move(davidToken, { sourceUid: lukeUid, layoutId: 'main', replaceLayoutId: 'main' });
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+    assert.deepEqual([replaced.body.course.layoutName, replaced.body.course.layouts[0].tee.timestamp, replaced.body.movedRounds], ['Short tees', 6, 1]);
+    await syncDevice(server, luke);
+    assert.equal(luke.data.courses.find((item) => item.id === 'l1')?.layouts.length, 1);
+    assert.equal(luke.data.history.find((round) => round.id === 'luke-short')?.courseId, `shared-${davidUid}`);
+  });
+
   test('long text is clipped instead of failing the sync', async () => {
     const token = await server.register('long@example.com');
     const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { notes: 'x'.repeat(9000), name: 'y'.repeat(500), updatedAt: tick() })] });

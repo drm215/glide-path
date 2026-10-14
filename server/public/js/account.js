@@ -1,8 +1,8 @@
-import { renderAdmin } from './admin.js';
 import { renderCourseEditor } from './course-editor.js';
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
+import { showAdminLink } from './nav.js';
 import { discStats, discThrows, moveThrow, quality, roundLayouts } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
@@ -31,7 +31,7 @@ const layoutsOf = (course) => [
   ...(course.extraLayouts ?? []),
 ];
 // Whether this account owns a course (created it, or was made an owner). Site admins can edit
-// every course too, from the Admin page.
+// every course too, from the Admin page (/admin).
 const canEdit = (course) => course.role !== 'player';
 const courseFor = (round) => data.courses.find((course) => course.clientId === round.courseClientId);
 const layoutFor = (round) => {
@@ -77,8 +77,7 @@ const renderOverview = () => {
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES YOU OWN'), el('div', { class: 'value' }, courses.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'DISCS IN BAG'), el('div', { class: 'value' }, data.bag?.discs.length ?? 0))),
     el('p', { class: 'links' },
-      rounds.length ? [el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')] : null,
-      user.isAdmin ? el('a', { class: 'button', href: '#admin' }, 'Admin ›') : null),
+      rounds.length ? [el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')] : null),
     el('h2', {}, 'Rounds'),
     rounds.length
       ? el('ul', { class: 'results' }, rounds.map((round) => {
@@ -486,8 +485,7 @@ const route = () => {
     window.scrollTo(0, 0);
     return;
   }
-  if (kind === 'admin' && user.isAdmin) renderAdmin(signedInEl, { token, me: user, back: back() });
-  else if (kind === 'stats') renderStats();
+  if (kind === 'stats') renderStats();
   else if (kind === 'discs') renderDiscStats();
   else if (kind === 'disc' && id) renderDiscThrows(id, rest[0] && rest[0] !== 'all' ? rest[0].split(',') : [], rest[1] === 'practice');
   else if (kind === 'hole' && Number(rest[1]) > 0) renderHoleHistory(id, rest[0], Number(rest[1]), rest[2] === 'practice');
@@ -577,6 +575,7 @@ const load = async () => {
   try {
     const [me, synced] = await Promise.all([api('/api/me', { token }), downloadAll()]);
     user = me.user;
+    showAdminLink(user.isAdmin);
     // A full download includes deletion markers; only live records are shown.
     data = { courses: synced.courses.filter((item) => !item.deleted), rounds: synced.rounds.filter((item) => !item.deleted), bag: synced.bag };
     syncCursor = synced.cursor;
@@ -594,13 +593,14 @@ const load = async () => {
 function signOut() {
   saveToken(null);
   user = null;
+  showAdminLink(false);
   data = null;
   history.replaceState(null, '', location.pathname);
   showSignedOut();
 }
 
 async function deleteAccount() {
-  if (!confirm('Delete your Glide Path account? This permanently deletes your account, your rounds and shared round links. Courses you created pass to another owner or admin; any without one are deleted for everyone. Data on your phone is kept.')) return;
+  if (!confirm('Delete your Glide Path account? This permanently deletes your account, your rounds and shared round links. Courses you created pass to another owner; any without one are deleted for everyone. Data on your phone is kept.')) return;
   try {
     await api('/api/me', { method: 'DELETE', token });
     signOut();

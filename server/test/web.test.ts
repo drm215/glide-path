@@ -23,7 +23,7 @@ describe('website', () => {
   });
 
   test('serves the static pages with security headers', async () => {
-    for (const [path, text] of [['/', 'Courses mapped on the ground'], ['/account', 'Sign in.'], ['/privacy', 'Your data in Glide Path']]) {
+    for (const [path, text] of [['/', 'Courses mapped on the ground'], ['/account', 'Sign in.'], ['/privacy', 'Your data in Glide Path'], ['/admin', 'Admin · Glide Path']]) {
       const response = await fetch(`${server.baseUrl}${path}`);
       assert.equal(response.status, 200, path);
       assert.match(await response.text(), new RegExp(text), path);
