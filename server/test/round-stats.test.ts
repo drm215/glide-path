@@ -478,3 +478,16 @@ describe('moveThrow', () => {
     assert.deepEqual(placedPoint(40, -75, 123), { latitude: 40, longitude: -75, accuracy: null, altitude: null, timestamp: 123 });
   });
 });
+
+describe('course hole summaries', () => {
+  test('par, length and elevation change, leaving out what is unknown', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { holeSummary, riseText } = await import('../public/js/course-holes.js');
+    const tee = { latitude: 40, longitude: -75, altitude: 100 };
+    const basket = { latitude: 40.001, longitude: -75, altitude: 96.3 };
+    assert.equal(holeSummary(3, { tee, basket, par: 3 }), 'Hole 03 · Par 3 · 365 ft · ↓ 12 ft');
+    assert.equal(holeSummary(3, { tee, basket, par: 3 }, 20), 'Hole 03 · Par 3 · 365 ft · ↑ 20 ft', 'terrain elevation, when given');
+    assert.equal(holeSummary(7, { tee: null, basket: null }), 'Hole 07');
+    assert.deepEqual([riseText(0), riseText(null)], ['Flat', '—']);
+  });
+});

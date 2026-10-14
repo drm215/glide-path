@@ -348,7 +348,7 @@ describe('app sync against the API', () => {
     }
   });
 
-  test('anyone can play a course; only its owners and admins edit it', async () => {
+  test('anyone can play a course; only its owners (and site admins) edit it', async () => {
     const ownerToken = await server.register('owner@example.com', 'David');
     const friendToken = await server.register('friend@example.com', 'Sam');
     const longTees = { id: 'layout-long', name: '9 holes, long tees', holes: 1, layouts: [{ tee: null, basket: null }] };
@@ -363,8 +363,8 @@ describe('app sync against the API', () => {
     await syncDevice(server, friend);
     const [steele] = friend.data.courses;
     assert.deepEqual([steele.id, steele.role, steele.createdBy, steele.name], [`shared-${uid}`, 'player', 'David', 'Steele Creek']);
-    assert.equal((await server.request('GET', `/api/courses/${uid}/editors`, { token: friendToken })).status, 404, "players don't manage it");
-    assert.equal((await server.request('POST', `/api/courses/${uid}/editors`, { token: friendToken, body: { email: 'friend@example.com', role: 'owner' } })).status, 404);
+    assert.equal((await server.request('GET', `/api/courses/${uid}/owners`, { token: friendToken })).status, 404, "players don't manage it");
+    assert.equal((await server.request('POST', `/api/courses/${uid}/owners`, { token: friendToken, body: { email: 'friend@example.com' } })).status, 404);
 
     // A player's edits are ignored.
     const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp });
@@ -374,27 +374,27 @@ describe('app sync against the API', () => {
     await syncDevice(server, phone);
     assert.equal(phone.data.courses[0].extraLayouts?.[0].holes, 1, "a player can't change it");
 
-    // Invited as an admin by email, their mapping goes in.
-    const invited = await server.request('POST', `/api/courses/${uid}/editors`, { token: ownerToken, body: { email: 'Friend@Example.com ', role: 'admin' } });
-    assert.equal(invited.status, 200, JSON.stringify(invited.body));
-    assert.deepEqual(invited.body.editors.map((editor: { displayName: string; role: string; creator: boolean }) => [editor.displayName, editor.role, editor.creator]), [['David', 'owner', true], ['Sam', 'admin', false]]);
-    assert.equal((await server.request('POST', `/api/courses/${uid}/editors`, { token: ownerToken, body: { email: 'nobody@example.com', role: 'admin' } })).status, 404);
+    // Made an owner by email, their mapping goes in.
+    const added = await server.request('POST', `/api/courses/${uid}/owners`, { token: ownerToken, body: { email: 'Friend@Example.com ' } });
+    assert.equal(added.status, 200, JSON.stringify(added.body));
+    assert.deepEqual(added.body.owners.map((owner: { displayName: string; creator: boolean }) => [owner.displayName, owner.creator]), [['David', true], ['Sam', false]]);
+    assert.equal((await server.request('POST', `/api/courses/${uid}/owners`, { token: ownerToken, body: { email: 'nobody@example.com' } })).status, 404);
     await syncDevice(server, friend);
-    assert.equal(friend.data.courses[0].role, 'admin');
+    assert.equal(friend.data.courses[0].role, 'owner');
     friend.data.courses = [{ ...friend.data.courses[0], extraLayouts: [{ ...longTees, holes: 9, layouts: mapped(tick()) }], updatedAt: tick() }];
     // And a round there, shared, finds the course.
     friend.data.history = [session('friend-round', { courseId: `shared-${uid}`, courseName: 'Steele Creek', shared: true, updatedAt: tick() })];
     await syncDevice(server, friend);
     await syncDevice(server, phone);
-    assert.equal(phone.data.courses[0].extraLayouts?.[0].holes, 9, "an admin's mapping reaches the owner");
+    assert.equal(phone.data.courses[0].extraLayouts?.[0].holes, 9, "another owner's mapping reaches its creator");
     const round = await server.request('GET', `/api/public/rounds/${friend.data.history[0].shareToken}`);
     assert.equal(round.body.round.courseUid, uid);
 
-    // An admin can't remove its creator; removing the admin leaves them a player.
-    const creatorId = invited.body.editors[0].userId;
-    const friendId = invited.body.editors[1].userId;
-    assert.equal((await server.request('DELETE', `/api/courses/${uid}/editors/${creatorId}`, { token: friendToken })).status, 400);
-    assert.equal((await server.request('DELETE', `/api/courses/${uid}/editors/${friendId}`, { token: ownerToken })).status, 204);
+    // Its creator can't be removed; removing another owner leaves them a player.
+    const creatorId = added.body.owners[0].userId;
+    const friendId = added.body.owners[1].userId;
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}/owners/${creatorId}`, { token: friendToken })).status, 400);
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}/owners/${friendId}`, { token: ownerToken })).status, 204);
     await syncDevice(server, friend);
     assert.equal(friend.data.courses[0].role, 'player');
 
@@ -433,23 +433,107 @@ describe('app sync against the API', () => {
     assert.equal(original.extraLayouts?.[0].layouts[0].tee?.latitude, 41);
   });
 
-  test("deleting an account hands its courses to another owner or admin, so their players keep them", async () => {
+  test('deleting an account hands its courses to another owner, so their players keep them', async () => {
     const leaverToken = await server.register('leaver@example.com', 'Leaver');
     const heirToken = await server.register('heir@example.com', 'Heir');
     const phone = newDevice(leaverToken, { ...emptyData(), courses: [course('kept', { name: 'Kept Park', updatedAt: tick() }), course('alone', { name: 'Lonely Woods', updatedAt: tick() })] });
     await syncDevice(server, phone);
     const uid = (name: string) => phone.data.courses.find((item) => item.name === name)!.uid!;
-    await server.request('POST', `/api/courses/${uid('Kept Park')}/editors`, { token: leaverToken, body: { email: 'heir@example.com', role: 'admin' } });
+    await server.request('POST', `/api/courses/${uid('Kept Park')}/owners`, { token: leaverToken, body: { email: 'heir@example.com' } });
     const heir = newDevice(heirToken);
     await syncDevice(server, heir);
     assert.equal(heir.data.courses[0].id, `shared-${uid('Kept Park')}`);
 
     assert.equal((await server.request('DELETE', '/api/me', { token: leaverToken })).status, 204);
     await syncDevice(server, heir);
-    // The same course, under the id the heir already knew it by, now theirs to own.
+    // The same course, under the id the heir already knew it by, now theirs.
     assert.deepEqual(heir.data.courses.map((item) => [item.id, item.role, item.createdBy]), [[`shared-${uid('Kept Park')}`, 'owner', undefined]]);
     assert.equal((await server.request('GET', `/api/public/courses/${uid('Kept Park')}`)).body.course.mappedBy, 'Heir');
     assert.equal((await server.request('GET', `/api/public/courses/${uid('Lonely Woods')}`)).status, 404, 'a course with no one else goes with the account');
+  });
+
+  test('the website edits a course: its owners and site admins save, others cannot, and phones get it', async () => {
+    const ownerToken = await server.register('editor-owner@example.com', 'Owner');
+    const otherToken = await server.register('editor-other@example.com', 'Other');
+    const adminToken = await server.register('editor-admin@example.com', 'Admin');
+    await server.db.query("UPDATE users SET is_admin = true WHERE email = 'editor-admin@example.com'");
+    const phone = newDevice(ownerToken, { ...emptyData(), courses: [course('course-1', { name: 'Edit Park', updatedAt: tick() })] });
+    await syncDevice(server, phone);
+    const uid = phone.data.courses[0].uid!;
+
+    const loaded = await server.request('GET', `/api/courses/${uid}`, { token: ownerToken });
+    assert.equal(loaded.status, 200);
+    assert.deepEqual([loaded.body.canEdit, loaded.body.role, loaded.body.isAdmin, loaded.body.course.createdBy], [true, 'owner', false, 'Owner']);
+    assert.equal((await server.request('GET', `/api/courses/${uid}`, { token: otherToken })).body.canEdit, false);
+
+    const { name, holes, layouts, layoutName, extraLayouts, details, updatedAt } = loaded.body.course;
+    const edit = (changes: Record<string, unknown>) => ({ course: { name, holes, layouts, layoutName, extraLayouts, details, ...changes }, baseUpdatedAt: updatedAt });
+    assert.equal((await server.request('PUT', `/api/courses/${uid}`, { token: otherToken, body: edit({ name: 'Hijacked' }) })).status, 404, "someone who doesn't own it can't");
+    // A site admin can, on any course: a new hole, a par and the details.
+    const saved = await server.request('PUT', `/api/courses/${uid}`, {
+      token: adminToken,
+      body: edit({ name: 'Edit Park West', holes: 3, layouts: [...layouts, { tee: null, basket: null, par: 4 }], details: { ...details, notes: 'Bring water.' } }),
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.deepEqual([saved.body.course.name, saved.body.course.holes, saved.body.course.layouts[2].par, saved.body.course.details.notes], ['Edit Park West', 3, 4, 'Bring water.']);
+    await syncDevice(server, phone);
+    assert.deepEqual([phone.data.courses[0].name, phone.data.courses[0].holes, phone.data.courses[0].notes], ['Edit Park West', 3, 'Bring water.']);
+
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}`, { token: otherToken })).status, 404);
+    assert.equal((await server.request('DELETE', `/api/courses/${uid}`, { token: ownerToken })).status, 204);
+    await syncDevice(server, phone);
+    assert.deepEqual(phone.data.courses, []);
+  });
+
+  test('site admins list courses and accounts, manage admins and accounts, and combine courses', async () => {
+    const adminToken = await server.register('site-admin@example.com', 'Site Admin');
+    const davidToken = await server.register('combine-david@example.com', 'Combine David');
+    const samToken = await server.register('combine-sam@example.com', 'Combine Sam');
+    // The only admin, whatever other tests did.
+    await server.db.query("UPDATE users SET is_admin = (email = 'site-admin@example.com')");
+    assert.equal((await server.request('GET', '/api/admin/users', { token: davidToken })).status, 403, 'only site admins');
+    assert.equal((await server.request('GET', '/api/me', { token: adminToken })).body.user.isAdmin, true);
+
+    // Two Steele Creeks: David's (short tees mapped), and Sam's (long tees mapped, and a round).
+    const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 4, timestamp });
+    const david = newDevice(davidToken, { ...emptyData(), courses: [course('d1', {
+      name: 'Steele Creek', layoutName: 'Short tees', layouts: [{ tee: gps(40, 5), basket: gps(40.001, 5), par: 3 }], holes: 1,
+      extraLayouts: [{ id: 'long-d', name: 'Long tees', holes: 1, layouts: [{ tee: null, basket: null }] }], updatedAt: tick(),
+    })] });
+    const sam = newDevice(samToken, { ...emptyData(), courses: [course('s1', {
+      name: 'Steele Creek ', layoutName: 'Short tees', layouts: [{ tee: null, basket: null, par: 3 }], holes: 1,
+      extraLayouts: [{ id: 'long-s', name: 'long tees', holes: 2, layouts: [{ tee: gps(41, 9), basket: gps(41.001, 9), par: 4 }, { tee: gps(41.01, 9), basket: gps(41.011, 9), par: 3 }] }], updatedAt: tick(),
+    })], history: [session('sam-round', { courseId: 's1', courseName: 'Steele Creek', layoutId: 'long-s', updatedAt: tick() })] });
+    await syncDevice(server, david);
+    await syncDevice(server, sam);
+    const davidUid = david.data.courses[0].uid!;
+    const samUid = sam.data.courses[0].uid!;
+
+    // Searching matches course names, places and who created them.
+    const courses = await server.request('GET', '/api/admin/courses?q=combine', { token: adminToken });
+    assert.deepEqual(courses.body.courses.map((item: { createdBy: string; rounds: number }) => [item.createdBy, item.rounds]).sort(), [['Combine David', 0], ['Combine Sam', 1]]);
+    const users = await server.request('GET', '/api/admin/users?q=combine', { token: adminToken });
+    assert.deepEqual(users.body.users.map((user: { displayName: string; courses: number }) => [user.displayName, user.courses]).sort(), [['Combine David', 1], ['Combine Sam', 1]]);
+
+    // Sam's goes into David's: its long tees, its round (moved to David's matching layout), and Sam as an owner.
+    const combined = await server.request('POST', '/api/admin/combine', { token: adminToken, body: { sourceUid: samUid, targetUid: davidUid } });
+    assert.equal(combined.status, 200, JSON.stringify(combined.body));
+    await syncDevice(server, sam);
+    await syncDevice(server, david);
+    assert.deepEqual(sam.data.courses.map((item) => [item.id, item.role]), [[`shared-${davidUid}`, 'owner']]);
+    assert.deepEqual([sam.data.history[0].courseId, sam.data.history[0].layoutId], [`shared-${davidUid}`, 'long-d']);
+    const long = david.data.courses[0].extraLayouts![0];
+    assert.deepEqual([long.id, long.holes, long.layouts[1].tee?.latitude], ['long-d', 2, 41.01]);
+    assert.equal((await server.request('GET', `/api/public/courses/${samUid}`)).status, 404);
+
+    // Admins: another can be made, the last can't be removed, and accounts can be deleted.
+    const samId = users.body.users.find((user: { displayName: string }) => user.displayName === 'Combine Sam').id;
+    const adminId = (await server.request('GET', '/api/me', { token: adminToken })).body.user.id;
+    assert.equal((await server.request('PUT', `/api/admin/users/${adminId}`, { token: adminToken, body: { isAdmin: false } })).status, 400, 'the site keeps an admin');
+    assert.equal((await server.request('PUT', `/api/admin/users/${samId}`, { token: adminToken, body: { isAdmin: true } })).status, 204);
+    assert.equal((await server.request('GET', '/api/admin/users', { token: samToken })).status, 200, 'Sam is an admin now');
+    assert.equal((await server.request('DELETE', `/api/admin/users/${samId}`, { token: adminToken })).status, 204);
+    assert.equal((await server.request('GET', '/api/me', { token: samToken })).status, 401);
   });
 
   test('long text is clipped instead of failing the sync', async () => {

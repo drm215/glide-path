@@ -1,18 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
-import { addCourseEditor, getCourseEditors, removeCourseEditor, type CourseEditor } from '../../lib/api';
+import { addCourseOwner, getCourseOwners, removeCourseOwner, type CourseOwner } from '../../lib/api';
 import type { Course } from '../../lib/types';
 import { errorMessage } from '../format';
 import { useApp } from '../state/AppState';
 import { styles } from '../theme';
 
-// A course's owners and admins, for one of them: they edit it, invite others as owners or admins
-// by email, and remove them. Everyone can find and play every course.
+// A course's owners, for one of them (or a site admin): they edit it, add other owners by email,
+// remove them, and delete it. Everyone can find and play every course.
 export const CourseEditors = ({ course }: { course: Course }) => {
   const { account } = useApp();
-  const [editors, setEditors] = useState<CourseEditor[] | null>(null);
+  const [owners, setOwners] = useState<CourseOwner[] | null>(null);
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'owner' | 'admin'>('admin');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const token = account?.token;
@@ -21,50 +20,45 @@ export const CourseEditors = ({ course }: { course: Course }) => {
   useEffect(() => {
     if (!token || !uid) return;
     let current = true;
-    getCourseEditors(token, uid).then((result) => { if (current) setEditors(result.editors); }, () => { if (current) setEditors(null); });
+    getCourseOwners(token, uid).then((result) => { if (current) setOwners(result.owners); }, () => { if (current) setOwners(null); });
     return () => { current = false; };
   }, [token, uid]);
 
-  if (!token || !uid) return <Text style={[styles.courseItemMeta, styles.sourceNote]}>You can add owners and admins once this course has synced.</Text>;
+  if (!token || !uid) return <Text style={[styles.courseItemMeta, styles.sourceNote]}>You can add owners once this course has synced.</Text>;
 
-  const invite = async () => {
+  const add = async () => {
     if (!email.trim() || busy) return;
     setBusy(true);
     setError('');
     try {
-      setEditors((await addCourseEditor(token, uid, email.trim(), role)).editors);
+      setOwners((await addCourseOwner(token, uid, email.trim())).owners);
       setEmail('');
     } catch (problem) {
-      setError(errorMessage(problem, 'Could not invite them.'));
+      setError(errorMessage(problem, 'Could not add them.'));
     } finally {
       setBusy(false);
     }
   };
-  const remove = async (editor: CourseEditor) => {
+  const remove = async (owner: CourseOwner) => {
     setError('');
     try {
-      await removeCourseEditor(token, uid, editor.userId);
-      setEditors((current) => current?.filter((item) => item.userId !== editor.userId) ?? null);
+      await removeCourseOwner(token, uid, owner.userId);
+      setOwners((current) => current?.filter((item) => item.userId !== owner.userId) ?? null);
     } catch (problem) {
       setError(errorMessage(problem, 'Could not remove them.'));
     }
   };
 
   return <View style={styles.sharingSection}>
-    <Text style={styles.courseItemName}>Owners and admins</Text>
-    <Text style={styles.courseItemMeta}>Every course is public: anyone can find and play it. Owners and admins can also map and edit it, invite others, and delete it. Invite them by the email they use for Glide Path.</Text>
-    {editors?.map((editor) => <View key={editor.userId} style={styles.sharingMember}>
-      <Text style={[styles.courseItemMeta, styles.toggleCopy]}>{editor.displayName} · {editor.role === 'owner' ? 'Owner' : 'Admin'}{editor.creator ? ' (created it)' : ''} · {editor.email}</Text>
-      {!editor.creator && <Pressable onPress={() => remove(editor)} accessibilityRole="button" accessibilityLabel={`Remove ${editor.displayName} as ${editor.role}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>REMOVE</Text></Pressable>}
+    <Text style={styles.courseItemName}>Owners</Text>
+    <Text style={styles.courseItemMeta}>Every course is public: anyone can find and play it. Its owners can also map and edit it, add other owners, and delete it. Add them by the email they use for Glide Path.</Text>
+    {owners?.map((owner) => <View key={owner.userId} style={styles.sharingMember}>
+      <Text style={[styles.courseItemMeta, styles.toggleCopy]}>{owner.displayName}{owner.creator ? ' (created it)' : ''} · {owner.email}</Text>
+      {!owner.creator && <Pressable onPress={() => remove(owner)} accessibilityRole="button" accessibilityLabel={`Remove ${owner.displayName} as an owner`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>REMOVE</Text></Pressable>}
     </View>)}
-    <View style={styles.typeRow}>
-      {(['admin', 'owner'] as const).map((option) => <Pressable key={option} onPress={() => setRole(option)} style={[styles.typeButton, styles.sheetTypeButton, role === option && styles.typeButtonSelected]} accessibilityRole="button" accessibilityState={{ selected: role === option }}>
-        <Text style={[styles.typeText, role === option && styles.typeTextSelected]}>{option === 'admin' ? 'Admin' : 'Owner'}</Text>
-      </Pressable>)}
-    </View>
     <View style={styles.sharingAdd}>
-      <TextInput value={email} onChangeText={setEmail} onSubmitEditing={invite} placeholder="their@email.com" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.toggleCopy]} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} accessibilityLabel="Email to invite" returnKeyType="send" />
-      <Pressable onPress={invite} disabled={busy || !email.trim()} style={[styles.courseLink, styles.sharingAddButton, (busy || !email.trim()) && styles.disabledButton]} accessibilityRole="button"><Text style={styles.courseLinkText}>{busy ? 'INVITING…' : 'INVITE'}</Text></Pressable>
+      <TextInput value={email} onChangeText={setEmail} onSubmitEditing={add} placeholder="their@email.com" placeholderTextColor="#5f6a63" style={[styles.builderInput, styles.toggleCopy]} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} accessibilityLabel="Email of a new owner" returnKeyType="send" />
+      <Pressable onPress={add} disabled={busy || !email.trim()} style={[styles.courseLink, styles.sharingAddButton, (busy || !email.trim()) && styles.disabledButton]} accessibilityRole="button"><Text style={styles.courseLinkText}>{busy ? 'ADDING…' : 'ADD OWNER'}</Text></Pressable>
     </View>
     {error ? <Text style={styles.authError}>{error}</Text> : null}
   </View>;

@@ -71,11 +71,20 @@ syncedData.rounds.push({
   shots: [{ hole: 1, feet: 40, disc: 'Aviar', type: 'Putt', lie: 'Basket', quality: 3, qualityMax: 3 }],
 });
 
+// The course as the editor loads it (GET /api/courses/u1).
+const editorCourse = () => {
+  const { uid, name, holes, layouts, layoutName, extraLayouts, details, updatedAt } = syncedData.courses[0] as typeof syncedData.courses[0] & { layoutName?: string };
+  return { course: { uid, name, holes, layouts, layoutName, extraLayouts, details, updatedAt, published: true, createdBy: 'Pat' }, role: 'owner', canEdit: true, isAdmin: false };
+};
+const owners = { owners: [{ userId: 'x', displayName: 'Pat', email: 'pat@example.com', creator: true }, { userId: 'm1', displayName: 'Sam', email: 'sam@example.com', creator: false }] };
+
 const accountApi: FetchHandler = (path) => (path === '/api/me'
-  ? { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat' } }
-  : path.endsWith('/editors')
-    ? { editors: [{ userId: 'x', displayName: 'Pat', email: 'pat@example.com', role: 'owner', creator: true }, { userId: 'm1', displayName: 'Sam', email: 'sam@example.com', role: 'admin', creator: false }] }
-    : syncedData);
+  ? { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat', isAdmin: false } }
+  : path === '/api/courses/u1/owners'
+    ? owners
+    : path === '/api/courses/u1'
+      ? editorCourse()
+      : syncedData);
 
 describe('website pages in a browser', () => {
   const accountHtml = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
@@ -128,7 +137,9 @@ describe('website pages in a browser', () => {
     const text = document.getElementById('signed-in')!.textContent ?? '';
     assert.match(text, /Pat/);
     assert.match(text, /Cedar Grove/);
-    assert.match(text, /Courses you can edit/);
+    assert.match(text, /Courses you own/);
+    assert.equal(document.querySelector('a[href="#admin"]'), null, 'no Admin link for someone who isn’t one');
+    assert.ok(document.querySelector('a[href="#edit/u1"]'), 'a course opens in the editor');
     assert.match(text, /Cedar Grove2 layouts · You created it/);
     assertNoRenderingLeaks(text);
   });
@@ -334,18 +345,59 @@ describe('website pages in a browser', () => {
     assert.match(view.querySelector('.score')!.textContent ?? '', /^-3Total 5Par 8/);
   });
 
-  test('My rounds: a course shows each layout without leaking text', async () => {
-    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api: accountApi });
-    await navigate('#course/c1');
+  test('My rounds: the course editor shows each layout and hole, and saves a par change', async () => {
+    const saves: { course: { layouts: { par?: number }[] }; baseUpdatedAt: number }[] = [];
+    const api: FetchHandler = (path, init) => {
+      if (path === '/api/courses/u1' && init?.method === 'PUT') {
+        const body = JSON.parse(init.body!);
+        saves.push(body);
+        return { ...editorCourse(), course: { ...editorCourse().course, ...body.course, updatedAt: 99 } };
+      }
+      return accountApi(path, init);
+    };
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api });
+    await navigate('#edit/u1');
     const view = document.getElementById('signed-in')!;
     const text = view.textContent ?? '';
     assertNoRenderingLeaks(text);
-    assert.match(text, /Blue tees layout/);
-    // Its owners and admins, with the creator (who can't be removed) first.
-    assert.match(text, /Owners and admins/);
-    assert.match(view.querySelector('.sharing .members')?.textContent ?? '', /^PatOwner · created it · pat@example\.comSamAdmin · sam@example\.comRemove$/);
-    assert.equal(view.querySelectorAll('section[data-layout-panel]').length, 2);
-    assert.match(text, /365 ft/);
+    assert.match(text, /Created by Pat/);
+    assert.match(text, /You own this course/);
+    // Its layouts, and the main one's holes with par pickers and lengths.
+    assert.deepEqual([...view.querySelectorAll('[aria-label="Layouts"] button')].map((button) => button.textContent), ['Main', 'Blue tees']);
+    assert.equal(view.querySelectorAll('table.editor-holes tbody tr').length, 2);
+    assert.match(view.querySelector('table.editor-holes')?.textContent ?? '', /365 ft/);
+    // Its owners, the creator (who can't be removed) first.
+    assert.match(view.querySelector('.sharing .members')?.textContent ?? '', /^PatCreated it · pat@example\.comSamOwner · sam@example\.comRemove$/);
+
+    // Hole 2 made a par 5: saved at once, on top of the version loaded.
+    const select = view.querySelector('[aria-label="Par for hole 2"]')!;
+    for (const option of select.querySelectorAll('option')) option.toggleAttribute('selected', option.getAttribute('value') === '5');
+    select.dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('change'));
+    await settle();
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0].baseUpdatedAt, syncedData.courses[0].updatedAt);
+    assert.equal(saves[0].course.layouts[1].par, 5);
+    assert.match(view.textContent ?? '', /Hole 2 is par 5\./);
+  });
+
+  test('My rounds: site admins get the Admin page, with every course and account', async () => {
+    const api: FetchHandler = (path, init) => {
+      if (path === '/api/me') return { user: { id: 'x', email: 'pat@example.com', displayName: 'Pat', isAdmin: true } };
+      if (path.startsWith('/api/admin/courses')) return { courses: [{ uid: 'u9', name: 'Steele Creek', city: 'Bristol', state: 'TN', holes: 9, layouts: 2, createdBy: 'David', rounds: 4, players: 2 }] };
+      if (path.startsWith('/api/admin/users')) return { users: [{ id: 'y', email: 'sam@example.com', displayName: 'Sam', isAdmin: false, createdAt: Date.UTC(2026, 9, 1), courses: 1, rounds: 3 }] };
+      return accountApi(path, init);
+    };
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api });
+    assert.ok(document.querySelector('a[href="#admin"]'), 'admins see the Admin link');
+    await navigate('#admin');
+    const view = document.getElementById('signed-in')!;
+    assertNoRenderingLeaks(view.textContent ?? '');
+    assert.match(view.textContent ?? '', /Steele CreekBristol, TN · created by David · 2 layouts · 4 rounds · 2 other players/);
+    assert.ok(view.querySelector('a[href="#edit/u9"]'), 'each course opens in the editor');
+    const tab = (label: string) => [...view.querySelectorAll('[aria-label="Admin sections"] button')].find((button) => button.textContent === label)!;
+    tab('Accounts').dispatchEvent(new (globalThis as unknown as { window: { Event: typeof Event } }).window.Event('click'));
+    await settle();
+    assert.match(view.textContent ?? '', /Samsam@example\.com · joined .* · 1 course · 3 roundsMake adminDelete/);
   });
 
   describe('shared round page', () => {

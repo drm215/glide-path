@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Queryable } from './db.ts';
 import type { BagRecord, CourseRecord, RoundRecord } from './contract.ts';
-import { canEdit, grantAccess, type Role } from './access.ts';
+import { canEdit, grantAccess, isSiteAdmin, type Role } from './access.ts';
 import { mergeCourseRecords, sameCourse } from './course-merge.ts';
 
 export const newShareToken = () => randomBytes(12).toString('base64url');
@@ -32,7 +32,7 @@ const coursePosition = (course: CourseRecord) => {
 };
 
 // The stored course as a sync record, for merging.
-const courseFromRow = (row: CourseRow): CourseRecord => ({
+export const courseFromRow = (row: CourseRow): CourseRecord => ({
   clientId: row.client_id,
   updatedAt: Number(row.updated_at),
   deleted: row.deleted,
@@ -54,7 +54,7 @@ const upsertCourse = async (tx: Queryable, userId: string, record: CourseRecord,
   return saveCourseEdit(tx, userId, courseFromRow(rows[0]), incoming, baseUpdatedAt);
 };
 
-// A course someone else created. Its owners and admins edit it like its creator does, and
+// A course someone else created. Its owners (and site admins) edit it like its creator does, and
 // deleting it deletes it for everyone; a player's edits are ignored, and a player deleting it just
 // stops playing it (it leaves their devices).
 const upsertSharedCourse = async (tx: Queryable, userId: string, { baseUpdatedAt, sourceUid: _sourceUid, ...incoming }: CourseRecord) => {
@@ -68,11 +68,12 @@ const upsertSharedCourse = async (tx: Queryable, userId: string, { baseUpdatedAt
   const row = rows[0];
   if (!row || row.deleted) return;
   const stored = courseFromRow(row);
-  if (incoming.deleted && !canEdit(row.role)) {
+  const editor = canEdit(row.role) || (await isSiteAdmin(tx, userId));
+  if (incoming.deleted && !editor) {
     await tx.query(`UPDATE course_access SET removed = true, updated_at = $3, version = nextval('sync_version') WHERE course_uid = $1 AND user_id = $2`, [uid, userId, incoming.updatedAt]);
     return;
   }
-  if (!canEdit(row.role)) return;
+  if (!editor) return;
   if (incoming.deleted) return writeCourse(tx, row.owner_id, { ...stored, deleted: true, updatedAt: Math.max(incoming.updatedAt, stored.updatedAt + 1) });
   return saveCourseEdit(tx, row.owner_id, stored, { ...incoming, clientId: stored.clientId }, baseUpdatedAt);
 };
@@ -106,7 +107,7 @@ const mergeCopyIntoSource = async (tx: Queryable, userId: string, sourceUid: str
 // version is merged with it (see course-merge.ts), so no device's mapping is lost. A result that
 // differs from what the device sent is saved with an edit time past both, so every device takes
 // it, the sender included.
-const saveCourseEdit = async (tx: Queryable, ownerId: string, stored: CourseRecord, incoming: CourseRecord, baseUpdatedAt: number | undefined) => {
+export const saveCourseEdit = async (tx: Queryable, ownerId: string, stored: CourseRecord, incoming: CourseRecord, baseUpdatedAt: number | undefined) => {
   if (baseUpdatedAt !== undefined && baseUpdatedAt >= stored.updatedAt) {
     // The device saw the stored version. Its save stands, even with a clock that runs behind.
     if (sameCourse(incoming, stored)) return;
@@ -121,7 +122,7 @@ const saveCourseEdit = async (tx: Queryable, ownerId: string, stored: CourseReco
 };
 
 // Each write only replaces the stored row when its edit time is newer.
-const writeCourse = (tx: Queryable, ownerId: string, course: CourseRecord) => {
+export const writeCourse = (tx: Queryable, ownerId: string, course: CourseRecord) => {
   const position = coursePosition(course);
   return tx.query(
     `INSERT INTO courses (owner_id, client_id, name, hole_count, details, layouts, published, city, state, latitude, longitude, updated_at, deleted, layout_name, extra_layouts)
@@ -189,6 +190,16 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
     'SELECT client_id, merged_into FROM courses WHERE owner_id = $1 AND merged_into IS NOT NULL', [ownerId],
   );
   const movedTo = new Map(mergedCopies.map((row) => [row.client_id, row.merged_into]));
+  // And one naming a course a site admin combined into another (as shared-<uid>) moves to that one.
+  const sharedUids = [...new Set(input.rounds.flatMap((round) => (round.courseClientId?.startsWith(SHARED_COURSE_PREFIX) ? [round.courseClientId.slice(SHARED_COURSE_PREFIX.length)] : [])))].filter((uid) => UUID.test(uid));
+  if (sharedUids.length) {
+    const { rows: combined } = await tx.query<{ uid: string; target_uid: string; target_owner: string; target_client_id: string }>(
+      `SELECT s.uid, t.uid AS target_uid, t.owner_id AS target_owner, t.client_id AS target_client_id
+       FROM courses s JOIN courses t ON t.uid = s.merged_into_uid WHERE s.uid = ANY($1::uuid[])`,
+      [sharedUids],
+    );
+    for (const row of combined) movedTo.set(`${SHARED_COURSE_PREFIX}${row.uid}`, row.target_owner === ownerId ? row.target_client_id : `${SHARED_COURSE_PREFIX}${row.target_uid}`);
+  }
   for (const round of input.rounds) {
     const target = round.courseClientId ? movedTo.get(round.courseClientId) : undefined;
     await upsertRound(tx, ownerId, target ? { ...round, courseClientId: target, updatedAt: Math.max(round.updatedAt + 1, now) } : round);
@@ -206,8 +217,10 @@ export const runSync = async (tx: Queryable, ownerId: string, input: SyncInput) 
          SELECT ${COURSE_COLUMNS}, c.client_id, c.version, 'owner'::text AS role, NULL::text AS created_by
          FROM courses c WHERE c.owner_id = $1 AND c.version > $2
          UNION ALL
-         SELECT ${COURSE_COLUMNS}, '${SHARED_COURSE_PREFIX}' || c.uid, GREATEST(c.version, a.version), a.role, u.display_name
-         FROM course_access a JOIN courses c ON c.uid = a.course_uid JOIN users u ON u.id = c.owner_id
+         SELECT ${COURSE_COLUMNS}, '${SHARED_COURSE_PREFIX}' || c.uid, GREATEST(c.version, a.version),
+                -- A site admin can edit every course it plays.
+                CASE WHEN me.is_admin THEN 'owner' ELSE a.role END, u.display_name
+         FROM course_access a JOIN courses c ON c.uid = a.course_uid JOIN users u ON u.id = c.owner_id JOIN users me ON me.id = a.user_id
          WHERE a.user_id = $1 AND NOT a.removed AND GREATEST(c.version, a.version) > $2
          UNION ALL
          SELECT c.uid, c.name, c.hole_count, c.details, c.layouts, c.published, a.updated_at, true, c.layout_name, c.extra_layouts, c.owner_id,

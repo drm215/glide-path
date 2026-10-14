@@ -59,3 +59,42 @@ const canonical = (value: unknown): string => {
 
 // Whether two course records hold the same content (ignoring their edit times).
 export const sameCourse = (a: CourseRecord, b: CourseRecord) => canonical({ ...a, updatedAt: 0 }) === canonical({ ...b, updatedAt: 0 });
+
+// Combining two courses that are really the same place (see admin.ts): `target` gains `source`'s
+// holes and layouts. Each of source's layouts joins target's layout with the same id or name (the
+// main one is 'main'), and any other is added as a new layout. Matches lib/course-combine.ts in the
+// app. Returns the combined target and, for each of source's layout ids, target's layout id.
+const MAIN_LAYOUT_ID = 'main';
+type Layout = { id: string; name: string; layouts: HoleLayout[] };
+const layoutsOf = (course: CourseRecord): Layout[] => [
+  { id: MAIN_LAYOUT_ID, name: course.layoutName || 'Main', layouts: course.layouts },
+  ...course.extraLayouts.map(({ id, name, layouts }) => ({ id, name, layouts })),
+];
+const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+export const combineCourseRecords = (source: CourseRecord, target: CourseRecord, now: number) => {
+  const targetLayouts = layoutsOf(target);
+  let main = target.layouts;
+  let extras = [...target.extraLayouts];
+  const layoutIds: Record<string, string> = {};
+  layoutsOf(source).forEach((layout, index) => {
+    const match = targetLayouts.find((item) => item.id === layout.id) ?? targetLayouts.find((item) => sameName(item.name, layout.name));
+    if (match?.id === MAIN_LAYOUT_ID) {
+      main = mergeHoles(main, layout.layouts);
+    } else if (match) {
+      extras = extras.map((extra) => {
+        if (extra.id !== match.id) return extra;
+        const holes = mergeHoles(extra.layouts, layout.layouts);
+        return { ...extra, holes: holes.length, layouts: holes };
+      });
+    } else {
+      const taken = layout.id === MAIN_LAYOUT_ID || extras.some((extra) => extra.id === layout.id);
+      const id = taken ? `layout-${now}-${index}` : layout.id;
+      extras = [...extras, { id, name: layout.name, holes: layout.layouts.length, layouts: layout.layouts }];
+      layoutIds[layout.id] = id;
+      return;
+    }
+    layoutIds[layout.id] = match.id;
+  });
+  return { course: { ...target, holes: main.length, layouts: main, extraLayouts: extras }, layoutIds };
+};

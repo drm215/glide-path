@@ -6,7 +6,8 @@ import type { Course, HoleLayout } from './types';
 // server's (see server/src/sync.ts).
 export const sharedCourseId = (uid: string) => `shared-${uid}`;
 
-// Whether this account can change a course: one it created, or is an owner or admin of. Courses
+// Whether this account can change a course: one it created or is an owner of (site admins are
+// sent every course they play as an owner). Courses
 // made here and not synced yet have no role and are this account's own.
 export const canEditCourse = (course: Course) => course.role !== 'player';
 

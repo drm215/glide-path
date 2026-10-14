@@ -46,9 +46,10 @@ export type Course = { id: string; name: string; holes: number; layouts?: HoleLa
   // server knows whether the device saw other devices' changes (if not, it merges them).
   serverUpdatedAt?: number;
   // Every course is public. A course someone else created has id shared-<uid> here and their name
-  // in createdBy. role is this account's: owner or admin (can edit it) or player (can only play it).
+  // in createdBy. role is this account's: owner (can edit it; site admins edit every course, so
+  // theirs say owner) or player (can only play it).
   createdBy?: string;
-  role?: 'owner' | 'admin' | 'player';
+  role?: 'owner' | 'player';
   // Set on copies older versions of the app made from the directory: the course copied. The server
   // merges such a copy back into it on the next sync.
   sourceUid?: string;
@@ -57,4 +58,5 @@ export type Course = { id: string; name: string; holes: number; layouts?: HoleLa
 // A deleted course, remembered until the deletion has synced.
 export type Tombstone = { clientId: string; updatedAt: number };
 
-export type AccountUser = { id: string; email: string; displayName: string };
+// isAdmin: a site admin, who can edit every course (and manage the site on the website).
+export type AccountUser = { id: string; email: string; displayName: string; isAdmin?: boolean };

@@ -30,7 +30,7 @@ export type SyncData = {
 type CourseRecord = {
   clientId: string; updatedAt: number; deleted?: boolean; name: string; holes: number; baseUpdatedAt?: number;
   // Sent by the server: this account's role on it, and who created it (if someone else did).
-  role?: 'owner' | 'admin' | 'player'; createdBy?: string;
+  role?: 'owner' | 'player'; createdBy?: string;
   // Sent for a course an older app copied from the directory, so the server merges it back.
   sourceUid?: string;
   layouts: HoleLayout[]; details: CourseDetails; published: boolean; uid?: string;
@@ -204,7 +204,7 @@ export const mergeCourses = (current: Course[], remote: CourseRecord[]): Course[
       next = next.map((course) => (course === local ? { ...local, uid: record.uid, serverUpdatedAt: record.updatedAt } : course));
     }
     // Who created it and this account's role are the server's to say, and can change (say, on being
-    // made an admin) without the course itself changing.
+    // made an owner) without the course itself changing.
     next = next.map((course) => (course.id === record.clientId && (course.role !== record.role || course.createdBy !== record.createdBy)
       ? { ...course, role: record.role, createdBy: record.createdBy }
       : course));

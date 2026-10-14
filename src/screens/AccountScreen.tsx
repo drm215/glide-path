@@ -118,7 +118,7 @@ export const AccountScreen = ({ required = false }: { required?: boolean } = {})
     const token = account.token;
     Alert.alert(
       'Delete your account?',
-      'This permanently deletes your Glide Path account, your rounds and shared round links. Courses you created pass to another owner or admin; any without one are deleted for everyone. Data on this phone is kept.',
+      'This permanently deletes your Glide Path account, your rounds and shared round links. Courses you created pass to another owner; any without one are deleted for everyone. Data on this phone is kept.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -162,7 +162,7 @@ export const AccountScreen = ({ required = false }: { required?: boolean } = {})
       </> : <>
         <View style={styles.menuIntro}>
           <Text style={styles.menuIntroLabel}>ONE COURSE MAP FOR EVERYONE</Text>
-          <Text style={styles.menuIntroCopy}>Glide Path needs an account. Every course is shared: find any course to play, and map the ones you create or are made an owner or admin of. Your rounds and bag sync across your devices and to the website. Glide Path keeps working offline and syncs when you’re back online.</Text>
+          <Text style={styles.menuIntroCopy}>Glide Path needs an account. Every course is shared: find any course to play, and map the ones you create or are made an owner of. Your rounds and bag sync across your devices and to the website. Glide Path keeps working offline and syncs when you’re back online.</Text>
         </View>
         {syncError ? <Text style={styles.authError}>{syncError}</Text> : null}
         {authMode === 'signIn' || authMode === 'register' ? <View style={[styles.typeRow, styles.authTabs]}>

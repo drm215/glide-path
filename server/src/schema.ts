@@ -80,6 +80,13 @@ CREATE INDEX IF NOT EXISTS course_access_user ON course_access (user_id, version
 -- A copy an older app made from the directory, merged back into its original: the id (client_id,
 -- or shared-<uid>) rounds that still name the copy are moved to.
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS merged_into text;
+-- A course combined into another by a site admin: the course it went into, so rounds that still
+-- name it (as shared-<uid>) are moved there when they arrive.
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS merged_into_uid uuid;
+-- Site admins can edit every course and manage accounts.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;
+-- Courses used to have owners and admins with the same rights; they're all owners now.
+UPDATE course_access SET role = 'owner' WHERE role = 'admin';
 -- Courses used to be private unless published; now every course is public.
 UPDATE courses SET published = true WHERE NOT published AND NOT deleted;
 

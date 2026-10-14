@@ -16,8 +16,8 @@ import { shareLink } from '../links';
 import { useApp } from '../state/AppState';
 
 export const CourseBuilderScreen = () => {
-  const { addHoleToCourse, combineCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, selectedBaseCourse, selectedCourse, selectedCourseId, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse } = useApp();
-  // The courses this account can change: ones it created, or is an owner or admin of.
+  const { account, addHoleToCourse, combineCourse, courses, deleteCourse, deleteHole, hasMultipleLayouts, mapLayout, selectedBaseCourse, selectedCourse, selectedCourseId, setHolePar, setSelectedCourseId, setSelectedLayoutId, startNewCourse } = useApp();
+  // The courses this account can change: ones it created, or is an owner of.
   const editable = courses.filter(canEditCourse);
   const editing = selectedBaseCourse && canEditCourse(selectedBaseCourse) ? selectedBaseCourse : undefined;
   // Two courses that are really the same one: this one's holes, layouts and rounds go into the
@@ -37,14 +37,14 @@ export const CourseBuilderScreen = () => {
       <Pressable onPress={startNewCourse} style={[styles.primaryButton, styles.newCourseButton]} accessibilityRole="button"><Text style={styles.primaryButtonText}>+ NEW COURSE</Text></Pressable>
       <Text style={styles.builderHint}>Every course is public: anyone can find and play it. Name it, add its details and layouts, then map each layout’s holes.</Text>
       <Text style={styles.builderSectionTitle}>Courses you can edit</Text>
-      {!editable.length && <Text style={styles.mapInstruction}>None yet. Create one, or ask an owner of a course to make you an admin.</Text>}
+      {!editable.length && <Text style={styles.mapInstruction}>None yet. Create one, or ask an owner of a course to add you as an owner.</Text>}
       {editable.map((course) => <View key={course.id} style={[styles.courseItem, selectedCourseId === course.id && styles.courseItemSelected]}><Pressable onPress={() => { if (course.id !== selectedCourseId) setSelectedLayoutId(MAIN_LAYOUT_ID); setSelectedCourseId(course.id); }} style={styles.courseItemSelect}><View style={styles.courseItemCopy}><Text style={styles.courseItemName}>{course.name}</Text><Text style={styles.courseItemMeta}>{courseLayouts(course).length > 1 ? `${courseLayouts(course).length} layouts` : `${course.holes} holes`} · {selectedCourseId === course.id ? 'Selected' : 'Tap to select'}</Text></View><Text style={styles.courseSelectedMark}>{selectedCourseId === course.id ? '✓' : '○'}</Text></Pressable><Pressable onPress={() => deleteCourse(course)} accessibilityRole="button" accessibilityLabel={`Delete ${course.name}`} style={styles.deleteButton}><Text style={styles.deleteButtonText}>DELETE</Text></Pressable></View>)}
       {editing && selectedCourse && <View style={styles.mapEditor}>
         <LayoutsEditor base={editing} view={selectedCourse} />
       </View>}
       {editing && selectedCourse && <View style={styles.mapEditor}>
         <Text style={styles.builderSectionTitle}>Course details</Text>
-        {editing.createdBy ? <Text style={[styles.courseItemMeta, styles.sourceNote]}>Created by {editing.createdBy}. You’re {editing.role === 'owner' ? 'an owner' : 'an admin'}.</Text> : null}
+        {editing.createdBy ? <Text style={[styles.courseItemMeta, styles.sourceNote]}>Created by {editing.createdBy}. {account?.user.isAdmin ? 'You can edit it as a site admin.' : 'You’re one of its owners.'}</Text> : null}
         <CourseEditors course={editing} />
         {duplicatesOf(editing, courses).map((other) => <Pressable key={other.id} onPress={() => confirmCombine(editing, other)} style={[styles.courseLink, styles.combineButton]} accessibilityRole="button" accessibilityLabel={`Combine into the other ${other.name}`}>
           <Text style={styles.courseLinkText}>COMBINE INTO {other.createdBy ? `THE ONE ${other.createdBy.toUpperCase()} CREATED` : `YOUR OTHER ${other.name.toUpperCase()}`}</Text>

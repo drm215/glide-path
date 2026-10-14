@@ -8,12 +8,14 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { checkPassword, createAuth, hashPassword, type AuthedRequest } from './auth.ts';
-import { forgotPasswordRequest, loginRequest, registerRequest, resetPasswordRequest, syncRequest } from './contract.ts';
+import { courseRecord, forgotPasswordRequest, loginRequest, registerRequest, resetPasswordRequest, syncRequest } from './contract.ts';
 import type { Db } from './db.ts';
 import type { Mailer } from './mailer.ts';
 import { renderCoursePage, renderNotFoundPage, renderRoundPage } from './pages.ts';
 import { getPublishedCourse, getSharedRound, searchPublishedCourses } from './public.ts';
-import { AccessError, addEditor, handOverCourses, listEditors, playCourse, removeEditor } from './access.ts';
+import { AccessError, addOwner, listOwners, playCourse, removeOwner } from './access.ts';
+import { combineCourses, deleteAccount, listAllCourses, listUsers, requireAdmin, setAdmin } from './admin.ts';
+import { courseForEditor, deleteCourse, saveCourse } from './courses.ts';
 import { runSync } from './sync.ts';
 
 type AppOptions = {
@@ -40,9 +42,15 @@ const MAPLIBRE_DIR = dirname(fileURLToPath(import.meta.resolve('maplibre-gl')));
 // Public terrain tiles for the 3D view; must match TERRAIN_TILES in public/js/hole3d.js.
 const TERRAIN_ORIGIN = 'https://elevation-tiles-prod.s3.amazonaws.com';
 
-type UserRow = { id: string; email: string; password_hash: string; display_name: string; token_version: number };
+type UserRow = { id: string; email: string; password_hash: string; display_name: string; token_version: number; is_admin?: boolean };
 
-const publicUser = (user: UserRow) => ({ id: user.id, email: user.email, displayName: user.display_name });
+const publicUser = (user: UserRow) => ({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: Boolean(user.is_admin) });
+
+// What the website's course editor sends: the course's own content (see courses.ts).
+const courseEdit = z.object({
+  course: courseRecord.pick({ name: true, holes: true, layouts: true, layoutName: true, extraLayouts: true, details: true }),
+  baseUpdatedAt: z.number().int().nonnegative(),
+});
 
 const nearParam = z.string().regex(/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/).transform((value) => {
   const [latitude, longitude] = value.split(',').map(Number);
@@ -76,7 +84,8 @@ export const createApp = ({
     if (!req.path.startsWith('/api/')) {
       res.setHeader('Content-Security-Policy', [
         "default-src 'self'",
-        `img-src 'self' data: ${tileOrigin}`,
+        // Terrain tiles are read as images for hole elevations (and fetched by the 3D view).
+        `img-src 'self' data: blob: ${tileOrigin} ${TERRAIN_ORIGIN}`,
         "style-src 'self' 'unsafe-inline'",
         "script-src 'self'",
         // The 3D view fetches satellite and terrain tiles itself.
@@ -214,41 +223,90 @@ export const createApp = ({
   // Apple requires apps with accounts to offer account deletion. Cascades to courses, rounds and bag.
   app.delete('/api/me', requireUser, async (req, res) => {
     const userId = (req as AuthedRequest).user.id;
-    // Courses it created pass to another owner or admin first, since others play them.
-    await db.transaction(async (tx) => {
-      await handOverCourses(tx, userId);
-      await tx.query('DELETE FROM users WHERE id = $1', [userId]);
-    });
-    res.status(204).end();
+    try {
+      // Courses it created pass to another owner first, since others play them.
+      await db.transaction((tx) => deleteAccount(tx, userId));
+      res.status(204).end();
+    } catch (error) {
+      if (!(error instanceof AccessError)) throw error;
+      res.status(error.status).json({ error: error.message });
+    }
   });
 
-  // Course owners and admins, and playing a course (see access.ts).
-  const courseRoute = (handler: (req: Request, res: Response, uid: string, userId: string) => Promise<void>) => async (req: Request, res: Response) => {
-    const uid = z.uuid().safeParse(req.params.uid);
+  // Courses: their owners, playing them, and editing them on the website (see access.ts and
+  // courses.ts); and site admins' tools (see admin.ts).
+  const accessRoute = (handler: (req: Request, res: Response, userId: string) => Promise<void>) => async (req: Request, res: Response) => {
     try {
-      if (!uid.success) throw new AccessError(404, 'Course not found.');
-      await handler(req, res, uid.data, (req as AuthedRequest).user.id);
+      await handler(req, res, (req as AuthedRequest).user.id);
     } catch (error) {
       if (!(error instanceof AccessError)) throw error;
       res.status(error.status).json({ error: error.message });
     }
   };
-  app.get('/api/courses/:uid/editors', requireUser, courseRoute(async (_req, res, uid, userId) => {
-    res.json(await listEditors(db, uid, userId));
+  const courseUid = (req: Request) => {
+    const uid = z.uuid().safeParse(req.params.uid);
+    if (!uid.success) throw new AccessError(404, 'Course not found.');
+    return uid.data;
+  };
+  app.get('/api/courses/:uid', requireUser, accessRoute(async (req, res, userId) => {
+    res.json(await courseForEditor(db, courseUid(req), userId));
   }));
-  app.post('/api/courses/:uid/editors', requireUser, courseRoute(async (req, res, uid, userId) => {
-    const { email, role } = z.object({ email: z.string().trim().min(1).max(254), role: z.enum(['owner', 'admin']) }).parse(req.body);
-    res.json(await addEditor(db, uid, userId, email, role, Date.now()));
+  app.put('/api/courses/:uid', requireUser, accessRoute(async (req, res, userId) => {
+    const uid = courseUid(req);
+    const { course, baseUpdatedAt } = courseEdit.parse(req.body);
+    res.json(await db.transaction((tx) => saveCourse(tx, uid, userId, course, baseUpdatedAt, Date.now())));
   }));
-  app.delete('/api/courses/:uid/editors/:editorId', requireUser, courseRoute(async (req, res, uid, userId) => {
-    const editorId = z.uuid().safeParse(req.params.editorId);
-    if (!editorId.success) throw new AccessError(404, 'Not found.');
-    await removeEditor(db, uid, userId, editorId.data, Date.now());
+  app.delete('/api/courses/:uid', requireUser, accessRoute(async (req, res, userId) => {
+    const uid = courseUid(req);
+    await db.transaction((tx) => deleteCourse(tx, uid, userId, Date.now()));
     res.status(204).end();
   }));
-  app.post('/api/courses/:uid/play', requireUser, courseRoute(async (_req, res, uid, userId) => {
-    await playCourse(db, uid, userId, Date.now());
+  app.get('/api/courses/:uid/owners', requireUser, accessRoute(async (req, res, userId) => {
+    res.json(await listOwners(db, courseUid(req), userId));
+  }));
+  app.post('/api/courses/:uid/owners', requireUser, accessRoute(async (req, res, userId) => {
+    const { email } = z.object({ email: z.string().trim().min(1).max(254) }).parse(req.body);
+    res.json(await addOwner(db, courseUid(req), userId, email, Date.now()));
+  }));
+  app.delete('/api/courses/:uid/owners/:ownerId', requireUser, accessRoute(async (req, res, userId) => {
+    const ownerId = z.uuid().safeParse(req.params.ownerId);
+    if (!ownerId.success) throw new AccessError(404, 'Not found.');
+    await removeOwner(db, courseUid(req), userId, ownerId.data, Date.now());
     res.status(204).end();
+  }));
+  app.post('/api/courses/:uid/play', requireUser, accessRoute(async (req, res, userId) => {
+    await playCourse(db, courseUid(req), userId, Date.now());
+    res.status(204).end();
+  }));
+
+  const searchText = (req: Request) => z.string().max(200).catch('').parse(req.query.q ?? '');
+  app.get('/api/admin/courses', requireUser, accessRoute(async (req, res, userId) => {
+    await requireAdmin(db, userId);
+    res.json({ courses: await listAllCourses(db, searchText(req)) });
+  }));
+  app.get('/api/admin/users', requireUser, accessRoute(async (req, res, userId) => {
+    await requireAdmin(db, userId);
+    res.json({ users: await listUsers(db, searchText(req)) });
+  }));
+  app.put('/api/admin/users/:userId', requireUser, accessRoute(async (req, res, userId) => {
+    await requireAdmin(db, userId);
+    const target = z.uuid().safeParse(req.params.userId);
+    if (!target.success) throw new AccessError(404, 'Account not found.');
+    const { isAdmin } = z.object({ isAdmin: z.boolean() }).parse(req.body);
+    await setAdmin(db, target.data, isAdmin);
+    res.status(204).end();
+  }));
+  app.delete('/api/admin/users/:userId', requireUser, accessRoute(async (req, res, userId) => {
+    await requireAdmin(db, userId);
+    const target = z.uuid().safeParse(req.params.userId);
+    if (!target.success) throw new AccessError(404, 'Account not found.');
+    await db.transaction((tx) => deleteAccount(tx, target.data));
+    res.status(204).end();
+  }));
+  app.post('/api/admin/combine', requireUser, accessRoute(async (req, res, userId) => {
+    await requireAdmin(db, userId);
+    const { sourceUid, targetUid } = z.object({ sourceUid: z.uuid(), targetUid: z.uuid() }).parse(req.body);
+    res.json(await db.transaction((tx) => combineCourses(tx, sourceUid, targetUid, Date.now())));
   }));
 
   app.post('/api/sync', requireUser, async (req, res) => {

@@ -90,13 +90,14 @@ const layoutStats = (layout: Omit<PageLayout, 'name' | 'layouts'>) => [
 ].filter(Boolean).join(' · ');
 
 const holeTable = (layouts: Layout[]) => `<table>
-  <thead><tr><th>HOLE</th><th>PAR</th><th>DISTANCE</th><th>ELEVATION</th></tr></thead>
+  <thead><tr><th>HOLE</th><th>PAR</th><th>LENGTH</th><th>ELEVATION</th></tr></thead>
   <tbody>${layouts.map((layout, index) => {
     const distance = layout.tee && layout.basket ? `${Math.round(feetBetween(layout.tee, layout.basket))} ft` : '—';
     const rise = typeof layout.tee?.altitude === 'number' && typeof layout.basket?.altitude === 'number'
       ? Math.round((layout.basket.altitude - layout.tee.altitude) / 0.3048) : null;
     const elevation = rise === null ? '—' : rise > 0 ? `↑ ${rise} ft` : rise < 0 ? `↓ ${-rise} ft` : 'Flat';
-    return `<tr data-hole="${index + 1}"><td>${String(index + 1).padStart(2, '0')}</td><td>${layout.par ?? '—'}</td><td>${distance}</td><td>${elevation}</td></tr>`;
+    // The page's script replaces the elevation with one from terrain data (see course-holes.js).
+    return `<tr data-hole="${index + 1}"><td>${String(index + 1).padStart(2, '0')}</td><td>${layout.par ?? '—'}</td><td>${distance}</td><td data-rise-hole="${index + 1}">${elevation}</td></tr>`;
   }).join('')}</tbody>
 </table>`;
 
@@ -126,7 +127,7 @@ ${address || phone || websiteUrl ? `<div class="links">
 ${address ? `<p class="meta">${escapeHtml(address)}</p>` : ''}
 ${layouts.length > 1 ? `<div class="tabs" role="group" aria-label="Layouts">${layouts.map((layout, index) => `<button type="button" data-layout="${index}" aria-pressed="${index === 0}">${escapeHtml(layout.name)}</button>`).join('')}</div>` : ''}
 <div id="map" class="map tall" role="img" aria-label="Satellite map of the course's tees and baskets"></div>
-<p class="map-note">Green dots are tees, orange dots are baskets, ringed by C1 (10 m) and C2 (20 m). Tap a hole in the table to zoom to it.</p>
+<p class="map-note">Green dots are tees, orange dots are baskets, ringed by C1 (10 m) and C2 (20 m). Tap a hole in the table to see it on its own, with its par, length and elevation, and in 3D.</p>
 ${layouts.map((layout, index) => `<section data-layout-panel="${index}"${index ? ' hidden' : ''}>
   ${layouts.length > 1 ? `<h2>${escapeHtml(layout.name)} layout</h2><p class="meta">${escapeHtml(layoutStats(layout))}</p>` : ''}
   ${holeTable(layout.layouts)}

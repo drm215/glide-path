@@ -85,14 +85,14 @@ export const getPublicCourse = (uid: string) => request<{ course: PublicCourse }
 // Playing a course keeps it (and its updates) on this account's devices.
 export const playCourse = (token: string, uid: string) => request<null>('POST', `/api/courses/${encodeURIComponent(uid)}/play`, { token });
 
-// A course's owners and admins, who can edit it (its creator is always an owner).
-export type CourseEditor = { userId: string; displayName: string; email: string; role: 'owner' | 'admin'; creator: boolean };
-const editorsPath = (uid: string) => `/api/courses/${encodeURIComponent(uid)}/editors`;
-export const getCourseEditors = (token: string, uid: string) => request<{ editors: CourseEditor[] }>('GET', editorsPath(uid), { token });
-export const addCourseEditor = (token: string, uid: string, email: string, role: 'owner' | 'admin') =>
-  request<{ editors: CourseEditor[] }>('POST', editorsPath(uid), { token, body: { email, role } });
-export const removeCourseEditor = (token: string, uid: string, userId: string) =>
-  request<null>('DELETE', `${editorsPath(uid)}/${encodeURIComponent(userId)}`, { token });
+// A course's owners, who can edit it (its creator is always one).
+export type CourseOwner = { userId: string; displayName: string; email: string; creator: boolean };
+const ownersPath = (uid: string) => `/api/courses/${encodeURIComponent(uid)}/owners`;
+export const getCourseOwners = (token: string, uid: string) => request<{ owners: CourseOwner[] }>('GET', ownersPath(uid), { token });
+export const addCourseOwner = (token: string, uid: string, email: string) =>
+  request<{ owners: CourseOwner[] }>('POST', ownersPath(uid), { token, body: { email } });
+export const removeCourseOwner = (token: string, uid: string, userId: string) =>
+  request<null>('DELETE', `${ownersPath(uid)}/${encodeURIComponent(userId)}`, { token });
 
 export const courseShareUrl = (uid: string) => `${API_URL}/c/${uid}`;
 

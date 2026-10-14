@@ -29,7 +29,7 @@ describe('website', () => {
       assert.match(await response.text(), new RegExp(text), path);
       const csp = response.headers.get('content-security-policy') ?? '';
       assert.match(csp, /script-src 'self'/);
-      assert.match(csp, /img-src 'self' data: https:\/\/server\.arcgisonline\.com/);
+      assert.match(csp, /img-src 'self' data: blob: https:\/\/server\.arcgisonline\.com https:\/\/elevation-tiles-prod\.s3\.amazonaws\.com/);
     }
   });
 

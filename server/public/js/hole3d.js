@@ -129,7 +129,7 @@ export const renderHole3d = (container, { hole, layout, rounds, selected = [] })
       return new library.Marker({ element: dot }).setLngLat(lngLat(shot)).addTo(map);
     });
     status.textContent = [
-      spots.length ? null : 'No throws on this hole have a logged spot.',
+      spots.length || !rounds.length ? null : 'No throws on this hole have a logged spot.',
       unplaced ? `${unplaced} ${unplaced === 1 ? 'throw has' : 'throws have'} no logged spot and ${unplaced === 1 ? "isn't" : "aren't"} shown.` : null,
     ].filter(Boolean).join(' ');
   };
@@ -198,7 +198,7 @@ export const renderHole3d = (container, { hole, layout, rounds, selected = [] })
         const basket = map.queryTerrainElevation(lngLat(layout.basket));
         if (tee === null || basket === null) return;
         const rise = (basket - tee) / EXAGGERATION;
-        caption.textContent = `${Math.abs(rise) < 0.5 ? 'The basket is level with the tee' : `The basket is ${feetText(rise)} ${rise > 0 ? 'above' : 'below'} the tee`} (terrain data; heights drawn ${EXAGGERATION}× for readability). Arcs show where each throw went, not its flight.`;
+        caption.textContent = `${Math.abs(rise) < 0.5 ? 'The basket is level with the tee' : `The basket is ${feetText(rise)} ${rise > 0 ? 'above' : 'below'} the tee`} (terrain data; heights drawn ${EXAGGERATION}× for readability).${rounds.length ? ' Arcs show where each throw went, not its flight.' : ''}`;
       });
     });
   });

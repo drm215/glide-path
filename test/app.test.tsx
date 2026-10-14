@@ -410,6 +410,19 @@ test('maps a hole: save the tee and basket where the player stands, set par, add
   expect(await screen.findByText('Course builder.')).toBeTruthy();
 });
 
+test('the hole map moves between holes with the arrows, as in a round', async () => {
+  await seed({ [KEYS.courses]: [cedarGrove] });
+  await renderApp('/courses/map');
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+  expect(screen.getByLabelText('Previous hole')).toBeDisabled();
+  await fireEvent.press(screen.getByLabelText('Next hole'));
+  expect(await screen.findByText('Hole 02.')).toBeTruthy();
+  // The last hole: adding another is the button at the bottom.
+  expect(screen.getByLabelText('Next hole')).toBeDisabled();
+  await fireEvent.press(screen.getByLabelText('Previous hole'));
+  expect(await screen.findByText('Hole 01.')).toBeTruthy();
+});
+
 test('edits a throw in a past round: marking it made moves it to the basket and remeasures', async () => {
   const round: SessionArchive = { ...pastRound, shots: [pastRound.shots[0], { ...pastRound.shots[1], lie: 'Missed', latitude: 40.0009 }] };
   await seed({ [KEYS.courses]: [cedarGrove], [KEYS.history]: [round] });
@@ -869,23 +882,23 @@ test('signing in to a different account asks first, and cancelling stays signed 
   expect(await SecureStore.getItemAsync('glide-path-token')).toBeNull();
 });
 
-test("a course's owners and admins invite others by email, as an owner or admin", async () => {
-  const editors = [{ userId: 'u1', displayName: 'Pat', email: 'pat@example.com', role: 'owner', creator: true }];
+test("a course's owners add other owners by email", async () => {
+  const owners = [{ userId: 'u1', displayName: 'Pat', email: 'pat@example.com', creator: true }];
   const requests = mockServer({
     '/api/sync': EMPTY_SYNC,
-    '/api/courses/pub-cedar/editors': (body) => {
-      if (body) editors.push({ userId: 'm1', displayName: 'Sam', email: (body as { email: string }).email, role: (body as { role: string }).role, creator: false });
-      return { editors };
+    '/api/courses/pub-cedar/owners': (body) => {
+      if (body) owners.push({ userId: 'm1', displayName: 'Sam', email: (body as { email: string }).email, creator: false });
+      return { owners };
     },
   });
   await seed({ [KEYS.courses]: [{ ...cedarGrove, uid: 'pub-cedar' }] });
   await renderApp('/courses');
-  expect(await screen.findByText('Owners and admins')).toBeTruthy();
-  expect(await screen.findByText('Pat · Owner (created it) · pat@example.com')).toBeTruthy();
-  await fireEvent.changeText(screen.getByLabelText('Email to invite'), 'sam@example.com');
-  await press('INVITE');
-  expect(await screen.findByText('Sam · Admin · sam@example.com')).toBeTruthy();
-  expect(requests.some((request) => request.path === '/api/courses/pub-cedar/editors' && (request.body as { role?: string })?.role === 'admin')).toBe(true);
+  expect(await screen.findByText('Owners')).toBeTruthy();
+  expect(await screen.findByText('Pat (created it) · pat@example.com')).toBeTruthy();
+  await fireEvent.changeText(screen.getByLabelText('Email of a new owner'), 'sam@example.com');
+  await press('ADD OWNER');
+  expect(await screen.findByText('Sam · sam@example.com')).toBeTruthy();
+  expect(requests.some((request) => request.path === '/api/courses/pub-cedar/owners' && (request.body as { email?: string })?.email === 'sam@example.com')).toBe(true);
 });
 
 test('a course you only play is not in Course builder, but is there to start a round on', async () => {
@@ -898,9 +911,9 @@ test('a course you only play is not in Course builder, but is there to start a r
 
 test('a duplicate course combines into the other: its holes, layouts and rounds move over', async () => {
   const gps = (latitude: number, timestamp: number) => ({ latitude, longitude: -75, accuracy: 3, timestamp });
-  // David's Steele Creek, which this account was made an admin of.
+  // David's Steele Creek, which this account was made an owner of.
   const davids: Course = {
-    id: 'shared-pub-steele', uid: 'pub-steele', role: 'admin', createdBy: 'David', name: 'Steele Creek', holes: 1, updatedAt: 5,
+    id: 'shared-pub-steele', uid: 'pub-steele', role: 'owner', createdBy: 'David', name: 'Steele Creek', holes: 1, updatedAt: 5,
     layouts: [{ tee: gps(40, 10), basket: gps(40.001, 10), par: 3 }], layoutName: 'Short tees',
     extraLayouts: [{ id: 'layout-long', name: 'Long tees', holes: 1, layouts: [{ tee: null, basket: null }] }],
   };
@@ -943,5 +956,34 @@ test('finds a course and plays it: the live course, not a copy', async () => {
   await press(await screen.findByText('PLAY THIS COURSE').then(() => 'PLAY THIS COURSE'));
   await waitFor(() => expect(stored<Course[]>(KEYS.courses)?.find((course) => course.name === 'Oak Run')).toMatchObject({ id: 'shared-pub-1', uid: 'pub-1', role: 'player', createdBy: 'Sam' }));
   expect(requests.some((request) => request.path === '/api/courses/pub-1/play')).toBe(true);
-  expect(await screen.findByText('IN YOUR COURSES ✓')).toBeTruthy();
+  expect(await screen.findByText('It’s in your courses.')).toBeTruthy();
+});
+
+test('a course in Find courses shows each layout on the map, and plays the one picked', async () => {
+  mockServer({
+    '/api/sync': EMPTY_SYNC,
+    '/api/public/courses': () => ({ courses: [{ uid: 'pub-2', name: 'Two Tees Park', holes: 1, city: null, state: null, mappedBy: 'Sam', distanceMiles: null, mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 365, layoutCount: 2 }] }),
+    '/api/public/courses/pub-2': () => ({ course: {
+      uid: 'pub-2', name: 'Two Tees Park', holes: 1, layoutName: 'Short tees', details: {}, mappedBy: 'Sam', mappedHoles: 1, par: 3, parHoles: 1, distanceFeet: 365, updatedAt: 9,
+      layouts: [{ tee: point(41, -75), basket: point(41.001, -75), par: 3 }],
+      extraLayouts: [{ id: 'blue', name: 'Long tees', holes: 2, layouts: [{ tee: point(41, -75.001), basket: point(41.002, -75), par: 4 }, { tee: null, basket: null, par: 3 }] }],
+    } }),
+    '/api/courses/pub-2/play': () => null,
+  });
+  await renderApp('/find');
+  await fireEvent.changeText(await screen.findByPlaceholderText('e.g. Cedar Grove or PA'), 'Two');
+  await press('SEARCH');
+  await press(await screen.findByText('Two Tees Park').then(() => 'Two Tees Park'));
+  expect(await screen.findByText('2 layouts · 1 hole · Par 3 · 1 mapped')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Long tees' }));
+  expect(await screen.findByText('2 layouts · 2 holes · Par 7 · 1 mapped')).toBeTruthy();
+  // Its holes, with their pars and lengths; tapping one shows it on its own, with a summary.
+  expect(screen.getByText('7')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText('Show hole 1'));
+  expect(await screen.findByText(/^Hole 01 · Par 4 · \d+ ft · Flat$/)).toBeTruthy();
+  expect(screen.queryByLabelText('Hole 1 in 3D')).toBeNull();
+  await press('PLAY THIS LAYOUT');
+  // In this account's courses now, so the hole opens in 3D too.
+  expect(await screen.findByLabelText('Hole 1 in 3D')).toBeTruthy();
+  await waitFor(() => expect(stored<{ courseId: string; layoutId: string }>(KEYS.round)).toMatchObject({ courseId: 'shared-pub-2', layoutId: 'blue' }));
 });

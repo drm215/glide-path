@@ -239,3 +239,28 @@ a.disc-card:hover { border-color: var(--green); }
 .sharing { margin: 8px 0 18px; }
 .sharing .members .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 4px; }
 .sharing .members .button { height: 36px; padding: 0 12px; }
+
+/* A hole picked from a course's table: its summary, a Map | 3D switch and All holes. */
+.hole-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 14px 0 4px; }
+.hole-summary .tabs { margin: 0; }
+.hole-summary .button { height: 36px; padding: 0 12px; }
+.hole-summary-text { flex: 1 1 100%; margin: 0; font-weight: 700; font-size: 17px; }
+
+/* The course editor (owners and site admins) and the Admin page. */
+.editor-form { display: grid; gap: 12px; max-width: 640px; margin: 8px 0 18px; }
+.editor-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 800; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+.editor-form input, .editor-form textarea, .editor-layouts input, .editor-par select, .search select, #signed-in > section select {
+  font: 400 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: normal; text-transform: none; color: var(--ink); background: var(--card);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-height: 44px;
+}
+.editor-form textarea { resize: vertical; }
+.editor-form .button { justify-self: start; }
+.editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.editor-layouts { display: grid; gap: 4px; margin-bottom: 12px; }
+.editor-layouts input[type="number"] { width: 90px; flex: 0 0 90px; }
+.editor-par select { min-height: 36px; padding: 4px 8px; }
+.button.small { height: 34px; padding: 0 10px; font-size: 12px; }
+.map.placing, .map.placing .leaflet-container { cursor: crosshair; }
+.badge { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--green); color: #fff; font: 800 11px system-ui, sans-serif; vertical-align: middle; }
+.results .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.results .actions .button { height: 36px; padding: 0 12px; }

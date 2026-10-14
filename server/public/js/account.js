@@ -1,8 +1,10 @@
+import { renderAdmin } from './admin.js';
+import { renderCourseEditor } from './course-editor.js';
 import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
-import { discStats, discThrows, moveThrow, placedPoint, quality, roundLayouts } from './round-stats.js';
-import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, feetBetween, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
+import { discStats, discThrows, moveThrow, quality, roundLayouts } from './round-stats.js';
+import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
 const signedInEl = $('#signed-in');
@@ -28,8 +30,8 @@ const layoutsOf = (course) => [
   { id: MAIN_LAYOUT_ID, name: course.layoutName || 'Main', holes: course.holes, layouts: course.layouts },
   ...(course.extraLayouts ?? []),
 ];
-// Whether this account can change a course: one it created (its own role, or none yet) or is an
-// owner or admin of. Everyone else only plays it.
+// Whether this account owns a course (created it, or was made an owner). Site admins can edit
+// every course too, from the Admin page.
 const canEdit = (course) => course.role !== 'player';
 const courseFor = (round) => data.courses.find((course) => course.clientId === round.courseClientId);
 const layoutFor = (round) => {
@@ -72,9 +74,11 @@ const renderOverview = () => {
     el('p', { class: 'meta' }, user.email),
     el('div', { class: 'stats' },
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'ROUNDS'), el('div', { class: 'value' }, rounds.length)),
-      el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES YOU EDIT'), el('div', { class: 'value' }, courses.length)),
+      el('div', { class: 'stat' }, el('div', { class: 'label' }, 'COURSES YOU OWN'), el('div', { class: 'value' }, courses.length)),
       el('div', { class: 'stat' }, el('div', { class: 'label' }, 'DISCS IN BAG'), el('div', { class: 'value' }, data.bag?.discs.length ?? 0))),
-    rounds.length ? el('p', { class: 'links' }, el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')) : null,
+    el('p', { class: 'links' },
+      rounds.length ? [el('a', { class: 'button secondary', href: '#stats' }, 'All-time stats ›'), el('a', { class: 'button secondary', href: '#discs' }, 'Disc stats ›')] : null,
+      user.isAdmin ? el('a', { class: 'button', href: '#admin' }, 'Admin ›') : null),
     el('h2', {}, 'Rounds'),
     rounds.length
       ? el('ul', { class: 'results' }, rounds.map((round) => {
@@ -88,18 +92,18 @@ const renderOverview = () => {
           el('span', { class: 'name' }, `${score.total}`, score.toPar === null ? null : el('span', { class: toParClass(score.toPar) }, ` ${formatToPar(score.toPar)}`))));
       }))
       : el('p', { class: 'meta' }, 'No rounds yet. Rounds appear here after you end them in the app and it syncs.'),
-    el('h2', {}, 'Courses you can edit'),
-    el('p', { class: 'meta' }, 'Every course is public: anyone can find and play it on the courses page. These are the ones you created or were made an owner or admin of.'),
+    el('h2', {}, 'Courses you own'),
+    el('p', { class: 'meta' }, 'Every course is public: anyone can find and play it. These are the ones you created or were made an owner of; edit them here.'),
     courses.length
-      ? el('ul', { class: 'results' }, courses.map((course) => el('li', {}, el('a', { href: `#course/${encodeURIComponent(course.clientId)}` },
+      ? el('ul', { class: 'results' }, courses.map((course) => el('li', {}, el('a', { href: `#edit/${encodeURIComponent(course.uid)}` },
         el('span', {},
           el('span', { class: 'name' }, course.name),
           el('span', { class: 'sub' }, [
             layoutsOf(course).length > 1 ? plural(layoutsOf(course).length, 'layout') : plural(course.holes, 'hole'),
-            course.createdBy ? `${course.role === 'owner' ? 'Owner' : 'Admin'} · created by ${course.createdBy}` : 'You created it',
+            course.createdBy ? `Owner · created by ${course.createdBy}` : 'You created it',
           ].join(' · '))),
         el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')))))
-      : el('p', { class: 'meta' }, 'None yet. Create one in the app, or ask an owner of a course to make you an admin.'),
+      : el('p', { class: 'meta' }, 'None yet. Create one in the app, or ask an owner of a course to add you as an owner.'),
     el('div', { class: 'links' },
       el('button', { class: 'button secondary', type: 'button', onclick: signOut }, 'Sign out'),
       el('button', { class: 'button danger', type: 'button', onclick: deleteAccount }, 'Delete account')),
@@ -352,122 +356,6 @@ const renderDiscThrows = (disc, types, includePractice) => {
   render();
 };
 
-// A course's owners and admins, for one of them: they edit it, invite others as owners or admins
-// by email, and remove them (its creator always stays an owner).
-const courseEditors = (course) => {
-  const list = el('ul', { class: 'results members' });
-  const status = el('p', { class: 'status', 'aria-live': 'polite' });
-  const emailInput = el('input', { type: 'email', id: 'invite-email', placeholder: 'their@email.com', autocomplete: 'off', 'aria-label': 'Email to invite' });
-  const roleSelect = el('select', { 'aria-label': 'Invite as' }, el('option', { value: 'admin' }, 'Admin'), el('option', { value: 'owner' }, 'Owner'));
-  const path = `/api/courses/${encodeURIComponent(course.uid)}/editors`;
-  const show = (editors) => setChildren(list, editors.map((editor) => el('li', {},
-    el('span', { class: 'row' },
-      el('span', {},
-        el('span', { class: 'name' }, editor.displayName),
-        el('span', { class: 'sub' }, [editor.role === 'owner' ? 'Owner' : 'Admin', editor.creator ? 'created it' : null, editor.email].filter(Boolean).join(' · '))),
-      editor.creator ? null : el('button', { class: 'button danger', type: 'button', onclick: () => remove(editor) }, 'Remove')))));
-  const remove = async (editor) => {
-    status.textContent = '';
-    try {
-      await api(`${path}/${encodeURIComponent(editor.userId)}`, { method: 'DELETE', token });
-      show((await api(path, { token })).editors);
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  };
-  const invite = async (event) => {
-    event.preventDefault();
-    if (!emailInput.value.trim()) return;
-    status.textContent = 'Inviting…';
-    try {
-      show((await api(path, { method: 'POST', token, body: { email: emailInput.value.trim(), role: roleSelect.selectedOptions?.[0]?.value ?? roleSelect.value } })).editors);
-      emailInput.value = '';
-      status.textContent = '';
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  };
-  api(path, { token }).then((result) => show(result.editors), () => { status.textContent = 'Couldn’t load this course’s owners and admins.'; });
-  return el('section', { class: 'sharing' },
-    el('h2', {}, 'Owners and admins'),
-    el('p', { class: 'meta' }, 'Owners and admins can map and edit this course, invite others, and delete it. Invite them by the email they use for Glide Path.'),
-    list,
-    el('form', { class: 'search', onsubmit: invite }, emailInput, roleSelect, el('button', { class: 'button', type: 'submit' }, 'Invite')),
-    status);
-};
-
-// `layoutIndex` and `editing` keep the view where it was after a tee or basket is moved.
-const renderCourse = (course, { layoutIndex = 0, editing = false } = {}) => {
-  const layouts = layoutsOf(course);
-  const mapEl = el('div', { class: 'map tall', role: 'img', 'aria-label': 'Satellite map of the course' });
-  const panels = layouts.map((layout, index) => el('section', { 'data-layout-panel': index, hidden: index !== layoutIndex },
-    layouts.length > 1 ? el('h2', {}, `${layout.name} layout`) : null,
-    el('table', {},
-      el('thead', {}, el('tr', {}, ['HOLE', 'PAR', 'DISTANCE'].map((heading) => el('th', {}, heading)))),
-      el('tbody', {}, layout.layouts.map((hole, holeIndex) => el('tr', {},
-        el('td', {}, String(holeIndex + 1).padStart(2, '0')), el('td', {}, hole.par ?? '—'),
-        el('td', {}, hole.tee && hole.basket ? `${Math.round(feetBetween(hole.tee, hole.basket))} ft` : '—')))))));
-  const tabs = layouts.length > 1
-    ? el('div', { class: 'tabs', role: 'group', 'aria-label': 'Layouts' }, layouts.map((layout, index) => el('button', { type: 'button', 'aria-pressed': String(index === layoutIndex), onclick: () => show(index) }, layout.name)))
-    : null;
-  const place = [course.details?.city, course.details?.state].filter(Boolean).join(', ');
-  // Tees and baskets can be dragged to fix a poor GPS save. It changes the course for every round
-  // played on it (and, when published, for everyone who added it from the directory).
-  let shownIndex = layoutIndex;
-  const moveStatus = el('p', { class: 'status', 'aria-live': 'polite' });
-  const moveNote = el('p', { class: 'map-note', hidden: !editing }, 'Drag a tee or basket to where it really is. It’s saved at once, for everyone who plays this course.');
-  const moveButton = el('button', { class: 'button secondary', type: 'button', 'aria-pressed': String(editing), onclick: () => setMoving(moveButton.getAttribute('aria-pressed') !== 'true') }, 'Move tees and baskets');
-  const setMoving = (on) => {
-    moveButton.setAttribute('aria-pressed', String(on));
-    moveNote.hidden = !on;
-    show(shownIndex, { refit: false });
-  };
-  const onMove = async (hole, kind, latitude, longitude) => {
-    const point = placedPoint(latitude, longitude, Date.now());
-    const movePoint = (holeLayouts) => holeLayouts.map((item, index) => (index === hole - 1 ? { ...item, [kind]: point } : item));
-    const layoutId = layouts[shownIndex].id;
-    const edited = layoutId === MAIN_LAYOUT_ID
-      ? { ...course, layouts: movePoint(course.layouts) }
-      : { ...course, extraLayouts: course.extraLayouts.map((extra) => (extra.id === layoutId ? { ...extra, layouts: movePoint(extra.layouts) } : extra)) };
-    moveStatus.textContent = 'Saving…';
-    try {
-      const saved = await saveRecord('courses', edited, () => { moveStatus.textContent = 'Waiting for the server to wake up…'; });
-      keepScroll(() => renderCourse(saved, { layoutIndex: shownIndex, editing: true }));
-    } catch (error) {
-      moveStatus.textContent = `Couldn’t save the move: ${error.message}`;
-      show(shownIndex, { refit: false });
-    }
-  };
-  setChildren(signedInEl,
-    back(),
-    el('div', { class: 'eyebrow' }, [course.createdBy ? `Created by ${course.createdBy}` : 'Your course', place].filter(Boolean).join(' · ')),
-    el('h1', {}, course.name),
-    course.uid ? el('p', { class: 'meta' }, el('a', { href: `/c/${encodeURIComponent(course.uid)}` }, 'View its public page')) : null,
-    canEdit(course) && course.uid ? courseEditors(course) : null,
-    tabs,
-    mapEl,
-    // Only its owners and admins can move its tees and baskets.
-    canEdit(course) ? el('div', { class: 'map-edit' }, moveButton, moveNote, moveStatus) : null,
-    panels,
-  );
-  const map = satelliteMap(mapEl);
-  let drawn = null;
-  const show = (index, { refit = true } = {}) => {
-    shownIndex = index;
-    panels.forEach((panel, panelIndex) => { panel.hidden = panelIndex !== index; });
-    tabs?.querySelectorAll('button').forEach((button, buttonIndex) => button.setAttribute('aria-pressed', String(buttonIndex === index)));
-    if (!map) return;
-    drawn?.group.remove();
-    drawn = drawHoles(map, layouts[index].layouts, { onMove: moveButton.getAttribute('aria-pressed') === 'true' ? onMove : undefined });
-    if (refit && !fitTo(map, drawn.bounds)) map.setView([39.8, -98.6], 3);
-  };
-  if (!map) {
-    mapEl.remove();
-    moveButton.parentElement?.remove();
-  }
-  show(layoutIndex);
-};
-
 // One course's holes, by layout: how often each was played, and the average and best scores from
 // rounds (practice doesn't count toward scoring). `rounds` are that course's sessions.
 const holeAverages = (key, rounds, includePractice) => {
@@ -593,12 +481,19 @@ const route = () => {
   });
   const round = kind === 'round' ? data.rounds.find((item) => item.clientId === id) : undefined;
   const course = kind === 'course' ? data.courses.find((item) => item.clientId === id) : undefined;
-  if (kind === 'stats') renderStats();
+  if (kind === 'edit' && id) {
+    renderCourseEditor(signedInEl, { uid: id, token, back: back(), onDeleted: () => { location.hash = ''; load(); } });
+    window.scrollTo(0, 0);
+    return;
+  }
+  if (kind === 'admin' && user.isAdmin) renderAdmin(signedInEl, { token, me: user, back: back() });
+  else if (kind === 'stats') renderStats();
   else if (kind === 'discs') renderDiscStats();
   else if (kind === 'disc' && id) renderDiscThrows(id, rest[0] && rest[0] !== 'all' ? rest[0].split(',') : [], rest[1] === 'practice');
   else if (kind === 'hole' && Number(rest[1]) > 0) renderHoleHistory(id, rest[0], Number(rest[1]), rest[2] === 'practice');
   else if (round) renderRound(round);
-  else if (course) renderCourse(course);
+  // Older links to a course in My rounds open it in the editor.
+  else if (course?.uid) location.hash = `#edit/${encodeURIComponent(course.uid)}`;
   else renderOverview();
   window.scrollTo(0, 0);
 };

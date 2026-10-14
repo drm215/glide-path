@@ -608,16 +608,16 @@ const useAppState = () => {
   };
 
   // Plays a course from the directory: the server keeps it (and its updates) on this account's
-  // devices, and it's added here as the live course, ready for the next round. Throws if the
-  // server can't be reached.
-  const playPublicCourse = async (source: PublicCourse) => {
+  // devices, and it's added here as the live course, with `layoutId` ready for the next round.
+  // Throws if the server can't be reached.
+  const playPublicCourse = async (source: PublicCourse, layoutId = MAIN_LAYOUT_ID) => {
     if (!account) return;
     await playCourse(account.token, source.uid);
     const course = playedCourse(source);
     // Not updateCourses: this isn't an edit, and the server already has it.
     setCourses((current) => [...current.filter((item) => item.id !== course.id), course]);
     setSelectedCourseId(course.id);
-    setSelectedLayoutId(MAIN_LAYOUT_ID);
+    setSelectedLayoutId(layoutId);
     Alert.alert('Ready to play', `${source.name} is selected for your next round. It stays up to date as its owners map and fix it.`);
   };
 
@@ -684,7 +684,7 @@ const useAppState = () => {
     );
   };
 
-  // Owners and admins delete a course for everyone; a player only stops playing it.
+  // Owners (and site admins) delete a course for everyone; a player only stops playing it.
   const deleteCourse = (course: Course) => {
     const editor = canEditCourse(course);
     Alert.alert(

@@ -1,20 +1,39 @@
 import * as Location from 'expo-location';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { courseShareUrl, getPublicCourse, searchCourses, type PublicCourse, type PublicCourseSummary } from '../../lib/api';
+import { MAIN_LAYOUT_ID } from '../../lib/layouts';
 import { styles } from '../theme';
+import { CourseMap } from '../components/CourseMap';
 import { courseAddressLine, errorMessage } from '../format';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { shareLink } from '../links';
+import { openHole3d } from '../navigation';
 import { useApp } from '../state/AppState';
 
+// A directory course's layouts: its main one, then the rest.
+const layoutsOf = (course: PublicCourse) => [
+  { id: MAIN_LAYOUT_ID, name: course.layoutName || 'Main', layouts: course.layouts },
+  ...(course.extraLayouts ?? []).map(({ id, name, layouts }) => ({ id, name, layouts })),
+];
+
 export const FindCoursesScreen = () => {
-  const { courses, playPublicCourse, setLocationAllowed } = useApp();
+  const { courses, playPublicCourse, setLocationAllowed, setSelectedCourseId, setSelectedLayoutId } = useApp();
   const [playError, setPlayError] = useState('');
-  const play = async (course: PublicCourse) => {
+  // The layout being looked at, by its index in layoutsOf(course).
+  const [layoutIndex, setLayoutIndex] = useState(0);
+  // Plays the chosen layout: a course already in this account's list is just selected.
+  const play = async (course: PublicCourse, layoutId: string) => {
     setPlayError('');
+    const mine = courses.find((item) => item.uid === course.uid);
+    if (mine) {
+      setSelectedCourseId(mine.id);
+      setSelectedLayoutId(layoutId);
+      Alert.alert('Ready to play', `${course.name} is selected for your next round.`);
+      return;
+    }
     try {
-      await playPublicCourse(course);
+      await playPublicCourse(course, layoutId);
     } catch (error) {
       setPlayError(errorMessage(error, 'Could not reach the server. Try again when you’re online.'));
     }
@@ -58,6 +77,7 @@ export const FindCoursesScreen = () => {
     setFindError('');
     try {
       setPublicCourse((await getPublicCourse(uid)).course);
+      setLayoutIndex(0);
     } catch (error) {
       setFindError(errorMessage(error, 'Could not load that course.'));
     } finally {
@@ -68,27 +88,43 @@ export const FindCoursesScreen = () => {
   return <>
     <ScreenHeading eyebrow="COURSE DIRECTORY" title="Find courses." />
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      {publicCourse ? <>
-        <Pressable onPress={() => setPublicCourse(null)} style={styles.backLink}><Text style={styles.homeButtonText}>‹ RESULTS</Text></Pressable>
-        <View style={styles.finalScore}>
-          <Text style={styles.menuIntroLabel}>MAPPED BY {publicCourse.mappedBy.toUpperCase()}</Text>
-          <Text style={styles.menuIntroTitle}>{publicCourse.name}</Text>
-          <Text style={styles.menuIntroCopy}>{[
-            `${publicCourse.holes} ${publicCourse.holes === 1 ? 'hole' : 'holes'}`,
-            publicCourse.par === null ? null : `Par ${publicCourse.par}`,
-            publicCourse.mappedHoles ? `${publicCourse.distanceFeet.toLocaleString()} ft` : null,
-            `${publicCourse.mappedHoles} mapped`,
-            publicCourse.extraLayouts?.length ? `${publicCourse.extraLayouts.length + 1} layouts` : null,
-          ].filter(Boolean).join(' · ')}</Text>
-          {courseAddressLine(publicCourse.details) ? <Text style={styles.menuIntroCopy}>{courseAddressLine(publicCourse.details)}</Text> : null}
-        </View>
-        {publicCourse.details.notes?.trim() ? <><Text style={styles.fieldLabel}>INFO TO KNOW</Text><Text style={styles.roundCourseNotes}>{publicCourse.details.notes.trim()}</Text></> : null}
-        {courses.some((course) => course.uid === publicCourse.uid)
-          ? <View style={[styles.primaryButton, styles.disabledButton]}><Text style={styles.primaryButtonText}>IN YOUR COURSES ✓</Text></View>
-          : <Pressable onPress={() => play(publicCourse)} style={styles.primaryButton}><Text style={styles.primaryButtonText}>PLAY THIS COURSE</Text></Pressable>}
-        {playError ? <Text style={styles.authError}>{playError}</Text> : null}
-        <Pressable onPress={() => shareLink(`${publicCourse.name} on Glide Path:`, courseShareUrl(publicCourse.uid))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable>
-      </> : <>
+      {publicCourse ? (() => {
+        const layouts = layoutsOf(publicCourse);
+        const shown = layouts[Math.min(layoutIndex, layouts.length - 1)];
+        const mapped = shown.layouts.filter((hole) => hole?.tee && hole.basket).length;
+        const pars = shown.layouts.flatMap((hole) => (hole?.par === undefined ? [] : [hole.par]));
+        const mine = courses.find((course) => course.uid === publicCourse.uid);
+        const inList = Boolean(mine);
+        return <>
+          <Pressable onPress={() => setPublicCourse(null)} style={styles.backLink}><Text style={styles.homeButtonText}>‹ RESULTS</Text></Pressable>
+          <View style={styles.finalScore}>
+            <Text style={styles.menuIntroLabel}>MAPPED BY {publicCourse.mappedBy.toUpperCase()}</Text>
+            <Text style={styles.menuIntroTitle}>{publicCourse.name}</Text>
+            <Text style={styles.menuIntroCopy}>{[
+              layouts.length > 1 ? `${layouts.length} layouts` : null,
+              `${shown.layouts.length} ${shown.layouts.length === 1 ? 'hole' : 'holes'}`,
+              pars.length ? `Par ${pars.reduce((sum, par) => sum + par, 0)}` : null,
+              `${mapped} mapped`,
+            ].filter(Boolean).join(' · ')}</Text>
+            {courseAddressLine(publicCourse.details) ? <Text style={styles.menuIntroCopy}>{courseAddressLine(publicCourse.details)}</Text> : null}
+          </View>
+          {/* Pick a layout to see its map and holes, and to play. */}
+          {layouts.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+            {layouts.map((layout, index) => <Pressable key={layout.id} onPress={() => setLayoutIndex(index)} style={[styles.chip, shown === layout && styles.chipSelected]} accessibilityRole="button" accessibilityState={{ selected: shown === layout }}>
+              <Text style={[styles.chipText, shown === layout && styles.chipTextSelected]}>{layout.name}</Text>
+            </Pressable>)}
+          </ScrollView>}
+          {/* 3D works from a course in this account's list (the 3D screen reads it from there). */}
+          <CourseMap key={shown.id} layouts={shown.layouts} onOpen3d={mine ? (hole) => openHole3d(mine.id, shown.id, hole) : undefined} />
+          {publicCourse.details.notes?.trim() ? <><Text style={styles.fieldLabel}>INFO TO KNOW</Text><Text style={styles.roundCourseNotes}>{publicCourse.details.notes.trim()}</Text></> : null}
+          <Pressable onPress={() => play(publicCourse, shown.id)} style={styles.primaryButton} accessibilityRole="button">
+            <Text style={styles.primaryButtonText}>{layouts.length > 1 ? 'PLAY THIS LAYOUT' : 'PLAY THIS COURSE'}</Text>
+          </Pressable>
+          {inList ? <Text style={styles.mapInstruction}>It’s in your courses.</Text> : null}
+          {playError ? <Text style={styles.authError}>{playError}</Text> : null}
+          <Pressable onPress={() => shareLink(`${publicCourse.name} on Glide Path:`, courseShareUrl(publicCourse.uid))} style={[styles.courseLink, styles.toggleAction]}><Text style={styles.courseLinkText}>SHARE COURSE LINK</Text></Pressable>
+        </>;
+      })() : <>
         <View style={styles.builderPanel}>
           <Text style={styles.builderLabel}>COURSE, CITY OR STATE</Text>
           <View style={styles.addDiscRow}>
