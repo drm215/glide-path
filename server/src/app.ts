@@ -17,6 +17,7 @@ import { AccessError, addOwner, listOwners, playCourse, removeOwner } from './ac
 import { combineCourses, deleteAccount, listAllCourses, listUsers, requireAdmin, setAdmin } from './admin.ts';
 import { courseForEditor, deleteCourse, moveLayout, saveCourse } from './courses.ts';
 import { runSync } from './sync.ts';
+import { createElevationLookup, type ElevationLookup } from './elevation.ts';
 
 type AppOptions = {
   db: Db; authSecret: string; corsOrigin?: string; rateLimitAuth?: boolean;
@@ -24,6 +25,8 @@ type AppOptions = {
   tileUrl?: string; tileAttribution?: string;
   // Sends password reset codes; without one, password reset reports that it isn't set up.
   mailer?: Mailer | null;
+  // Ground elevations for flat-ground throw distances; the public terrain tiles by default.
+  elevations?: ElevationLookup;
 };
 
 const RESET_CODE_MINUTES = 15;
@@ -65,6 +68,7 @@ const courseSearchQuery = z.object({
 
 export const createApp = ({
   db, authSecret, corsOrigin = '*', rateLimitAuth = true, tileUrl = DEFAULT_TILE_URL, tileAttribution = DEFAULT_TILE_ATTRIBUTION, mailer = null,
+  elevations = createElevationLookup(),
 }: AppOptions) => {
   // Reset codes are stored as keyed hashes, so a database leak doesn't reveal live codes.
   const hashResetCode = (code: string) => createHmac('sha256', authSecret).update(`password-reset:${code}`).digest();
@@ -313,6 +317,13 @@ export const createApp = ({
     const { sourceUid, targetUid } = z.object({ sourceUid: z.uuid(), targetUid: z.uuid() }).parse(req.body);
     res.json(await db.transaction((tx) => combineCourses(tx, sourceUid, targetUid, Date.now())));
   }));
+
+  // Ground elevations (metres, null where unknown) at throw and tee spots, for flat-ground
+  // distances in disc stats on the app and website.
+  app.post('/api/elevations', requireUser, async (req, res) => {
+    const { points } = z.object({ points: z.array(z.object({ latitude: z.number().min(-85).max(85), longitude: z.number().min(-180).max(180) })).max(2000) }).parse(req.body);
+    res.json({ elevations: await elevations(points) });
+  });
 
   app.post('/api/sync', requireUser, async (req, res) => {
     const input = syncRequest.parse(req.body);

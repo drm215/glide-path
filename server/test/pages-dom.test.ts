@@ -295,9 +295,10 @@ describe('website pages in a browser', () => {
     const cards = () => [...view.querySelectorAll('.disc-card')].map((card) => [card.querySelector('h3')?.textContent, [...card.querySelectorAll('dd')].map((cell) => cell.textContent).join(' / ')]);
     assertNoRenderingLeaks(view.textContent ?? '');
     // The round's throws (no GPS here, so each distance counts): Destroyer 300 and 280, Aviar 60 and 30.
+    // With no positions, the drives' flat-ground distances are unknown; putts count as thrown.
     assert.deepEqual(cards(), [
-      ['Destroyer', '280 ft / 290 ft / 298 ft / 299 ft / 300 ft'],
-      ['Aviar', '30 ft / 45 ft / 57 ft / 59 ft / 60 ft'],
+      ['Destroyer', '280 ft / 290 ft / 298 ft / 299 ft / 300 ft / —'],
+      ['Aviar', '30 ft / 45 ft / 57 ft / 59 ft / 60 ft / 45 ft'],
     ]);
     assert.match(view.textContent ?? '', /Good 1  ·  Poor 1  ·  avg 2\.0 \/ 3/);
 
@@ -329,12 +330,41 @@ describe('website pages in a browser', () => {
     assert.match(text, /Each throw, longest first/);
     const rows = [...view.querySelectorAll('ul.results li')].map((row) => row.textContent);
     assert.deepEqual(rows, [
-      '300 ftDrive · forehand · fairway · goodCedar Grove · hole 1 · September 30, 2026›',
-      '280 ftDrive · ob · poorCedar Grove · hole 2 · September 30, 2026›',
+      '300 ft—flatDrive · forehand · fairway · goodCedar Grove · hole 1 · September 30, 2026›',
+      '280 ft—flatDrive · ob · poorCedar Grove · hole 2 · September 30, 2026›',
     ]);
     assert.ok(view.querySelector('ul.results a[href="#round/1790804819013"]'), 'each throw links to its round');
     const pressed = [...view.querySelectorAll('[aria-label="Filter by throw type"] button')].filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.textContent);
     assert.deepEqual(pressed, ['Drive'], 'the filter carried over');
+  });
+
+  test('My rounds: disc stats add flat-ground distances from the ground elevations', async () => {
+    // A 300 ft drive from the tee that climbed 10 ft: 320 ft on flat ground.
+    const tee = point(40, -75);
+    const positioned = {
+      ...syncedData,
+      courses: [{ ...syncedData.courses[0], layouts: [{ tee, basket: point(40.002, -75), par: 3 }] }],
+      rounds: [{ ...syncedData.rounds[0], shots: [{ hole: 1, feet: 300, disc: 'Destroyer', type: 'Drive', lie: 'Fairway', latitude: 40.0008, longitude: -75, accuracy: 3 }] }],
+    };
+    const asked: unknown[] = [];
+    const api: FetchHandler = (path, init) => {
+      if (path === '/api/elevations') {
+        const { points } = JSON.parse(init!.body!);
+        asked.push(points);
+        return { elevations: points.map((spot: { latitude: number }) => (spot.latitude === 40 ? 100 : 100 + 10 * 0.3048)) };
+      }
+      return path === '/api/sync' ? positioned : accountApi(path, init);
+    };
+    const { document, navigate } = await loadPage(accountHtml, 'account.js', { token: 't', api });
+    await navigate('#discs');
+    const view = document.getElementById('signed-in')!;
+    assert.equal(asked.length, 1, 'elevations are fetched once');
+    assert.deepEqual([...view.querySelectorAll('.disc-card dd')].map((cell) => cell.textContent).at(-1), '320 ft');
+    assert.match(view.textContent ?? '', /Flat avg is the average as if every drive and approach were thrown on flat ground/);
+
+    await navigate('#disc/Destroyer');
+    assert.deepEqual([...view.querySelectorAll('ul.results li')].map((row) => row.textContent), ['300 ft320 ftflatDrive · fairwayCedar Grove · hole 1 · September 30, 2026 · 10 ft uphill›']);
+    assert.equal(asked.length, 1, 'and kept for the visit');
   });
 
   test('My rounds: a round is scored against the pars it was played with', async () => {

@@ -7,6 +7,7 @@ import { FILTER_TYPES } from '../constants';
 import { statFeet, statQuality } from '../format';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { openDiscThrows } from '../navigation';
+import { useGroundElevations } from '../useGroundElevations';
 import { useApp } from '../state/AppState';
 import { GREEN, styles } from '../theme';
 
@@ -57,7 +58,7 @@ export const DiscCard = ({ stats, onPress }: { stats: DiscStats; onPress?: () =>
         <Text style={styles.discCardMeta}>{stats.throws} {stats.throws === 1 ? 'throw' : 'throws'}{stats.measured < stats.throws ? ` · ${stats.measured} measured` : ''}{onPress ? '  ›' : ''}</Text>
       </View>
       <View style={styles.discFigures}>
-        {([['MIN', stats.minFeet], ['AVG', stats.averageFeet], ['90TH', stats.p90Feet], ['95TH', stats.p95Feet], ['MAX', stats.maxFeet]] as const).map(([label, feet]) => (
+        {([['MIN', stats.minFeet], ['AVG', stats.averageFeet], ['90TH', stats.p90Feet], ['95TH', stats.p95Feet], ['MAX', stats.maxFeet], ['FLAT AVG', stats.flatAverageFeet]] as const).map(([label, feet]) => (
           <View key={label} style={styles.discFigure}>
             <Text style={styles.statLabel}>{label}</Text>
             <Text style={styles.discFigureValue} numberOfLines={1} adjustsFontSizeToFit>{statFeet(feet)}</Text>
@@ -80,13 +81,15 @@ export const DiscStatsScreen = () => {
   const { courses, history } = useApp();
   const [types, setTypes] = useState<ThrowType[]>([]);
   const [practice, setPractice] = useState(false);
-  const discs = discStats(discSessions(history, courses, practice), { types });
+  const sessions = discSessions(history, courses, practice);
+  const ground = useGroundElevations(sessions);
+  const discs = discStats(sessions, { types, ground });
 
   return <>
     <ScreenHeading eyebrow="ALL FINISHED ROUNDS" title="Discs." />
     <ScrollView contentContainerStyle={styles.content}>
       <DiscFilters types={types} setTypes={setTypes} practice={practice} setPractice={setPractice} />
-      <Text style={styles.mapInstruction}>Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20. Tap a disc to see each throw.</Text>
+      <Text style={styles.mapInstruction}>Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20. Flat avg is the average as if every drive and approach were thrown on flat ground: 2 ft added for each foot a throw climbed, 2 ft taken off for each foot it dropped. Tap a disc to see each throw.</Text>
       {discs.length ? discs.map((stats) => <DiscCard key={stats.disc} stats={stats} onPress={() => openDiscThrows(stats.disc, types, practice)} />) : <Text style={styles.mapInstruction}>No throws match yet.</Text>}
     </ScrollView>
   </>;

@@ -85,6 +85,10 @@ export const getPublicCourse = (uid: string) => request<{ course: PublicCourse }
 // Playing a course keeps it (and its updates) on this account's devices.
 export const playCourse = (token: string, uid: string) => request<null>('POST', `/api/courses/${encodeURIComponent(uid)}/play`, { token });
 
+// Ground elevations (metres, null where unknown) at throw and tee spots, for flat-ground distances.
+export const getElevations = (token: string, points: { latitude: number; longitude: number }[]) =>
+  request<{ elevations: (number | null)[] }>('POST', '/api/elevations', { token, body: { points } });
+
 // A course's owners, who can edit it (its creator is always one).
 export type CourseOwner = { userId: string; displayName: string; email: string; creator: boolean };
 const ownersPath = (uid: string) => `/api/courses/${encodeURIComponent(uid)}/owners`;

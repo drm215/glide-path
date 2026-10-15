@@ -430,6 +430,38 @@ describe('discThrows', () => {
   });
 });
 
+describe('flat-ground distances', () => {
+  test('full throws gain 2 ft per foot climbed and lose 2 per foot dropped; putts count as thrown', async () => {
+    // @ts-expect-error: plain browser JavaScript module without type declarations.
+    const { discStats, discThrows, groundKey, groundPoints } = await import('../public/js/round-stats.js');
+    const tee = { latitude: 40, longitude: -75 };
+    const spot = (latitude: number) => ({ latitude, longitude: -75 });
+    const at = (point: { latitude: number }, type: string, feet: number, lie = 'Fairway') => ({ hole: 1, type, disc: 'Buzzz', feet, lie, ...point });
+    const round = {
+      layouts: [{ tee, basket: spot(40.003) }],
+      shots: [
+        at(spot(40.001), 'Drive', 300), // climbs 10 ft from the tee
+        at(spot(40.002), 'Approach', 200), // drops 5 ft
+        at(spot(40.003), 'Putt', 30, 'Basket'),
+        { hole: 2, type: 'Drive', disc: 'Buzzz', feet: 0, lie: 'Fairway' }, // no position
+      ],
+    };
+    // The tee and each full throw's landing; the putt's isn't needed.
+    assert.deepEqual(groundPoints([round]).map(groundKey), [tee, spot(40.001), spot(40.002)].map(groundKey));
+
+    const feet = 0.3048;
+    const ground = new Map([[groundKey(tee), 100], [groundKey(spot(40.001)), 100 + 10 * feet], [groundKey(spot(40.002)), 100 + 5 * feet]]);
+    const rows = discThrows([round], 'Buzzz', { ground }).map((item: { shot: { type: string }; feet: number; flatFeet: number; riseFeet: number }) => [item.shot.type, item.feet, item.flatFeet, item.riseFeet]);
+    assert.deepEqual(rows, [['Drive', 300, 320, 10], ['Approach', 200, 190, -5], ['Putt', 30, 30, null], ['Drive', null, null, null]]);
+    const [buzzz] = discStats([round], { ground });
+    assert.deepEqual([buzzz.flatMeasured, buzzz.flatAverageFeet], [3, (320 + 190 + 30) / 3]);
+
+    // Without the landing's elevation, the approach is left out of the flat figures.
+    ground.delete(groundKey(spot(40.002)));
+    assert.deepEqual([discStats([round], { ground })[0].flatMeasured, discStats([round])[0].flatMeasured], [2, 1]);
+  });
+});
+
 describe('pars saved with a round', () => {
   test('parsToSave records each played hole, keeps pars already saved, and is undefined with none', async () => {
     // @ts-expect-error: plain browser JavaScript module without type declarations.

@@ -79,15 +79,24 @@ export type DiscStats = {
   averageFeet: number | null;
   p90Feet: number | null;
   p95Feet: number | null;
+  // As if thrown on flat ground (see FLAT_FEET_PER_FOOT), from the throws whose elevations are known.
+  flatMeasured: number;
+  flatAverageFeet: number | null;
   quality: { good: number; fair: number; poor: number; unrated: number };
   averageQuality: number | null;
 };
 
 export declare function percentile(sorted: number[], fraction: number): number | null;
-export declare function discStats(rounds: StatsRound[], options?: { types?: string[] }): DiscStats[];
+// Ground elevations in metres by groundKey (null where unknown), for flat-ground distances.
+export type GroundElevations = Map<string, number | null>;
+export declare const FLAT_FEET_PER_FOOT: number;
+export declare function groundKey(point: { latitude: number; longitude: number }): string;
+export declare function groundPoints(rounds: StatsRound[]): { latitude: number; longitude: number }[];
+export declare function discStats(rounds: StatsRound[], options?: { types?: string[]; ground?: GroundElevations }): DiscStats[];
 
-export type DiscThrow<R extends StatsRound = StatsRound> = { round: R; shot: Shot; feet: number | null };
-export declare function discThrows<R extends StatsRound>(rounds: R[], disc: string, options?: { types?: string[] }): DiscThrow<R>[];
+// flatFeet: the distance as if thrown on flat ground; riseFeet: how far it climbed (negative for a drop).
+export type DiscThrow<R extends StatsRound = StatsRound> = { round: R; shot: Shot; feet: number | null; flatFeet: number | null; riseFeet: number | null };
+export declare function discThrows<R extends StatsRound>(rounds: R[], disc: string, options?: { types?: string[]; ground?: GroundElevations }): DiscThrow<R>[];
 
 export declare function parsToSave(shots: Pick<Shot, 'hole'>[], layouts?: StatsRound['layouts'], saved?: (number | null)[]): (number | null)[] | undefined;
 export declare function roundLayouts(layouts: StatsRound['layouts'] | undefined, pars: (number | null)[] | undefined): (HoleLayout | null | undefined)[];

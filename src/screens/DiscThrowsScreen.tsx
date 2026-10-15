@@ -8,6 +8,7 @@ import { formatSessionDate } from '../format';
 import { PREVIOUS_BACK, ScreenHeading } from '../components/ScreenHeading';
 import { DiscCard, DiscFilters, discSessions } from './DiscStatsScreen';
 import { openRound } from '../navigation';
+import { useGroundElevations } from '../useGroundElevations';
 import { useApp } from '../state/AppState';
 import { styles } from '../theme';
 
@@ -19,8 +20,9 @@ export const DiscThrowsScreen = () => {
   const [types, setTypes] = useState<ThrowType[]>(() => FILTER_TYPES.filter((type) => params.types?.split(',').includes(type)));
   const [practice, setPractice] = useState(params.practice === '1');
   const sessions = discSessions(history, courses, practice);
-  const stats = discStats(sessions, { types }).find((item) => item.disc === params.name);
-  const throws = discThrows(sessions, params.name, { types });
+  const ground = useGroundElevations(sessions);
+  const stats = discStats(sessions, { types, ground }).find((item) => item.disc === params.name);
+  const throws = discThrows(sessions, params.name, { types, ground });
 
   return <>
     <ScreenHeading eyebrow="DISC STATS · EVERY THROW" title={`${params.name}.`} back={PREVIOUS_BACK} />
@@ -29,13 +31,17 @@ export const DiscThrowsScreen = () => {
       {stats && <DiscCard stats={stats} />}
       {throws.length ? <>
         <Text style={styles.statsHeading}>Each throw, longest first</Text>
-        {throws.map(({ round, shot, feet }, index) => {
+        {throws.map(({ round, shot, feet, flatFeet, riseFeet }, index) => {
           const rating = quality(shot);
-          return <Pressable key={`${round.session.id}-${index}`} onPress={() => openRound(round.session.id)} style={styles.courseItem} accessibilityRole="button" accessibilityLabel={`${feet === null ? 'Unmeasured' : `${feet} ft`} ${shot.type.toLowerCase()} on ${formatSessionDate(round.session)}, opens the round`}>
+          return <Pressable key={`${round.session.id}-${index}`} onPress={() => openRound(round.session.id)} style={styles.courseItem} accessibilityRole="button" accessibilityLabel={`${feet === null ? 'Unmeasured' : `${feet} ft`}${flatFeet === null ? '' : ` (${flatFeet} ft on flat ground)`} ${shot.type.toLowerCase()} on ${formatSessionDate(round.session)}, opens the round`}>
             <Text style={styles.discThrowFeet}>{feet === null ? '—' : `${feet} ft`}</Text>
+            <View style={styles.discThrowFlat}>
+              <Text style={styles.discThrowFlatFeet}>{flatFeet === null ? '—' : `${flatFeet} ft`}</Text>
+              <Text style={styles.statLabel}>FLAT</Text>
+            </View>
             <View style={styles.courseItemCopy}>
               <Text style={styles.courseItemName}>{[shot.type, shot.style?.toLowerCase(), shot.lie ? lieLabel(shot.lie, shot.type).toLowerCase() : null, rating ? QUALITY_LABELS[rating].toLowerCase() : null].filter(Boolean).join(' · ')}</Text>
-              <Text style={styles.courseItemMeta}>{round.session.courseName} · hole {shot.hole} · {formatSessionDate(round.session)}{round.session.mode === 'Practice' ? ' · practice' : ''}{feet === null ? ' · not measured' : ''}</Text>
+              <Text style={styles.courseItemMeta}>{round.session.courseName} · hole {shot.hole} · {formatSessionDate(round.session)}{round.session.mode === 'Practice' ? ' · practice' : ''}{feet === null ? ' · not measured' : riseFeet ? ` · ${Math.abs(riseFeet)} ft ${riseFeet > 0 ? 'uphill' : 'downhill'}` : ''}</Text>
             </View>
             <Text style={styles.menuArrow}>›</Text>
           </Pressable>;

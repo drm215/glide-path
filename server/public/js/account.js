@@ -3,7 +3,7 @@ import { setUpRound3d } from './hole3d.js';
 import { holeAveragesHtml, scorecardHtml, scorecardLegendHtml, scoreStripHtml } from './scorecard.js';
 import { filterGroup, renderHistorySummary, renderHoleSummary, renderRoundSummary } from './summary.js';
 import { showAdminLink } from './nav.js';
-import { discStats, discThrows, moveThrow, quality, roundLayouts } from './round-stats.js';
+import { discStats, discThrows, groundKey, groundPoints, moveThrow, quality, roundLayouts } from './round-stats.js';
 import { $, THROW_TYPE_COLORS, TOKEN_KEY, api, drawEveryThrow, fromHtml, setChildren, throwLegend, drawHoles, el, fitTo, formatDate, formatToPar, holesPlayed, plural, satelliteMap, setUpRoundMap, strokes, throwDetail, toParClass } from './lib.js';
 
 const signedOutEl = $('#signed-out');
@@ -275,6 +275,29 @@ const discSessions = (includePractice) => data.rounds
   .filter((round) => !round.inProgress && (includePractice || round.mode === 'Round'))
   .map((round) => ({ round, shots: round.shots, layouts: roundHoles(round) }));
 
+// Ground elevations (metres by groundKey, null where unknown) for flat-ground distances, looked
+// up on the server and kept for the visit.
+const ground = new Map();
+const ELEVATIONS_PER_REQUEST = 2000;
+// Looks up the elevations of any of `points` not yet known. Resolves true when some arrived.
+const loadGround = async (points) => {
+  const missing = points.filter((point) => !ground.has(groundKey(point)));
+  if (!missing.length) return false;
+  try {
+    for (let start = 0; start < missing.length; start += ELEVATIONS_PER_REQUEST) {
+      const batch = missing.slice(start, start + ELEVATIONS_PER_REQUEST);
+      const { elevations } = await api('/api/elevations', { method: 'POST', token, body: { points: batch } });
+      batch.forEach((point, index) => ground.set(groundKey(point), elevations[index]));
+    }
+    return true;
+  } catch {
+    return false; // offline: flat-ground figures stay blank
+  }
+};
+
+// "11 ft uphill" for a throw's climb; null when it's unknown or level.
+const riseNote = (riseFeet) => (riseFeet ? `${Math.abs(riseFeet)} ft ${riseFeet > 0 ? 'uphill' : 'downhill'}` : null);
+
 // One disc's distance figures and quality bar; with `href`, the card links to the disc's throws.
 const discCard = (stats, href) => {
   const segments = QUALITY_SEGMENTS.filter(([key]) => stats.quality[key]);
@@ -282,7 +305,7 @@ const discCard = (stats, href) => {
     el('div', { class: 'disc-card-head' },
       el('h3', {}, stats.disc),
       el('span', { class: 'meta' }, `${plural(stats.throws, 'throw')}${stats.measured < stats.throws ? ` · ${stats.measured} measured` : ''}${href ? '  ›' : ''}`)),
-    el('dl', { class: 'disc-figures' }, [['Min', stats.minFeet], ['Avg', stats.averageFeet], ['90th', stats.p90Feet], ['95th', stats.p95Feet], ['Max', stats.maxFeet]]
+    el('dl', { class: 'disc-figures' }, [['Min', stats.minFeet], ['Avg', stats.averageFeet], ['90th', stats.p90Feet], ['95th', stats.p95Feet], ['Max', stats.maxFeet], ['Flat avg', stats.flatAverageFeet]]
       .map(([label, feet]) => el('div', {}, el('dt', {}, label), el('dd', {}, discFeet(feet))))),
     el('div', { class: 'disc-quality', role: 'img', 'aria-label': `Quality: ${segments.map(([key, label]) => `${stats.quality[key]} ${label.toLowerCase()}`).join(', ')}` },
       segments.map(([key, , color]) => el('span', { style: `flex: ${stats.quality[key]}; background: ${color}` }))),
@@ -306,7 +329,9 @@ const renderDiscStats = () => {
   const filters = { types: [], practice: false };
   const content = el('div', {});
   const render = () => {
-    const discs = discStats(discSessions(filters.practice), { types: filters.types });
+    const sessions = discSessions(filters.practice);
+    const discs = discStats(sessions, { types: filters.types, ground });
+    loadGround(groundPoints(sessions)).then((arrived) => { if (arrived) render(); });
     setChildren(content, discs.length ? discs.map((stats) => discCard(stats, discHref(stats.disc, filters.types, filters.practice))) : el('p', { class: 'meta' }, 'No throws match yet.'));
   };
   setChildren(signedInEl,
@@ -314,7 +339,7 @@ const renderDiscStats = () => {
     el('div', { class: 'eyebrow' }, user.displayName),
     el('h1', {}, 'Disc stats'),
     discFilters(filters, render),
-    el('p', { class: 'meta' }, 'Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20. Pick a disc to see each throw.'),
+    el('p', { class: 'meta' }, 'Distances use only throws with a reliable GPS measurement. The 90th percentile is the distance 9 in 10 measured throws stay within; the 95th, 19 in 20. Flat avg is the average as if every drive and approach were thrown on flat ground: 2 ft added for each foot a throw climbed, 2 ft taken off for each foot it dropped. Pick a disc to see each throw.'),
     content,
   );
   render();
@@ -327,20 +352,22 @@ const renderDiscThrows = (disc, types, includePractice) => {
   const content = el('div', {});
   const render = () => {
     const sessions = discSessions(filters.practice);
-    const stats = discStats(sessions, { types: filters.types }).find((item) => item.disc === disc);
-    const throws = discThrows(sessions, disc, { types: filters.types });
+    const stats = discStats(sessions, { types: filters.types, ground }).find((item) => item.disc === disc);
+    const throws = discThrows(sessions, disc, { types: filters.types, ground });
+    loadGround(groundPoints(sessions)).then((arrived) => { if (arrived) render(); });
     setChildren(content,
       stats ? discCard(stats) : null,
       throws.length ? [
         el('h2', {}, 'Each throw, longest first'),
-        el('ul', { class: 'results' }, throws.map(({ round: { round }, shot, feet }) => {
+        el('ul', { class: 'results' }, throws.map(({ round: { round }, shot, feet, flatFeet, riseFeet }) => {
           const rating = quality(shot);
           return el('li', {}, el('a', { href: `#round/${encodeURIComponent(round.clientId)}` },
             el('span', { class: 'disc-throw' },
               el('span', { class: 'disc-throw-feet' }, feet === null ? '—' : `${feet} ft`),
+              el('span', { class: 'disc-throw-flat', 'aria-label': flatFeet === null ? 'Flat ground: unknown' : `${flatFeet} ft on flat ground` }, flatFeet === null ? '—' : `${flatFeet} ft`, el('small', {}, 'flat')),
               el('span', {},
                 el('span', { class: 'name' }, [shot.type, shot.style?.toLowerCase(), shot.lie ? (shot.lie === 'Basket' && shot.type === 'Putt' ? 'made' : shot.lie.toLowerCase()) : null, rating ? QUALITY_NAMES[rating] : null].filter(Boolean).join(' · ')),
-                el('span', { class: 'sub' }, [round.courseName, `hole ${shot.hole}`, formatDate(roundDate(round)), round.mode === 'Practice' ? 'practice' : null, feet === null ? 'not measured' : null].filter(Boolean).join(' · ')))),
+                el('span', { class: 'sub' }, [round.courseName, `hole ${shot.hole}`, formatDate(roundDate(round)), round.mode === 'Practice' ? 'practice' : null, feet === null ? 'not measured' : riseNote(riseFeet)].filter(Boolean).join(' · ')))),
             el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')));
         })),
       ] : el('p', { class: 'meta' }, 'No throws with this disc match these filters.'));
