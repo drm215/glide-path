@@ -585,6 +585,33 @@ describe('app sync against the API', () => {
     assert.equal(luke.data.history.find((round) => round.id === 'luke-short')?.courseId, `shared-${davidUid}`);
   });
 
+  test('moving a basket moves the throws that went in there, in every player’s rounds', async () => {
+    const davidToken = await server.register('basket-david@example.com', 'Basket David');
+    const lukeToken = await server.register('basket-luke@example.com', 'Basket Luke');
+    // Hole 1: tee at 40, basket at 40.001. A drive to 40.0008, then a putt that went in.
+    const drive = { x: 0.5, y: 0.5, feet: 290, disc: 'Destroyer', type: 'Drive' as const, hole: 1, lie: 'Fairway' as const, latitude: 40.0008, longitude: -75 };
+    const made = { x: 0.5, y: 0.5, feet: 73, disc: 'Aviar', type: 'Putt' as const, hole: 1, lie: 'Basket' as const, latitude: 40.001, longitude: -75 };
+    const david = newDevice(davidToken, { ...emptyData(), courses: [course('b1', { name: 'Basket Park', updatedAt: tick() })], history: [session('david-round', { courseId: 'b1', courseName: 'Basket Park', shots: [drive, made], updatedAt: tick() })] });
+    await syncDevice(server, david);
+    const uid = david.data.courses[0].uid!;
+    assert.equal((await server.request('POST', `/api/courses/${uid}/play`, { token: lukeToken })).status, 204);
+    const luke = newDevice(lukeToken, { ...emptyData(), history: [session('luke-round', { courseId: `shared-${uid}`, courseName: 'Basket Park', shots: [made], updatedAt: tick() })] });
+    await syncDevice(server, luke);
+
+    // The basket moves 0.0002° north on the website.
+    const loaded = (await server.request('GET', `/api/courses/${uid}`, { token: davidToken })).body.course;
+    const layouts = loaded.layouts.map((hole: { basket: object | null }, index: number) => (index === 0 ? { ...hole, basket: { ...hole.basket, latitude: 40.0012 } } : hole));
+    const saved = await server.request('PUT', `/api/courses/${uid}`, { token: davidToken, body: { course: { name: loaded.name, holes: loaded.holes, layouts, extraLayouts: loaded.extraLayouts, details: loaded.details }, baseUpdatedAt: loaded.updatedAt } });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+
+    await syncDevice(server, david);
+    await syncDevice(server, luke);
+    const feet = (degrees: number) => Math.round(((degrees * Math.PI) / 180) * 20_902_231);
+    const davidShots = david.data.history[0].shots;
+    assert.deepEqual(davidShots.map((shot) => [shot.latitude, shot.feet]), [[40.0008, 290], [40.0012, feet(0.0004)]], 'measured from the drive; the drive stays');
+    assert.deepEqual(luke.data.history[0].shots.map((shot) => [shot.latitude, shot.feet]), [[40.0012, feet(0.0012)]], 'measured from the tee');
+  });
+
   test('long text is clipped instead of failing the sync', async () => {
     const token = await server.register('long@example.com');
     const phone = newDevice(token, { ...emptyData(), courses: [course('course-1', { notes: 'x'.repeat(9000), name: 'y'.repeat(500), updatedAt: tick() })] });

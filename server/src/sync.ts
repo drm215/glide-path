@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Queryable } from './db.ts';
+import { followBasketMoves } from './basket-moves.ts';
 import type { BagRecord, CourseRecord, RoundRecord } from './contract.ts';
 import { canEdit, grantAccess, isSiteAdmin, type Role } from './access.ts';
 import { mergeCourseRecords, sameCourse } from './course-merge.ts';
@@ -107,18 +108,23 @@ const mergeCopyIntoSource = async (tx: Queryable, userId: string, sourceUid: str
 // version is merged with it (see course-merge.ts), so no device's mapping is lost. A result that
 // differs from what the device sent is saved with an edit time past both, so every device takes
 // it, the sender included.
+// Throws that went in on a hole whose basket moved follow it (see basket-moves.ts).
 export const saveCourseEdit = async (tx: Queryable, ownerId: string, stored: CourseRecord, incoming: CourseRecord, baseUpdatedAt: number | undefined) => {
+  const save = async (course: CourseRecord) => {
+    await writeCourse(tx, ownerId, course);
+    await followBasketMoves(tx, ownerId, stored, course, Math.max(Date.now(), course.updatedAt));
+  };
   if (baseUpdatedAt !== undefined && baseUpdatedAt >= stored.updatedAt) {
     // The device saw the stored version. Its save stands, even with a clock that runs behind.
     if (sameCourse(incoming, stored)) return;
-    return writeCourse(tx, ownerId, { ...incoming, updatedAt: Math.max(incoming.updatedAt, stored.updatedAt + 1) });
+    return save({ ...incoming, updatedAt: Math.max(incoming.updatedAt, stored.updatedAt + 1) });
   }
   const merged = mergeCourseRecords(stored, incoming);
   if (stored.updatedAt >= incoming.updatedAt && sameCourse(merged, stored)) return;
   const updatedAt = incoming.updatedAt > stored.updatedAt && sameCourse(merged, incoming)
     ? incoming.updatedAt
     : Math.max(stored.updatedAt, incoming.updatedAt) + 1;
-  return writeCourse(tx, ownerId, { ...merged, updatedAt });
+  return save({ ...merged, updatedAt });
 };
 
 // Each write only replaces the stored row when its edit time is newer.

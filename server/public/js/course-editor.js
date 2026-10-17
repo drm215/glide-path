@@ -152,7 +152,7 @@ const showEditor = (root, { course, canEdit, isAdmin, role, uid, token, back, on
   const placeTools = el('div', { class: 'links', hidden: picked === null }, placeButtons);
   // Removed (keeping the status line) when the map can't load.
   const mapTools = el('div', {}, el('div', { class: 'links' }, dragButton), placeTools,
-    el('p', { class: 'map-note' }, 'Pick a hole in the table to see it on its own and place its tee or basket by clicking the map, or drag them to fix a poor GPS save. Changes save at once, for everyone who plays this course.'));
+    el('p', { class: 'map-note' }, 'Pick a hole in the table to see it on its own and place its tee or basket by clicking the map, or drag them to fix a poor GPS save. Changes save at once, for everyone who plays this course; throws that went in on a hole move with its basket.'));
   const movePoint = (hole, kind, latitude, longitude) => setHoles(
     layout.layouts.map((item, index) => (index === hole - 1 ? { ...item, [kind]: placedPoint(latitude, longitude, Date.now()) } : item)),
     `Hole ${hole}’s ${kind} moved.`,

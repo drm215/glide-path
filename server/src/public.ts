@@ -7,7 +7,7 @@ const MAIN_LAYOUT_ID = 'main';
 
 const EARTH_RADIUS_FEET = 20_902_231;
 
-const feetBetween = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
+export const feetBetween = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
   const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
   const dLat = toRadians(b.latitude - a.latitude);
   const dLon = toRadians(b.longitude - a.longitude);
